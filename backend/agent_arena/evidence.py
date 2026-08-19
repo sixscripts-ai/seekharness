@@ -56,14 +56,23 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
     status = phase_status(outcome) if outcome else "incomplete"
 
     tests = result.get("tests")
+    passed_value = result.get("passed")
     if isinstance(tests, dict) and "total" in tests:
         total = max(_as_int(tests.get("total")), 0)
         passed = min(max(_as_int(tests.get("passed")), 0), total)
         failed = total - passed
-    else:
+    elif isinstance(passed_value, bool) or outcome in ("TEST_PASS", "TEST_FAIL"):
         total = 1
-        passed = 1 if bool(result.get("passed")) else 0
+        if isinstance(passed_value, bool):
+            passed = 1 if passed_value else 0
+        else:
+            passed = 1 if outcome == "TEST_PASS" else 0
         failed = total - passed
+    else:
+        # No trustworthy record that tests actually ran: NEVER fabricate 0/1.
+        total = None
+        passed = None
+        failed = None
 
     required = list(((cfg.get("artifacts") or {}).get("required")) or [])
     checks = result.get("artifact_checks") or {}
@@ -81,8 +90,15 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
         policy = {"status": policy}
     if not isinstance(policy, dict):
         policy = {}
-    pstatus = str(policy.get("status") or POLICY_CLEAN).lower()
-    if pstatus not in (POLICY_CLEAN, POLICY_WARNING, POLICY_INVALID):
+    if policy:
+        pstatus = str(policy.get("status") or "").lower()
+        if pstatus not in (POLICY_CLEAN, POLICY_WARNING, POLICY_INVALID):
+            # Malformed policy evidence must not read as a verified clean check.
+            pstatus = "unknown"
+    else:
+        # No policy record: boundaries are enforced structurally (path
+        # containment, symlink checks, env scrubbing, network gating), so
+        # absence is "clean", not "unknown".
         pstatus = POLICY_CLEAN
 
     return {
@@ -94,7 +110,9 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
             "passed": passed,
             "failed": failed,
             "total": total,
-            "pass_ratio": round(passed / total, 6) if total else 0.0,
+            "pass_ratio": (round(passed / total, 6) if total else 0.0)
+            if total is not None
+            else None,
         },
         "artifacts": {"required": required, "present": present, "missing": missing},
         "execution": {
@@ -118,7 +136,10 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
         },
         "outputs": {
             "artifact_refs": list(present),
-            "important_files": sorted(str(k) for k in ((result.get("files") or {}).keys())),
+            "important_files": sorted(
+                set(present)
+                | set(str(k) for k in ((result.get("files") or {}).keys()))
+            ),
         },
     }
 
@@ -169,11 +190,20 @@ def build_battle_evidence(
                 },
             }
         )
+    executor_versions = {
+        _as_int(r.get("executor_version"))
+        for r in results or []
+        if isinstance(r, dict) and r.get("executor_version") is not None
+    }
     return {
         "schema_version": EVIDENCE_SCHEMA_VERSION,
         "scoring_version": SCORING_VERSION,
         "battle_id": battle_id,
         "format_id": format_id,
+        # Formats carry no version field today (live docs are seeded
+        # out-of-band); recorded as absent rather than invented.
+        "format_version": None,
+        "executor_version": sorted(executor_versions)[-1] if executor_versions else None,
         "phases": phases_order,
         "fighters": fighters,
     }

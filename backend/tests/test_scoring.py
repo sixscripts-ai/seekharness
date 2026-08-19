@@ -144,6 +144,48 @@ def test_case9_missing_evidence_is_unknown():
     assert decision["reason"] == "incomplete_evidence"
     assert decision["winner"] is None
     assert scores is None
+    # Never fabricated as 0/1 failed tests.
+    pr = summary["fighters"][1]["phases"]["race"]
+    assert pr["status"] == "incomplete"
+    assert pr["correctness"]["passed"] is None
+    assert pr["correctness"]["failed"] is None
+    assert pr["correctness"]["total"] is None
+    assert pr["correctness"]["pass_ratio"] is None
+
+
+def test_budget_without_verdict_is_not_a_test_failure():
+    # EXECUTOR_RESULT exists but carries no valid test outcome. The explicit
+    # STEP_BUDGET_EXCEEDED marker is a known state ("timeout") - richer than
+    # collapsing it to "incomplete" - and its correctness is NEVER 0/1.
+    b = {"model_id": "B", "outcome": "STEP_BUDGET_EXCEEDED"}
+    summary, decision, scores = _decide([_mk("A"), b])
+    pr = summary["fighters"][1]["phases"]["race"]
+    assert pr["status"] == "timeout"
+    assert pr["correctness"]["total"] is None
+    assert pr["correctness"]["passed"] is None
+    assert pr["correctness"]["pass_ratio"] is None
+    assert decision["winner"] == "A"  # completed beats timeout
+    assert scores["A"] > scores["B"]
+
+
+def test_malformed_policy_is_unknown_not_clean():
+    a = _mk("A", policy="bananas")
+    b = _mk("B")
+    summary, decision, _ = _decide([a, b])
+    pa = summary["fighters"][0]["phases"]["race"]
+    assert pa["policy"]["status"] == "unknown"
+    assert decision["winner"] == "B"  # clean beats unknown
+    assert "A" not in decision["ineligible"]
+
+
+def test_warning_policy_ranks_below_clean_but_is_eligible():
+    a = _mk("A", policy="warning")
+    b = _mk("B")
+    summary, decision, _ = _decide([a, b])
+    pa = summary["fighters"][0]["phases"]["race"]
+    assert pa["policy"]["status"] == "warning"
+    assert decision["winner"] == "B"
+    assert decision["ineligible"] == []
 
 
 def test_case10_determinism():

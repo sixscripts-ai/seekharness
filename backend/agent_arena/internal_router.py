@@ -307,12 +307,12 @@ def internal_finalize(
     effective_scores = body.scores
     score_source = "judged"
     results: list[dict] = []
-    if status == "completed":
+    if status in ("completed", "failed"):
         try:
             results = _parse_executor_results(databases, database_id, body.battle_id)
         except Exception:
             results = []
-    if status == "completed" and body.scores:
+    if status in ("completed", "failed"):
         try:
             if results:
                 fmt_cfg: dict = {}
@@ -340,24 +340,36 @@ def internal_finalize(
                 )
                 det_scores = scoring_mod.deterministic_scores(decision)
                 if det_scores:
+                    battle_mids = set(battle.data.get("model_ids", []))
+                    result_mids = {str(r.get("model_id") or "") for r in results}
+                    if status == "failed" and result_mids != battle_mids:
+                        # Partial evidence on a failed battle: never fabricate
+                        # an outcome; keep the judge fallback (usually empty).
+                        det_scores = None
+                if det_scores:
                     effective_scores = det_scores
                     score_source = "arena-score-v1"
-            if _finalize_scores(
-                databases,
-                database_id,
-                body.battle_id,
-                effective_scores,
-                source=score_source,
-            ):
-                from . import leaderboard
-
-                leaderboard.apply_result(
+                    if status == "failed":
+                        # Executable evidence completes the battle even when the
+                        # judge layer returned nothing (e.g. judge outage).
+                        status = "completed"
+            if effective_scores:
+                if _finalize_scores(
                     databases,
                     database_id,
-                    battle.data["format_id"],
-                    list(battle.data.get("model_ids", [])),
+                    body.battle_id,
                     effective_scores,
-                )
+                    source=score_source,
+                ):
+                    from . import leaderboard
+
+                    leaderboard.apply_result(
+                        databases,
+                        database_id,
+                        battle.data["format_id"],
+                        list(battle.data.get("model_ids", [])),
+                        effective_scores,
+                    )
         except Exception:
             pass
     # Self-learning on backend (sandbox has no Appwrite credentials)

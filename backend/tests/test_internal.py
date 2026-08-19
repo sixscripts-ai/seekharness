@@ -114,6 +114,216 @@ def test_internal_model_validates_battle(client, internal_key, monkeypatch):
         settings.cache_clear()
 
 
+
+
+def _cleanup_battle(databases, database_id, bid):
+    from appwrite.query import Query
+
+    for coll in ("scores", "battle_events", "memories"):
+        try:
+            docs = databases.list_documents(
+                database_id, coll, queries=[Query.equal("battle_id", bid), Query.limit(100)]
+            )
+            for d in docs.documents:
+                databases.delete_document(database_id, coll, d.id)
+        except Exception:
+            pass
+    for mid in ("m-a", "m-b"):
+        try:
+            docs = databases.list_documents(
+                database_id, "leaderboard",
+                queries=[Query.equal("model_id", mid), Query.limit(100)],
+            )
+            for d in docs.documents:
+                databases.delete_document(database_id, "leaderboard", d.id)
+        except Exception:
+            pass
+    try:
+        databases.delete_document(database_id, "battles", bid)
+    except Exception:
+        pass
+
+
+@requires_appwrite
+def test_finalize_deterministic_without_judge_scores(client, internal_key, monkeypatch):
+    """EXECUTOR_RESULT + empty judge scores -> deterministic execution path."""
+    import json
+    import uuid
+
+    from appwrite.query import Query
+
+    from agent_arena import db
+    from agent_arena.auth import get_current_user
+    from agent_arena.battle_token import issue_battle_token
+    from agent_arena.internal_router import FinalizeBody, internal_finalize
+    from agent_arena.main import app
+    from tests.conftest import make_user_id
+
+    user_id = make_user_id()
+    app.dependency_overrides[get_current_user] = lambda: user_id
+    databases = db.get_databases()
+    database_id = db.get_database_id()
+    bid = f"slice-a1-{uuid.uuid4().hex[:10]}"
+    try:
+        formats = client.get("/formats").json()
+        fmt = next(f for f in formats if (f.get("config") or {}).get("universal"))
+        databases.create_document(database_id, "battles", bid, {
+            "user_id": user_id, "format_id": fmt["id"], "model_ids": ["m-a", "m-b"],
+            "arena_size": 2, "status": "running", "timeout_seconds": 600,
+            "round_visibility": "isolated", "saved": False,
+        })
+        for mid, outcome in (("m-a", "TEST_PASS"), ("m-b", "TEST_FAIL")):
+            result = json.dumps({
+                "executor_version": 1, "model_id": mid, "role": "player_a",
+                "phase": "race", "outcome": outcome, "passed": outcome == "TEST_PASS",
+                "steps": 4, "tool_errors": 0, "parse_errors": 0,
+                "artifact_checks": {"present": ["solution.py"], "missing": []},
+            })
+            databases.create_document(database_id, "battle_events", "unique()", {
+                "battle_id": bid, "event_id": uuid.uuid4().hex,
+                "payload": json.dumps(
+                    {"type": "result", "data": {"artifact": "EXECUTOR_RESULT: " + result}}
+                ),
+                "created_at": 0.0,
+            })
+        token = issue_battle_token(bid)
+        resp = internal_finalize(
+            FinalizeBody(battle_id=bid, status="completed", scores={}),
+            x_sandbox_token=token,
+        )
+        assert resp["status"] == "completed"
+        score_docs = databases.list_documents(
+            database_id, "scores", queries=[Query.equal("battle_id", bid)]
+        ).documents
+        assert score_docs, "deterministic scores must persist without judge scores"
+        assert all(d.data["judge_model"] == "arena-deterministic" for d in score_docs)
+        by_mid = {d.data["model_id"]: d.data["score"] for d in score_docs}
+        assert by_mid["m-a"] > by_mid["m-b"]
+        import time
+
+        found = False
+        for _ in range(20):
+            evs = databases.list_documents(
+                database_id, "battle_events",
+                queries=[Query.equal("battle_id", bid), Query.limit(500)],
+            ).documents
+            if any('"evidence_summary"' in (d.data.get("payload") or "") for d in evs):
+                found = True
+                break
+            time.sleep(0.25)
+        assert found, "evidence_summary event must be durably persisted"
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_battle(databases, database_id, bid)
+
+
+@requires_appwrite
+def test_finalize_judge_path_without_results_stays_compatible(client, internal_key, monkeypatch):
+    """No EXECUTOR_RESULT (prose battle) + judge scores -> judge path unchanged."""
+    import uuid
+
+    from appwrite.query import Query
+
+    from agent_arena import db
+    from agent_arena.auth import get_current_user
+    from agent_arena.battle_token import issue_battle_token
+    from agent_arena.internal_router import FinalizeBody, internal_finalize
+    from agent_arena.main import app
+    from tests.conftest import make_user_id
+
+    user_id = make_user_id()
+    app.dependency_overrides[get_current_user] = lambda: user_id
+    databases = db.get_databases()
+    database_id = db.get_database_id()
+    bid = f"slice-a1b-{uuid.uuid4().hex[:10]}"
+    try:
+        formats = client.get("/formats").json()
+        fmt = formats[0]
+        databases.create_document(database_id, "battles", bid, {
+            "user_id": user_id, "format_id": fmt["id"], "model_ids": ["m-a", "m-b"],
+            "arena_size": 2, "status": "running", "timeout_seconds": 600,
+            "round_visibility": "isolated", "saved": False,
+        })
+        token = issue_battle_token(bid)
+        resp = internal_finalize(
+            FinalizeBody(battle_id=bid, status="completed", scores={"m-a": 9.0, "m-b": 8.0}),
+            x_sandbox_token=token,
+        )
+        assert resp["status"] == "completed"
+        score_docs = databases.list_documents(
+            database_id, "scores", queries=[Query.equal("battle_id", bid)]
+        ).documents
+        assert score_docs
+        assert all(d.data["judge_model"] == "host-judge" for d in score_docs)
+        by_mid = {d.data["model_id"]: d.data["score"] for d in score_docs}
+        assert by_mid == {"m-a": 9.0, "m-b": 8.0}
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_battle(databases, database_id, bid)
+
+
+
+@requires_appwrite
+def test_finalize_failed_with_full_evidence_completes_deterministically(client, internal_key, monkeypatch):
+    """status=failed + empty judge scores + both EXECUTOR_RESULTs -> deterministic
+    path activates and the executable evidence completes the battle."""
+    import json
+    import uuid
+
+    from appwrite.query import Query
+
+    from agent_arena import db
+    from agent_arena.auth import get_current_user
+    from agent_arena.battle_token import issue_battle_token
+    from agent_arena.internal_router import FinalizeBody, internal_finalize
+    from agent_arena.main import app
+    from tests.conftest import make_user_id
+
+    user_id = make_user_id()
+    app.dependency_overrides[get_current_user] = lambda: user_id
+    databases = db.get_databases()
+    database_id = db.get_database_id()
+    bid = f"slice-a1c-{uuid.uuid4().hex[:10]}"
+    try:
+        formats = client.get("/formats").json()
+        fmt = next(f for f in formats if (f.get("config") or {}).get("universal"))
+        databases.create_document(database_id, "battles", bid, {
+            "user_id": user_id, "format_id": fmt["id"], "model_ids": ["m-a", "m-b"],
+            "arena_size": 2, "status": "running", "timeout_seconds": 600,
+            "round_visibility": "isolated", "saved": False,
+        })
+        for mid, outcome in (("m-a", "TEST_PASS"), ("m-b", "TEST_FAIL")):
+            result = json.dumps({
+                "executor_version": 1, "model_id": mid, "role": "player_a",
+                "phase": "race", "outcome": outcome, "passed": outcome == "TEST_PASS",
+                "steps": 4, "tool_errors": 0, "parse_errors": 0,
+                "artifact_checks": {"present": ["solution.py"], "missing": []},
+            })
+            databases.create_document(database_id, "battle_events", "unique()", {
+                "battle_id": bid, "event_id": uuid.uuid4().hex,
+                "payload": json.dumps(
+                    {"type": "result", "data": {"artifact": "EXECUTOR_RESULT: " + result}}
+                ),
+                "created_at": 0.0,
+            })
+        token = issue_battle_token(bid)
+        resp = internal_finalize(
+            FinalizeBody(battle_id=bid, status="failed", scores={}),
+            x_sandbox_token=token,
+        )
+        assert resp["status"] == "completed"  # evidence completes the battle
+        score_docs = databases.list_documents(
+            database_id, "scores", queries=[Query.equal("battle_id", bid)]
+        ).documents
+        assert score_docs
+        assert all(d.data["judge_model"] == "arena-deterministic" for d in score_docs)
+        by_mid = {d.data["model_id"]: d.data["score"] for d in score_docs}
+        assert by_mid["m-a"] > by_mid["m-b"]
+    finally:
+        app.dependency_overrides.clear()
+        _cleanup_battle(databases, database_id, bid)
+
+
 def test_event_bus_uuid_and_dedupe():
     from agent_arena import event_bus
 

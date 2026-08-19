@@ -42,6 +42,9 @@ RACE_MAX_TOKENS = 4096
 
 MAX_SELECTED_SKILLS = 3
 
+# Bumped when the EXECUTOR_RESULT record shape changes incompatibly.
+ADVANCED_EXECUTOR_VERSION = 1
+
 
 def _fetch_url_blocked(url: str) -> str | None:
     """Return a rejection reason if `url` must not be fetched, else None.
@@ -1039,21 +1042,25 @@ class AdvancedExecutor(Executor):
             "present": [r for r in required_artifacts if r in files],
             "missing": [r for r in required_artifacts if r not in files],
         }
+        # Compact, correctness-first record: `files` (potentially large) are
+        # excluded because they already persist via the separate artifact
+        # event + rounds doc. Ordering keeps truncation-safe fields first so
+        # the 30KB event persist cap can never cut the verdict fields.
         result = {
+            "executor_version": ADVANCED_EXECUTOR_VERSION,
             "model_id": model_id,
             "role": role,
+            "phase": phase,
             "outcome": outcome,
             "passed": passed,
             "steps": sess.steps,
-            "files": files,
-            "chosen_skills": chosen_skills,
-            "theory": theory,
-            "skill_read_ok": skill_read_ok,
-            "preview_url": preview_url,
-            "phase": phase,
             "tool_errors": tool_errors,
             "parse_errors": parse_errors,
             "artifact_checks": artifact_checks,
+            "chosen_skills": chosen_skills,
+            "theory": theory[:2000],
+            "skill_read_ok": skill_read_ok,
+            "preview_url": preview_url,
         }
         files_json = json.dumps(
             {

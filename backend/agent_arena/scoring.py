@@ -29,7 +29,7 @@ _STATUS_RANK = {
     "policy_violation": 3,
     "incomplete": 4,
 }
-_POLICY_RANK = {"clean": 0, "warning": 1, "invalid": 2}
+_POLICY_RANK = {"clean": 0, "unknown": 1, "warning": 2, "invalid": 3}
 
 
 def _policy_rank(phase: dict) -> int:
@@ -38,13 +38,15 @@ def _policy_rank(phase: dict) -> int:
 
 
 def _is_ineligible(phase: dict) -> bool:
-    return _policy_rank(phase) >= 2
+    return _policy_rank(phase) >= 3
 
 
 def _ratio_cmp(a: dict, b: dict) -> int:
     """-1 if a ratio is better, +1 if b, 0 if equal. Exact, no floats."""
-    pa, ta = a.get("passed", 0), a.get("total", 0)
-    pb, tb = b.get("passed", 0), b.get("total", 0)
+    pa, ta = a.get("passed"), a.get("total")
+    pb, tb = b.get("passed"), b.get("total")
+    if pa is None or ta is None or pb is None or tb is None:
+        return 0  # no trustworthy correctness evidence on one side: skip tier
     lhs = pa * tb
     rhs = pb * ta
     return -1 if lhs > rhs else (1 if lhs < rhs else 0)
