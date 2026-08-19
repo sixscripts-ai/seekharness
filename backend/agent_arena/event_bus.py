@@ -13,6 +13,24 @@ _persist_thread: threading.Thread | None = None
 
 
 def _persist_worker() -> None:
+    # Appwrite rejects documents whose payload exceeds the per-attribute size
+    # limit (~64KB). Truncate the artifact body inside any persist call so a
+    # long code snippet never kills the durable archive. Live SSE delivery
+    # is unaffected because subscribers read from the in-memory queue.
+    _MAX_PERSIST_BYTES = 30_000
+
+    def _truncate(value):
+        if isinstance(value, str) and len(value) > _MAX_PERSIST_BYTES:
+            return value[:_MAX_PERSIST_BYTES] + "\n…[truncated for durable persist]"
+        return value
+
+    def _scrub(node):
+        if isinstance(node, dict):
+            return {k: _scrub(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [_scrub(v) for v in node]
+        return _truncate(node)
+
     while True:
         battle_id, event = _persist_queue.get()
         try:
@@ -20,6 +38,7 @@ def _persist_worker() -> None:
 
             databases = db.get_databases()
             database_id = db.get_database_id()
+            payload = {"type": event.get("type"), "data": _scrub(event.get("data"))}
             databases.create_document(
                 database_id,
                 "battle_events",
@@ -27,9 +46,7 @@ def _persist_worker() -> None:
                 {
                     "battle_id": battle_id,
                     "event_id": event["event_id"],
-                    "payload": json.dumps(
-                        {"type": event.get("type"), "data": event.get("data")}
-                    ),
+                    "payload": json.dumps(payload),
                     "created_at": float(event["created_at"]),
                 },
             )
