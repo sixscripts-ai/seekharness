@@ -19,6 +19,28 @@ def test_internal_requires_key(client, internal_key):
     assert resp.status_code == 401
 
 
+def test_internal_rejects_legacy_global_key_for_battle(client, internal_key):
+    # Strict mode: the global key is no longer a valid credential for
+    # battle-scoped endpoints — only the per-battle token works.
+    from agent_arena.battle_token import issue_battle_token
+
+    token = issue_battle_token("x")
+    ok_resp = client.post(
+        "/internal/status",
+        headers={"X-Sandbox-Token": token},
+        json={"battle_id": "x"},
+    )
+    # 404 (battle not found) means auth passed; 401 would mean token rejected.
+    assert ok_resp.status_code in (404, 200)
+
+    legacy_resp = client.post(
+        "/internal/status",
+        headers={"X-Internal-Key": internal_key},
+        json={"battle_id": "x"},
+    )
+    assert legacy_resp.status_code == 401
+
+
 def test_internal_hidden_from_openapi(client, internal_key):
     schema = client.get("/openapi.json").json()
     paths = schema.get("paths", {})
@@ -32,6 +54,7 @@ def test_internal_model_validates_battle(client, internal_key, monkeypatch):
     from agent_arena import llm_client
     from appwrite.query import Query
     from agent_arena import db
+    from agent_arena.battle_token import issue_battle_token
 
     user_id = make_user_id()
     app.dependency_overrides[get_current_user] = lambda: user_id
@@ -49,6 +72,7 @@ def test_internal_model_validates_battle(client, internal_key, monkeypatch):
         })
         assert battle.status_code == 201, battle.text
         bid = battle.json()["id"]
+        token = issue_battle_token(bid)
         # cancel immediately so mock runner doesn't race forever; status cancelled
         # won't accept internal model — use while still queued by setting running
         databases = db.get_databases()
@@ -56,14 +80,14 @@ def test_internal_model_validates_battle(client, internal_key, monkeypatch):
 
         bad = client.post(
             "/internal/model",
-            headers={"X-Internal-Key": internal_key},
+            headers={"X-Sandbox-Token": token},
             json={"battle_id": bid, "model_id": "not-in-battle", "messages": [{"role": "user", "content": "hi"}]},
         )
         assert bad.status_code == 400
 
         ok = client.post(
             "/internal/model",
-            headers={"X-Internal-Key": internal_key},
+            headers={"X-Sandbox-Token": token},
             json={
                 "battle_id": bid,
                 "model_id": "host:openrouter-free",
@@ -76,7 +100,7 @@ def test_internal_model_validates_battle(client, internal_key, monkeypatch):
             settings.cache_clear()
             ok = client.post(
                 "/internal/model",
-                headers={"X-Internal-Key": internal_key},
+                headers={"X-Sandbox-Token": token},
                 json={
                     "battle_id": bid,
                     "model_id": "host:openrouter-free",

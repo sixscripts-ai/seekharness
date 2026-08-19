@@ -23,3 +23,14 @@ def get_current_user(authorization: str | None = Header(default=None)) -> str:
         return account["$id"] if isinstance(account, dict) else account.id
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Invalid or expired session") from exc
+
+
+def require_owner(owner_id: str | None, user_id: str, resource: str = "resource") -> None:
+    """Raise 403 unless ``owner_id`` matches the authenticated ``user_id``.
+
+    Centralises the ownership assertion so user-scoped data routes can't
+    accidentally drop the check during a refactor. ``owner_id`` must be the
+    value stored on the document, never a client-supplied field.
+    """
+    if owner_id != user_id:
+        raise HTTPException(status_code=403, detail=f"Not your {resource}")

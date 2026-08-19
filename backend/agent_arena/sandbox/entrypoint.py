@@ -10,7 +10,13 @@ import sys
 def main(battle_id: str) -> None:
     os.environ["ARENA_IN_SANDBOX"] = "1"
     base = os.environ["BACKEND_PUBLIC_URL"].rstrip("/")
-    key = os.environ["INTERNAL_API_KEY"]
+    # Prefer the per-battle scoped token; fall back to the legacy global key
+    # only for environments that still inject INTERNAL_API_KEY directly.
+    sandbox_token = os.environ.get("BATTLE_TOKEN") or ""
+    legacy_key = os.environ.get("INTERNAL_API_KEY") or ""
+    if not sandbox_token and not legacy_key:
+        print("missing BATTLE_TOKEN / INTERNAL_API_KEY", file=sys.stderr)
+        sys.exit(2)
     bootstrap = os.environ.get("BATTLE_BOOTSTRAP_JSON")
     if not bootstrap:
         print("missing BATTLE_BOOTSTRAP_JSON", file=sys.stderr)
@@ -19,7 +25,9 @@ def main(battle_id: str) -> None:
     from agent_arena.sandbox.client import HttpTransport, InternalClient
     from agent_arena.sandbox.runner import run_battle_loop
 
-    client = InternalClient(HttpTransport(base, key))
+    client = InternalClient(
+        HttpTransport(base, legacy_key, sandbox_token=sandbox_token or None)
+    )
     terminal: list[str] = []
     scores: dict = {}
 

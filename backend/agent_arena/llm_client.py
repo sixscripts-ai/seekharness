@@ -5,6 +5,8 @@ from __future__ import annotations
 import httpx
 from fastapi import HTTPException
 
+from .ssrf import validate_base_url
+
 
 def build_headers(auth_style: str, api_key: str) -> dict[str, str]:
     if auth_style == "modal_proxy":
@@ -30,6 +32,7 @@ def chat_completion(
     response_format: dict | None = None,
 ) -> str:
     headers = build_headers(auth_style, api_key)
+    base_url = validate_base_url(base_url)
     url = base_url.rstrip("/") + "/chat/completions"
     payload: dict = {
         "model": model,

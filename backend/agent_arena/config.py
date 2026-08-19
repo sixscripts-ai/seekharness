@@ -26,6 +26,8 @@ def settings() -> dict:
         "APPWRITE_API_KEY": os.environ["APPWRITE_API_KEY"],
         "APPWRITE_DATABASE_ID": os.environ["APPWRITE_DATABASE_ID"],
         "FERNET_KEY": os.environ.get("FERNET_KEY", ""),
+        # Comma-separated retired keys kept only for decrypting old ciphertexts.
+        "FERNET_KEY_OLD": os.environ.get("FERNET_KEY_OLD", ""),
         "HOST_OPENROUTER_KEY": os.environ.get("HOST_OPENROUTER_KEY", ""),
         "HOST_XAI_KEY": os.environ.get("HOST_XAI_KEY", ""),
         "HOST_DEEPSEEK_KEY": os.environ.get("HOST_DEEPSEEK_KEY", ""),

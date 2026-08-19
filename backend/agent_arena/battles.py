@@ -7,7 +7,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from . import db, event_bus, mock_runner, sandbox_launcher
-from .auth import get_current_user
+from .auth import get_current_user, require_owner
 from .providers import is_host_model
 from .schemas import BattleCreate
 
@@ -54,8 +54,7 @@ def _get_owned(databases, database_id: str, battle_id: str, user_id: str):
         battle = databases.get_document(database_id, "battles", battle_id)
     except AppwriteException as exc:
         raise HTTPException(status_code=404, detail="Battle not found") from exc
-    if battle.data["user_id"] != user_id:
-        raise HTTPException(status_code=403, detail="Not your battle")
+    require_owner(battle.data.get("user_id"), user_id, resource="battle")
     return battle
 
 

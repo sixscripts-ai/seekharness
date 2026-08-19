@@ -2,10 +2,59 @@
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 import httpx
+
+
+def _assert_egress_allowed(url: str) -> None:
+    """Reject sandbox outbound requests to non-public / metadata endpoints.
+
+    The sandbox's only sanctioned network target is the backend public URL.
+    This is a defense-in-depth guard against compromised model code trying to
+    reach the cloud metadata service (169.254.169.254) or other internal
+    hosts. Modal's own network policy is the authoritative control; this
+    guards the in-process and direct HTTP paths too.
+    """
+    try:
+        parsed = urlsplit(url)
+    except ValueError as exc:
+        raise RuntimeError(f"Sandbox egress blocked: malformed URL") from exc
+
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise RuntimeError(f"Sandbox egress blocked: {scheme} scheme")
+
+    host = parsed.hostname
+    if not host:
+        raise RuntimeError("Sandbox egress blocked: missing host")
+
+    host = host.strip("[]").rstrip(".")
+    try:
+        addr = ipaddress.ip_address(host)
+        if not addr.is_global or addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+            raise RuntimeError(f"Sandbox egress blocked: {host}")
+        return
+    except ValueError:
+        # Hostname — resolve and validate all addresses (DNS-rebinding guard).
+        import socket
+
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except socket.gaierror:
+            # Non-resolvable host: let httpx surface the real error.
+            return
+        for info in infos:
+            ip = info[4][0]
+            try:
+                a = ipaddress.ip_address(ip)
+            except ValueError:
+                continue
+            if not a.is_global or a.is_private or a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified:
+                raise RuntimeError(f"Sandbox egress blocked: {host} -> {ip}")
 
 
 class Transport(Protocol):
@@ -13,15 +62,30 @@ class Transport(Protocol):
 
 
 class HttpTransport:
-    def __init__(self, base_url: str, internal_key: str, timeout: float = 600.0):
+    def __init__(
+        self,
+        base_url: str,
+        internal_key: str,
+        timeout: float = 600.0,
+        sandbox_token: str | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.internal_key = internal_key
+        self.sandbox_token = sandbox_token
         self.timeout = timeout
         self.client = httpx.Client(timeout=timeout, follow_redirects=True)
 
     def post(self, path: str, json: dict) -> dict:
         url = self.base_url + path
-        headers = {"X-Internal-Key": self.internal_key}
+        _assert_egress_allowed(url)
+        headers: dict[str, str] = {}
+        # Battle-scoped endpoints require the per-battle token. The legacy
+        # global key is retained only as a fallback for environments that have
+        # not yet been migrated (it is rejected for battle-scoped routes).
+        if self.sandbox_token:
+            headers["X-Sandbox-Token"] = self.sandbox_token
+        elif self.internal_key:
+            headers["X-Internal-Key"] = self.internal_key
         last_err: Exception | None = None
         for attempt in range(3):
             try:

@@ -9,6 +9,7 @@ from . import crypto, db
 from .auth import get_current_user
 from .config import settings
 from .schemas import ProviderCreate, ProviderHealth, ProviderOut
+from .ssrf import validate_base_url
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 
@@ -230,13 +231,43 @@ def configured_host_providers() -> list[dict]:
     ]
 
 
-def _fernet_key() -> bytes:
-    key = settings()["FERNET_KEY"]
-    if not key:
+def _fernet_keys() -> list[bytes]:
+    """Return all valid encryption keys, newest first.
+
+    ``FERNET_KEY`` is the active key; ``FERNET_KEY_OLD`` (comma-separated)
+    holds retired keys still needed to decrypt previously-stored ciphertexts.
+    This lets an operator rotate the key without bricking existing providers:
+    decryption tries each key, while new writes use the active key only.
+    """
+    s = settings()
+    active = s["FERNET_KEY"]
+    if not active:
         raise HTTPException(
             status_code=500, detail="Server encryption key not configured"
         )
-    return key.encode()
+    keys = [active]
+    for old in (s.get("FERNET_KEY_OLD") or "").split(","):
+        old = old.strip()
+        if old and old not in keys:
+            keys.append(old)
+    return [k.encode() for k in keys]
+
+
+def _fernet_key() -> bytes:
+    return _fernet_keys()[0]
+
+
+def _decrypt_with_any(token: str) -> str:
+    """Decrypt a stored ciphertext, trying every configured key in order."""
+    last_err: Exception | None = None
+    for key in _fernet_keys():
+        try:
+            return decrypt_key(token, key)
+        except ValueError as exc:
+            last_err = exc
+    raise HTTPException(
+        status_code=500, detail="Unable to decrypt provider key (key rotated?)"
+    ) from last_err
 
 
 def _find_existing(databases, database_id, user_id, name):
@@ -255,6 +286,7 @@ def _find_existing(databases, database_id, user_id, name):
 
 @router.post("", response_model=ProviderOut)
 def create_provider(body: ProviderCreate, user_id: str = Depends(get_current_user)):
+    base_url = validate_base_url(body.base_url)
     encrypted = crypto.encrypt_key(body.api_key, _fernet_key())
     masked = crypto.mask_key(body.api_key)
     databases = db.get_databases()
@@ -262,7 +294,7 @@ def create_provider(body: ProviderCreate, user_id: str = Depends(get_current_use
     payload = {
         "user_id": user_id,
         "name": body.name,
-        "base_url": body.base_url,
+        "base_url": base_url,
         "encrypted_key": encrypted,
         "masked_key": masked,
         "auth_style": body.auth_style,
@@ -336,7 +368,7 @@ def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str
         raise HTTPException(status_code=404, detail="Unknown model_id") from exc
     if doc.data.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not your provider")
-    api_key = crypto.decrypt_key(doc.data["encrypted_key"], _fernet_key())
+    api_key = _decrypt_with_any(doc.data["encrypted_key"])
     return (
         doc.data["base_url"],
         doc.data["auth_style"],
@@ -347,6 +379,7 @@ def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str
 
 @router.post("/health")
 def provider_health(body: ProviderHealth, _user_id: str = Depends(get_current_user)):
+    base_url = validate_base_url(body.base_url)
     headers = {}
     if body.auth_style == "modal_proxy":
         parts = [p.strip() for p in body.api_key.split(":")]
@@ -357,7 +390,7 @@ def provider_health(body: ProviderHealth, _user_id: str = Depends(get_current_us
         headers = {"Modal-Key": parts[0], "Modal-Secret": parts[1]}
     else:
         headers["Authorization"] = f"Bearer {body.api_key}"
-    url = body.base_url.rstrip("/") + "/chat/completions"
+    url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": body.model or "moonshotai/Kimi-K3",
         "messages": [{"role": "user", "content": "ping"}],

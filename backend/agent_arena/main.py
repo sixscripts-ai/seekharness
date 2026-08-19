@@ -9,12 +9,16 @@ app = FastAPI(title="Agent Arena", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        # Exact production frontend origins (tighten from wildcard *.vercel.app
+        # so any unrelated Vercel page cannot make credentialed requests).
         "https://agent-arena-blond.vercel.app",
-        "https://*.vercel.app",
+        "https://frontend-seven-snowy-59.vercel.app",
+        # Local development.
         "http://localhost:3000",
         "http://localhost:3010",
     ],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    # allow_origin_regex kept off: a wildcard regex reintroduces the same
+    # permissive behaviour the explicit list above is meant to close.
     allow_methods=["*"],
     allow_headers=["*"],
 )

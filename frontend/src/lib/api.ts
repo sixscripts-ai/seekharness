@@ -1,6 +1,8 @@
+declare const __DEFAULT_MODAL_URL__: string;
+
 const BASE = (
   import.meta.env.VITE_MODAL_URL ||
-  "https://sixscripts--agent-arena-backend-fastapi-app.modal.run"
+  __DEFAULT_MODAL_URL__
 ).replace(/\/$/, "");
 
 export class ApiError extends Error {

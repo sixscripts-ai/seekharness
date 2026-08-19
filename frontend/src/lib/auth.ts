@@ -15,12 +15,15 @@ type AuthState = {
 };
 
 function safeGet(key: string): string | null {
-  try { return localStorage.getItem(key) || sessionStorage.getItem(key); } catch { return null; }
+  // sessionStorage only: the JWT is short-lived and re-fetched on init, so
+  // there is no need to persist it across browser sessions. A single storage
+  // backing, cleared on tab close, shrinks the XSS exfiltration surface.
+  try { return sessionStorage.getItem(key); } catch { return null; }
 }
 function safeSet(key: string, val: string | null) {
   try {
-    if (val) { localStorage.setItem(key, val); sessionStorage.setItem(key, val); }
-    else { localStorage.removeItem(key); sessionStorage.removeItem(key); }
+    if (val) sessionStorage.setItem(key, val);
+    else sessionStorage.removeItem(key);
   } catch {}
 }
 

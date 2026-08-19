@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 from . import db, event_bus
+from .battle_token import issue_battle_token
 from .config import settings
 from .sandbox.client import HttpTransport, InternalClient
 from .sandbox.runner import run_battle_loop
@@ -59,7 +60,10 @@ def run_in_process(battle_id: str) -> None:
     if not key or os.environ.get("ARENA_INPROCESS_DIRECT") == "1":
         _run_direct(battle_id, databases, database_id, battle, cfg)
         return
-    client = InternalClient(HttpTransport(base, key))
+    # Use a battle-scoped token over HTTP so the local path exercises the same
+    # auth contract as the real sandbox (and never leaks the global key).
+    sandbox_token = issue_battle_token(battle_id)
+    client = InternalClient(HttpTransport(base, "", sandbox_token=sandbox_token))
 
     def status_check() -> str:
         b = databases.get_document(database_id, "battles", battle_id)
@@ -228,6 +232,10 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     if not key:
         raise RuntimeError("INTERNAL_API_KEY not configured")
     databases, _database_id, battle, cfg = _load_battle(battle_id)
+    # Issue a battle-scoped, expiring token. The sandbox receives ONLY this
+    # token — never the global INTERNAL_API_KEY — so a compromised sandbox
+    # cannot use the shared key to reach other battles or users' provider keys.
+    sandbox_token = issue_battle_token(battle_id)
     bootstrap = {
         "format_config": cfg,
         "model_ids": list(battle.data["model_ids"]),
@@ -257,7 +265,7 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
         image = image.add_local_dir(str(skills_dir), remote_path="/opt/arena-skills")
     secret = modal.Secret.from_dict(
         {
-            "INTERNAL_API_KEY": key,
+            "BATTLE_TOKEN": sandbox_token,
             "BACKEND_PUBLIC_URL": _backend_public_url(),
             "BATTLE_BOOTSTRAP_JSON": json.dumps(bootstrap),
             "ARENA_SKILLS_ROOT": "/opt/arena-skills",
