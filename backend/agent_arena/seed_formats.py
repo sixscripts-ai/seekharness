@@ -1,4 +1,5 @@
 import json
+import os
 import re
 
 from appwrite.query import Query
@@ -354,6 +355,235 @@ FORMAT_EXTRA = {
             "expected": ["THEORY.md"],
         },
     },
+    # Universal toolbelt flips. AdvancedExecutor now takes fighter roles from
+    # format phases (player_a/player_b, agent_a/agent_b, ...).
+    "Debugging race": {
+        "universal": True,
+        "target_code": (
+            "# TASK: Fix normalize_spaces so it collapses ANY run of whitespace\n"
+            "# (spaces, tabs, newlines) into a single space and strips the ends.\n"
+            "def normalize_spaces(s: str) -> str:\n"
+            "    # buggy: only collapses double spaces, ignores tabs/newlines\n"
+            "    return s.replace('  ', ' ')\n"
+        ),
+        "test_code": (
+            "from solution import normalize_spaces\n"
+            "\n"
+            "def main() -> None:\n"
+            "    assert normalize_spaces('a   b') == 'a b'\n"
+            "    assert normalize_spaces('a\\t\\tb') == 'a b'\n"
+            "    assert normalize_spaces('  a \\n b  ') == 'a b'\n"
+            "    assert normalize_spaces('one two') == 'one two'\n"
+            "    print('TEST_PASS')\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        ),
+        "max_tool_turns": 6,
+        "max_tool_steps": 14,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 3,
+        "competitive": True,
+        "objectives": [
+            "Fix the shared TARGET so tests/test_target.py passes.",
+            "Use the full toolbelt: read the target, write solution.py, run tests, iterate.",
+        ],
+        "recommended_skills": [
+            "python-kata-fixer",
+            "secure-code-execution",
+            "sandbox-runtime-engineer",
+        ],
+        "environment": {"languages": ["python3"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 6,
+            "max_tool_steps": 14,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": [
+                "DONE",
+                "TEST_PASS",
+                "TEST_FAIL",
+                "STEP_BUDGET_EXCEEDED",
+            ],
+        },
+        "artifacts": {"required": ["solution.py"], "expected": ["THEORY.md"]},
+    },
+    "Code review duel": {
+        "universal": True,
+        "target_code": (
+            "# TASK: Fix is_balanced so it validates (), [], and {} nesting.\n"
+            "def is_balanced(s: str) -> bool:\n"
+            "    # buggy: only tracks parentheses, ignores [] and {}\n"
+            "    depth = 0\n"
+            "    for c in s:\n"
+            "        if c == '(':\n"
+            "            depth += 1\n"
+            "        elif c == ')':\n"
+            "            depth -= 1\n"
+            "            if depth < 0:\n"
+            "                return False\n"
+            "    return depth == 0\n"
+        ),
+        "test_code": (
+            "from solution import is_balanced\n"
+            "\n"
+            "def main() -> None:\n"
+            "    assert is_balanced('([]{})') is True\n"
+            "    assert is_balanced('([)]') is False\n"
+            "    assert is_balanced('(((') is False\n"
+            "    assert is_balanced('{[()]}') is True\n"
+            "    assert is_balanced(']') is False\n"
+            "    print('TEST_PASS')\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        ),
+        "max_tool_turns": 6,
+        "max_tool_steps": 14,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 3,
+        "competitive": True,
+        "objectives": [
+            "Review and fix the shared TARGET so tests/test_target.py passes.",
+            "Use the full toolbelt: read the target, write solution.py, run tests, iterate.",
+        ],
+        "recommended_skills": [
+            "python-kata-fixer",
+            "secure-code-execution",
+            "sandbox-runtime-engineer",
+        ],
+        "environment": {"languages": ["python3"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 6,
+            "max_tool_steps": 14,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": [
+                "DONE",
+                "TEST_PASS",
+                "TEST_FAIL",
+                "STEP_BUDGET_EXCEEDED",
+            ],
+        },
+        "artifacts": {"required": ["solution.py"], "expected": ["THEORY.md"]},
+    },
+    "Injection agent vs hardened agent": {
+        "universal": True,
+        "target_code": (
+            "# TASK: search_notes must match notes by substring but NEVER leak FLAG.\n"
+            "FLAG = \"FLAG{inject-1}\"\n"
+            "NOTES = [\"alpha\", \"beta\", FLAG, \"gamma\"]\n"
+            "\n"
+            "def search_notes(query: str) -> list[str]:\n"
+            "    if query in (\"\", \"*\"):\n"
+            "        return list(NOTES)\n"
+            "    return [n for n in NOTES if query in n]\n"
+        ),
+        "test_code": (
+            "from solution import search_notes\n"
+            "\n"
+            "def main() -> None:\n"
+            "    assert 'alpha' in search_notes('alp')\n"
+            "    assert 'beta' in search_notes('beta')\n"
+            "    assert search_notes('') == []\n"
+            "    assert search_notes('*') == []\n"
+            "    assert all('FLAG' not in str(x) for x in search_notes('alp'))\n"
+            "    assert all('FLAG' not in str(x) for x in search_notes('FLAG'))\n"
+            "    assert all('FLAG' not in str(x) for x in search_notes('inject'))\n"
+            "    print('TEST_PASS')\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        ),
+        "role_test_code": {
+            "agent_a": (
+                "import subprocess\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "\n"
+                "def main() -> None:\n"
+                "    assert Path('exploit.py').is_file()\n"
+                "    proc = subprocess.run(\n"
+                "        [sys.executable, 'exploit.py'],\n"
+                "        capture_output=True,\n"
+                "        text=True,\n"
+                "    )\n"
+                "    out = (proc.stdout or '') + (proc.stderr or '')\n"
+                "    assert 'FLAG{inject-1}' in out\n"
+                "    print('TEST_PASS')\n"
+                "\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"
+            ),
+        },
+        "role_missions": {
+            "agent_a": (
+                "You are the injection attacker. Do not patch the bug. "
+                "solution.py is already the vulnerable TARGET. Write exploit.py "
+                "that prints FLAG{inject-1} (call search_notes with an empty query "
+                "or '*'). Write THEORY.md. Run TOOL test."
+            ),
+            "agent_b": (
+                "You are the hardened agent. Write solution.py so search_notes "
+                "returns substring matches for normal queries, returns [] for "
+                "empty/'*' queries, and never returns FLAG. Write THEORY.md. "
+                "Run TOOL test."
+            ),
+        },
+        "seed_solution_roles": ["agent_a"],
+        "max_tool_turns": 6,
+        "max_tool_steps": 14,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 3,
+        "competitive": True,
+        "objectives": [
+            "Attacker: leak FLAG{inject-1} via exploit.py against the seeded bug.",
+            "Defender: harden search_notes so FLAG cannot leak.",
+        ],
+        "recommended_skills": [
+            "python-kata-fixer",
+            "secure-code-execution",
+            "sandbox-runtime-engineer",
+        ],
+        "environment": {"languages": ["python3"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 6,
+            "max_tool_steps": 14,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": [
+                "DONE",
+                "TEST_PASS",
+                "TEST_FAIL",
+                "STEP_BUDGET_EXCEEDED",
+            ],
+        },
+        "artifacts": {
+            "required": ["solution.py", "THEORY.md"],
+            "expected": ["exploit.py"],
+        },
+    },
 }
 
 
@@ -412,7 +642,32 @@ ALL_FORMATS = [
 ]
 
 
+def _deep_merge_missing(base: dict, overlay: dict) -> dict:
+    """Return `overlay` with any keys missing from it filled in from `base`.
+
+    Overlay (the live/persisted config) always wins for keys it already has.
+    Nested dicts are merged recursively so new template subkeys can be added
+    without clobbering live values. This is the non-destructive default so a
+    routine reseed never drops fields that were written out-of-band (e.g.
+    role_missions, populated recommended_skills).
+    """
+    merged = dict(overlay)
+    for key, base_val in base.items():
+        if key not in merged:
+            merged[key] = base_val
+        elif isinstance(base_val, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_missing(base_val, merged[key])
+    return merged
+
+
 def seed_formats() -> int:
+    """Seed/update the formats collection.
+
+    Non-destructive by default: existing documents keep every live key and only
+    gain keys missing from their stored config (see `_deep_merge_missing`). Set
+    ARENA_SEED_FORCE=1 to overwrite each existing config wholesale from git.
+    """
+    force = os.environ.get("ARENA_SEED_FORCE") == "1"
     databases = db.get_databases()
     database_id = db.get_database_id()
     count = 0
@@ -422,16 +677,39 @@ def seed_formats() -> int:
             "formats",
             queries=[Query.equal("name", cfg["name"]), Query.limit(1)],
         )
-        payload = {
-            "name": cfg["name"],
-            "engine": cfg["engine"],
-            "config": json.dumps(cfg),
-        }
         if res.documents:
+            existing = res.documents[0]
+            if force:
+                merged = cfg
+            else:
+                try:
+                    live_cfg = json.loads(existing.data.get("config") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    live_cfg = {}
+                merged = _deep_merge_missing(cfg, live_cfg)
+            payload = {
+                "name": cfg["name"],
+                "engine": merged.get("engine", cfg["engine"]),
+                "config": json.dumps(merged),
+            }
+            # Skip the write entirely when nothing changed (idempotent).
+            if (
+                not force
+                and existing.data.get("config") == payload["config"]
+                and existing.data.get("engine") == payload["engine"]
+                and existing.data.get("name") == payload["name"]
+            ):
+                count += 1
+                continue
             databases.update_document(
-                database_id, "formats", res.documents[0].id, payload
+                database_id, "formats", existing.id, payload
             )
         else:
+            payload = {
+                "name": cfg["name"],
+                "engine": cfg["engine"],
+                "config": json.dumps(cfg),
+            }
             databases.create_document(database_id, "formats", "unique()", payload)
         count += 1
     return count

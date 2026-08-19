@@ -3,7 +3,9 @@ import json
 from agent_arena.sandbox.executors.advanced_executor import (
     AdvancedExecutor,
     ToolSession,
+    fighter_roles,
     parse_tool_calls,
+    tool_phase_name,
 )
 from agent_arena.sandbox.executors.skill_pool import load_skill_pool, mount_skills
 from agent_arena.sandbox.executors import get_executor
@@ -160,6 +162,27 @@ def test_universal_flag_routes_to_advanced():
         get_executor({"name": "Debugging race", "engine": "same_target_race"}),
         SameTargetRaceExecutor,
     )
+    assert isinstance(
+        get_executor(
+            {
+                "name": "Injection agent vs hardened agent",
+                "engine": "agent_vs_agent",
+                "universal": True,
+            }
+        ),
+        AE,
+    )
+    from agent_arena.sandbox.executors.agent_vs_agent import AgentVsAgentExecutor
+
+    assert isinstance(
+        get_executor(
+            {
+                "name": "Injection agent vs hardened agent",
+                "engine": "agent_vs_agent",
+            }
+        ),
+        AgentVsAgentExecutor,
+    )
 
 
 def test_race_loop_reads_skill_and_passes_harness(monkeypatch):
@@ -254,7 +277,15 @@ def _executor_results(rounds):
     return found
 
 
-def _run_fake_race(monkeypatch, reply, *, max_tool_turns=2, max_tool_steps=20):
+def _run_fake_race(
+    monkeypatch,
+    reply,
+    *,
+    max_tool_turns=2,
+    max_tool_steps=20,
+    format_overlay=None,
+    role_to_model=None,
+):
     from agent_arena.sandbox.client import FakeTransport, InternalClient
 
     monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
@@ -268,17 +299,21 @@ def _run_fake_race(monkeypatch, reply, *, max_tool_turns=2, max_tool_steps=20):
     }
     client = InternalClient(transport)
     ex = AdvancedExecutor()
+    fmt = {
+        **_RACE_FORMAT,
+        "max_tool_turns": max_tool_turns,
+        "max_tool_steps": max_tool_steps,
+    }
+    if format_overlay:
+        fmt.update(format_overlay)
+    mapping = role_to_model or {"player_a": "a", "player_b": "b"}
     scores = ex.run_battle(
         battle_id="race-1",
-        format_config={
-            **_RACE_FORMAT,
-            "max_tool_turns": max_tool_turns,
-            "max_tool_steps": max_tool_steps,
-        },
+        format_config=fmt,
         model_ids=["a", "b"],
         round_visibility="isolated",
         timeout_seconds=60,
-        role_to_model={"player_a": "a", "player_b": "b"},
+        role_to_model=mapping,
         client=client,
     )
     return scores, transport
@@ -317,6 +352,53 @@ def test_race_loop_pass_then_step_cap_still_passed(monkeypatch):
         if r.get("outcome") == "STEP_BUDGET_EXCEEDED" and r.get("passed") is False
     ]
     assert wiped == []
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_fighter_roles_from_phases():
+    assert fighter_roles(
+        {
+            "roles": ["agent_a", "agent_b", "judge"],
+            "phases": [
+                {"name": "engage", "participants": ["agent_a", "agent_b"]},
+                {"name": "judge", "participants": ["judge"]},
+            ],
+        }
+    ) == ["agent_a", "agent_b"]
+    assert tool_phase_name(
+        {
+            "phases": [
+                {"name": "engage", "participants": ["agent_a", "agent_b"]},
+            ]
+        }
+    ) == "engage"
+    assert fighter_roles({"roles": ["player_a", "player_b", "judge"]}) == [
+        "player_a",
+        "player_b",
+    ]
+
+
+def test_race_loop_uses_agent_roles(monkeypatch):
+    import os
+
+    scores, transport = _run_fake_race(
+        monkeypatch,
+        _PASSING_TOOLS,
+        format_overlay={
+            "name": "Custom dual-agent race",
+            "recommended_skills": ["python-kata-fixer"],
+            "roles": ["agent_a", "agent_b", "judge"],
+            "phases": [
+                {"name": "engage", "participants": ["agent_a", "agent_b"]},
+                {"name": "judge", "participants": ["judge"]},
+            ],
+        },
+        role_to_model={"agent_a": "a", "agent_b": "b"},
+    )
+    assert scores["a"] == 90.0
+    results = _executor_results(transport.rounds)
+    assert {r.get("role") for r in results} == {"agent_a", "agent_b"}
+    assert all(r.get("passed") is True for r in results)
     os.environ.pop("ARENA_IN_SANDBOX", None)
 
 

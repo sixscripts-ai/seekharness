@@ -744,6 +744,26 @@ class ToolSession:
         return f"ERROR: unknown tool {tool}"
 
 
+def fighter_roles(format_config: dict) -> list[str]:
+    seen: list[str] = []
+    for phase in format_config.get("phases") or []:
+        for role in phase.get("participants") or []:
+            if not role or role == "judge" or role in seen:
+                continue
+            seen.append(role)
+    if seen:
+        return seen
+    return [r for r in (format_config.get("roles") or []) if r != "judge"]
+
+
+def tool_phase_name(format_config: dict) -> str:
+    for phase in format_config.get("phases") or []:
+        parts = [p for p in (phase.get("participants") or []) if p != "judge"]
+        if parts:
+            return str(phase.get("name") or "race")
+    return "race"
+
+
 class AdvancedExecutor(Executor):
     @staticmethod
     def _collect_workspace(work: Path) -> tuple[dict[str, str], str]:
@@ -789,6 +809,7 @@ class AdvancedExecutor(Executor):
         last_test: str | None = None,
         budget_exceeded: bool = False,
         retest: bool = False,
+        phase: str = "race",
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -827,7 +848,7 @@ class AdvancedExecutor(Executor):
             "skill_read_ok": skill_read_ok,
             "preview_url": preview_url,
         }
-        line = self.emit_result(client, battle_id, "race", result)
+        line = self.emit_result(client, battle_id, phase, result)
         files_json = json.dumps(
             {
                 "files": files,
@@ -843,7 +864,7 @@ class AdvancedExecutor(Executor):
         seq["n"] += 1
         client.round(
             battle_id,
-            "race",
+            phase,
             model_id,
             sanitize_artifact(files_json),
             event_type="artifact",
@@ -851,7 +872,7 @@ class AdvancedExecutor(Executor):
         )
         history.append(
             {
-                "phase": "race",
+                "phase": phase,
                 "model_id": model_id,
                 "artifact": sanitize_artifact(files_json),
                 "role": role,
@@ -859,7 +880,7 @@ class AdvancedExecutor(Executor):
         )
         history.append(
             {
-                "phase": "race",
+                "phase": phase,
                 "model_id": model_id,
                 "artifact": line,
                 "role": role,
@@ -893,7 +914,14 @@ class AdvancedExecutor(Executor):
             deadline = time.time() + (timeout_seconds or 600)
 
         target_code = format_config.get("target_code") or "# TASK: Fix is_palindrome\n"
-        test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
+        default_test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
+        role_test_code = format_config.get("role_test_code") or {}
+        role_missions = format_config.get("role_missions") or {}
+        seed_solution_roles = set(format_config.get("seed_solution_roles") or [])
+        if format_config.get("seed_solution"):
+            seed_solution_roles = seed_solution_roles | set(
+                fighter_roles(format_config)
+            )
         max_turns = int(format_config.get("max_tool_turns", 6))
         max_steps = int(format_config.get("max_tool_steps", 14))
         raw_timeout = format_config.get("tool_timeout")
@@ -902,6 +930,8 @@ class AdvancedExecutor(Executor):
         race_tokens = int(format_config.get("race_max_tokens") or RACE_MAX_TOKENS)
         pool = select_skills(format_config) or load_skill_pool() or SKILL_POOL
         seq = {"n": 0}
+        phase_name = tool_phase_name(format_config)
+        fighters = fighter_roles(format_config)
 
         def emit(phase, model_id, artifact, event_type="artifact"):
             seq["n"] += 1
@@ -920,7 +950,7 @@ class AdvancedExecutor(Executor):
             seq["n"] += 1
             client.round(
                 battle_id,
-                "race",
+                phase_name,
                 model_id,
                 json.dumps(
                     {
@@ -952,7 +982,7 @@ class AdvancedExecutor(Executor):
         with tempfile.TemporaryDirectory(prefix="arena-adv-") as tmp:
             root = Path(tmp)
 
-            for role in ["player_a", "player_b"]:
+            for role_idx, role in enumerate(fighters):
                 halted = self.halted(status_check, deadline)
                 if halted:
                     if on_status:
@@ -968,10 +998,21 @@ class AdvancedExecutor(Executor):
                 (work / "TARGET.md").write_text(target_code, encoding="utf-8")
                 tests_dir = work / "tests"
                 tests_dir.mkdir(exist_ok=True)
+                test_code = role_test_code.get(role) or default_test_code
                 (tests_dir / "test_target.py").write_text(test_code, encoding="utf-8")
+                mission = str(role_missions.get(role) or "").strip()
+                if role in seed_solution_roles:
+                    (work / "solution.py").write_text(target_code, encoding="utf-8")
                 (work / "README.md").write_text(
                     f"# Task for {role}\n"
-                    f"Pick {pick_n} skills, TOOL read each SKILL.md, write solution.py, TOOL test.\n",
+                    + (
+                        f"{mission}\n"
+                        if mission
+                        else (
+                            f"Pick {pick_n} skills, TOOL read each SKILL.md, "
+                            "write solution.py, TOOL test.\n"
+                        )
+                    ),
                     encoding="utf-8",
                 )
 
@@ -980,7 +1021,6 @@ class AdvancedExecutor(Executor):
                 preview_server = None
                 preview_url = ""
                 if preview_enabled():
-                    role_idx = 0 if role == "player_a" else 1
                     try:
                         preview_server = StaticPreviewServer(
                             workdir=work,
@@ -1004,7 +1044,7 @@ class AdvancedExecutor(Executor):
                         )
 
                 emit(
-                    "race",
+                    phase_name,
                     model_id,
                     f"phase_start:{role} workdir {work.name}"
                     + (f" preview {preview_url}" if preview_url else ""),
@@ -1025,8 +1065,13 @@ class AdvancedExecutor(Executor):
                             for a in history[-5:]
                         ]
                     )
+                    fmt_name = format_config.get("name") or "a tool-using battle"
+                    mission_line = (
+                        f"Your mission: {mission}\n" if mission else ""
+                    )
                     system_prompt = (
-                        f"You are {role} in a tool-using coding race. TARGET is in TARGET.md.\n"
+                        f"You are {role} in '{fmt_name}'. TARGET is in TARGET.md.\n"
+                        f"{mission_line}"
                         f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
                         f"{opponent_info}\n"
                         "Tools (one per line, body tools need END_TOOL):\n"
@@ -1039,7 +1084,7 @@ class AdvancedExecutor(Executor):
                         f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
                         f"You MUST emit SKILLS: a,b,... ({pick_n} names) then TOOL use_skill "
                         "name=<skill> for each chosen skill before writing solution.py.\n"
-                        "Write THEORY.md explaining the pick. Write solution.py. Run TOOL test "
+                        "Write THEORY.md explaining the pick. Write required artifacts. Run TOOL test "
                         "(harness is tests/test_target.py; do not fake TEST_PASS). "
                         "After a real TEST_PASS, emit DONE and stop.\n"
                         f"Prior: {prior or '(none)'}"
@@ -1054,7 +1099,7 @@ class AdvancedExecutor(Executor):
                         battle_id,
                         model_id,
                         messages,
-                        phase="race",
+                        phase=phase_name,
                         max_tokens=race_tokens,
                     )
                     content = content.strip()
@@ -1065,14 +1110,14 @@ class AdvancedExecutor(Executor):
                         artifact = sanitize_artifact(content[:10000])
                         history.append(
                             {
-                                "phase": "race",
+                                "phase": phase_name,
                                 "model_id": model_id,
                                 "artifact": artifact,
                                 "role": role,
                             }
                         )
                         client.round(
-                            battle_id, "race", model_id, artifact, sequence=seq["n"] + 1
+                            battle_id, phase_name, model_id, artifact, sequence=seq["n"] + 1
                         )
                         seq["n"] += 1
                         continue
@@ -1094,6 +1139,7 @@ class AdvancedExecutor(Executor):
                                 seq=seq,
                                 last_test=last_test or None,
                                 budget_exceeded=True,
+                                phase=phase_name,
                             )
                             break
 
@@ -1107,7 +1153,7 @@ class AdvancedExecutor(Executor):
                             res = sess.exec_tool(call)
                             history.append(
                                 {
-                                    "phase": "race",
+                                    "phase": phase_name,
                                     "model_id": model_id,
                                     "artifact": sanitize_artifact(f"{res}"),
                                     "role": role,
@@ -1115,7 +1161,7 @@ class AdvancedExecutor(Executor):
                             )
                             client.round(
                                 battle_id,
-                                "race",
+                                phase_name,
                                 model_id,
                                 sanitize_artifact(res),
                                 sequence=seq["n"] + 1,
@@ -1139,6 +1185,7 @@ class AdvancedExecutor(Executor):
                                 seq=seq,
                                 last_test=last_test or None,
                                 retest=True,
+                                phase=phase_name,
                             )
                             break
 
@@ -1159,7 +1206,7 @@ class AdvancedExecutor(Executor):
                         )
                         history.append(
                             {
-                                "phase": "race",
+                                "phase": phase_name,
                                 "model_id": model_id,
                                 "artifact": exec_res_sanitized,
                                 "role": role,
@@ -1167,7 +1214,7 @@ class AdvancedExecutor(Executor):
                         )
                         client.round(
                             battle_id,
-                            "race",
+                            phase_name,
                             model_id,
                             exec_res_sanitized,
                             sequence=seq["n"] + 1,
@@ -1191,6 +1238,7 @@ class AdvancedExecutor(Executor):
                                     results=results,
                                     seq=seq,
                                     last_test=exec_res_sanitized,
+                                    phase=phase_name,
                                 )
                                 break
 
@@ -1214,6 +1262,7 @@ class AdvancedExecutor(Executor):
                         results=results,
                         seq=seq,
                         last_test=last_test or None,
+                        phase=phase_name,
                     )
 
                 if preview_server is not None:
@@ -1288,7 +1337,7 @@ class AdvancedExecutor(Executor):
         for r in results:
             history.append(
                 {
-                    "phase": "race",
+                    "phase": phase_name,
                     "model_id": r["model_id"],
                     "artifact": f"RESULT {r['outcome']} chosen {r['chosen_skills']} passed={r['passed']} steps={r['steps']} theory={(r.get('theory', '')[:200])}",
                     "role": r["role"],
