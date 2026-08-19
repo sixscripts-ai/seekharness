@@ -8,6 +8,7 @@ THEORY.md, preview servers per fighter, Appwrite skill Elo + memory.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -313,7 +315,108 @@ _ARG_TOOLS = {
 }
 
 
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", re.I | re.S)
+_JSON_TOOL_KEYS = {
+    "cmd", "command", "content", "code", "name", "id", "path", "pattern",
+    "query", "q", "url", "src", "source", "from", "dst", "dest", "to",
+    "tail", "skills", "chosen", "list",
+}
+_ALL_JSON_TOOLS = _BODY_TOOLS | _ARG_TOOLS | {"skills", "done"}
+
+
+def _normalize_json_call(obj) -> dict | None:
+    """Validate one JSON tool object into the executor call shape, or None."""
+    if not isinstance(obj, dict):
+        return None
+    tool = str(obj.get("tool") or "").strip().lower()
+    if tool not in _ALL_JSON_TOOLS:
+        return None
+    args = obj.get("arguments") or obj.get("args") or {}
+    if not isinstance(args, dict):
+        return None
+    call: dict[str, Any] = {"tool": tool}
+    for key in _JSON_TOOL_KEYS:
+        if key in args and args[key] is not None:
+            call[key] = args[key]
+    if tool in ("cp", "mv"):
+        call["src"] = args.get("src") or args.get("from")
+        call["dst"] = args.get("dst") or args.get("to")
+    if tool in ("shell", "install"):
+        call["cmd"] = args.get("cmd") or args.get("command") or ""
+        call["content"] = call.get("content") or ""
+    if tool in ("write", "run", "bg"):
+        call["content"] = (
+            args.get("content") if args.get("content") is not None else args.get("code", "")
+        )
+        call["cmd"] = args.get("cmd") or args.get("command") or ""
+        call["name"] = args.get("name") or args.get("id") or ""
+    if tool == "fetch":
+        call["url"] = args.get("url") or ""
+    if tool == "grep":
+        call["pattern"] = args.get("pattern") or args.get("query") or ""
+        call["path"] = args.get("path") or "."
+    if tool == "skills":
+        call["chosen"] = list(args.get("chosen") or args.get("skills") or [])
+        if args.get("list"):
+            call["list"] = True
+    if tool == "done":
+        call = {"tool": "done"}
+    return call
+
+
+def _parse_json_tools(text: str) -> list[dict[str, Any]] | None:
+    """Extract a JSON tool-call payload from model output.
+
+    Accepts a fenced JSON array/object or a bare JSON array. Returns None when
+    no valid JSON payload is present (caller falls back to the legacy TOOL
+    grammar); returns a list of calls (possibly with error entries) otherwise.
+    """
+    t = (text or "").strip()
+    if not t:
+        return None
+    candidates: list[str] = []
+    for m in _JSON_FENCE_RE.finditer(t):
+        candidates.append(m.group(1).strip())
+    if not candidates:
+        stripped = t
+        if (stripped.startswith("[") and stripped.endswith("]")) or (
+            stripped.startswith("{") and stripped.endswith("}")
+        ):
+            candidates.append(stripped)
+    if not candidates:
+        return None
+    for raw in candidates:
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            continue
+        calls: list[dict[str, Any]] = []
+        any_valid = False
+        for obj in payload:
+            call = _normalize_json_call(obj)
+            if call is not None:
+                calls.append(call)
+                any_valid = True
+            elif isinstance(obj, dict):
+                calls.append(
+                    {
+                        "tool": str(obj.get("tool") or "unknown").lower(),
+                        "error": "ERROR: invalid JSON tool arguments",
+                    }
+                )
+        if any_valid:
+            return calls
+    return None
+
+
 def parse_tool_calls(text: str) -> list[dict[str, Any]]:
+    json_calls = _parse_json_tools(text)
+    if json_calls is not None:
+        return json_calls
     calls: list[dict[str, Any]] = []
     lines = text.splitlines()
     i = 0
@@ -1179,23 +1282,41 @@ class AdvancedExecutor(Executor):
                 )
 
         def emit_action(
-            model_id, action, target="", state="", duration_ms=0, result=""
+            model_id,
+            action,
+            target="",
+            state="",
+            duration_ms=0,
+            result="",
+            turn_id=0,
+            exec_id="",
+            reason="",
+            response_hash="",
         ):
             with io_lock:
                 seq["n"] += 1
+                payload = {
+                    "battle_id": battle_id,
+                    "fighter_id": model_id,
+                    "phase_id": phase_name,
+                    "turn_id": int(turn_id),
+                    "step_id": int(seq["n"]),
+                    "exec_id": exec_id,
+                    "action": action,
+                    "target": target,
+                    "state": state,
+                    "duration_ms": int(duration_ms),
+                    "result": (result or "")[:4000],
+                }
+                if reason:
+                    payload["reason"] = reason
+                if response_hash:
+                    payload["response_hash"] = response_hash
                 client.round(
                     battle_id,
                     phase_name,
                     model_id,
-                    json.dumps(
-                        {
-                            "action": action,
-                            "target": target,
-                            "state": state,
-                            "duration_ms": int(duration_ms),
-                            "result": (result or "")[:4000],
-                        }
-                    ),
+                    json.dumps(payload),
                     event_type="action_log",
                     sequence=seq["n"],
                 )
@@ -1433,6 +1554,18 @@ class AdvancedExecutor(Executor):
 
                     calls = parse_tool_calls(content)
                     if not calls:
+                        metrics["parse_errors"] += 1
+                        emit_action(
+                            model_id,
+                            "tool_parse_failed",
+                            state="failed",
+                            turn_id=turn + 1,
+                            reason="no tool calls parsed from model response",
+                            response_hash=hashlib.sha256(
+                                (content or "").encode("utf-8", errors="ignore")
+                            ).hexdigest()[:16],
+                            result=sanitize_artifact(content[:4000]),
+                        )
                         artifact = sanitize_artifact(content[:10000])
                         record_artifact(model_id, artifact, role)
                         continue
@@ -1465,6 +1598,7 @@ class AdvancedExecutor(Executor):
                             break
 
                         exec_start = time.time()
+                        exec_id = "exec_" + uuid.uuid4().hex[:12]
                         exec_res = sess.exec_tool(call)
                         if isinstance(exec_res, str) and exec_res.startswith("ERROR"):
                             metrics["tool_errors"] += 1
@@ -1480,6 +1614,8 @@ class AdvancedExecutor(Executor):
                             state="done",
                             duration_ms=exec_ms,
                             result=exec_res_sanitized[:4000],
+                            turn_id=turn + 1,
+                            exec_id=exec_id,
                         )
                         record_artifact(model_id, exec_res_sanitized, role)
 
