@@ -702,13 +702,31 @@ def test_shell_rejects_home_env_expansion(tmp_path):
 
 def test_shell_env_strips_secret_vars(tmp_path, monkeypatch):
     monkeypatch.setenv("APPWRITE_API_KEY", "supersecret-key-123")
+    monkeypatch.setenv("APPWRITE_ENDPOINT", "https://sfo.cloud.appwrite.io/v1")
     monkeypatch.setenv("HOST_OPENROUTER_KEY", "sk-host-456")
+    monkeypatch.setenv("HOST_GROQ_KEY", "sk-groq-789")
+    monkeypatch.setenv("HOST_XAI_KEY", "sk-xai-000")
+    monkeypatch.setenv("JUDGE_MODAL_SECRET", "judge-secret-111")
+    monkeypatch.setenv("MODAL_PROXY_TOKEN", "proxy-tok-222")
+    monkeypatch.setenv("FERNET_KEY", "fernet-333")
+    monkeypatch.setenv("INTERNAL_API_KEY", "internal-444")
     monkeypatch.setenv("BATTLE_TOKEN", "battle-tok-789")
     sess = ToolSession(tmp_path / "work")
     out = sess.shell("env")
-    assert "supersecret-key-123" not in out
-    assert "sk-host-456" not in out
-    assert "battle-tok-789" not in out
+    for secret in (
+        "supersecret-key-123",
+        "sk-host-456",
+        "sk-groq-789",
+        "sk-xai-000",
+        "judge-secret-111",
+        "proxy-tok-222",
+        "fernet-333",
+        "internal-444",
+        "battle-tok-789",
+    ):
+        assert secret not in out
+    # Non-credential config must survive (fighters may legitimately need it).
+    assert "sfo.cloud.appwrite.io" in out
 
 
 def test_shell_allows_relative_workdir_file(tmp_path):

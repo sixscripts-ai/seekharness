@@ -167,7 +167,9 @@ class FinalizeBody(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
 
 
-def _finalize_scores(databases, database_id: str, battle_id: str, scores: dict) -> bool:
+def _finalize_scores(
+    databases, database_id: str, battle_id: str, scores: dict, source: str = "judged"
+) -> bool:
     """Persist score docs + Elo for a finished battle. Idempotent per battle."""
     existing = databases.list_documents(
         database_id,
@@ -185,8 +187,8 @@ def _finalize_scores(databases, database_id: str, battle_id: str, scores: dict) 
                 "battle_id": battle_id,
                 "model_id": mid,
                 "score": float(value),
-                "judge_model": "host-judge",
-                "justification": "judged",
+                "judge_model": "arena-deterministic" if source != "judged" else "host-judge",
+                "justification": source,
             },
         )
     return True
@@ -302,9 +304,51 @@ def internal_finalize(
     if battle.data.get("status") not in ("queued", "running"):
         raise HTTPException(status_code=409, detail="battle not active")
     status = body.status if body.status in ("completed", "failed") else "completed"
+    effective_scores = body.scores
+    score_source = "judged"
+    results: list[dict] = []
+    if status == "completed":
+        try:
+            results = _parse_executor_results(databases, database_id, body.battle_id)
+        except Exception:
+            results = []
     if status == "completed" and body.scores:
         try:
-            if _finalize_scores(databases, database_id, body.battle_id, body.scores):
+            if results:
+                fmt_cfg: dict = {}
+                try:
+                    fmt_doc = databases.get_document(
+                        database_id, "formats", battle.data["format_id"]
+                    )
+                    fmt_cfg = json.loads(fmt_doc.data.get("config") or "{}")
+                except Exception:
+                    fmt_cfg = {}
+                from . import evidence as evidence_mod
+                from . import scoring as scoring_mod
+
+                summary = evidence_mod.build_battle_evidence(
+                    body.battle_id,
+                    results,
+                    fmt_cfg,
+                    judge_scores=dict(body.scores or {}),
+                    format_id=str(battle.data.get("format_id") or ""),
+                )
+                decision = scoring_mod.decide_winner(summary, fmt_cfg)
+                event_bus.publish(
+                    body.battle_id,
+                    {"type": "evidence_summary", "data": {**summary, "decision": decision}},
+                )
+                det_scores = scoring_mod.deterministic_scores(decision)
+                if det_scores:
+                    effective_scores = det_scores
+                    score_source = "arena-score-v1"
+            if _finalize_scores(
+                databases,
+                database_id,
+                body.battle_id,
+                effective_scores,
+                source=score_source,
+            ):
                 from . import leaderboard
 
                 leaderboard.apply_result(
@@ -312,13 +356,12 @@ def internal_finalize(
                     database_id,
                     battle.data["format_id"],
                     list(battle.data.get("model_ids", [])),
-                    body.scores,
+                    effective_scores,
                 )
         except Exception:
             pass
     # Self-learning on backend (sandbox has no Appwrite credentials)
     try:
-        results = _parse_executor_results(databases, database_id, body.battle_id)
         _apply_self_learning(
             databases, database_id, battle.data, body.battle_id, results
         )
@@ -327,9 +370,9 @@ def internal_finalize(
     databases.update_document(
         database_id, "battles", body.battle_id, {"status": status}
     )
-    if status == "completed" and body.scores:
+    if status == "completed" and effective_scores:
         event_bus.publish(
-            body.battle_id, {"type": "scores", "data": {"scores": body.scores}}
+            body.battle_id, {"type": "scores", "data": {"scores": effective_scores}}
         )
     event_bus.publish(
         body.battle_id,

@@ -1006,6 +1006,8 @@ class AdvancedExecutor(Executor):
         retest: bool = False,
         phase: str = "race",
         lock: threading.Lock | None = None,
+        tool_errors: int = 0,
+        parse_errors: int = 0,
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -1030,6 +1032,13 @@ class AdvancedExecutor(Executor):
             format_config.get("outcome_markers", []),
             default=outcome,
         )
+        required_artifacts = list(
+            ((format_config or {}).get("artifacts") or {}).get("required") or []
+        )
+        artifact_checks = {
+            "present": [r for r in required_artifacts if r in files],
+            "missing": [r for r in required_artifacts if r not in files],
+        }
         result = {
             "model_id": model_id,
             "role": role,
@@ -1041,6 +1050,10 @@ class AdvancedExecutor(Executor):
             "theory": theory,
             "skill_read_ok": skill_read_ok,
             "preview_url": preview_url,
+            "phase": phase,
+            "tool_errors": tool_errors,
+            "parse_errors": parse_errors,
+            "artifact_checks": artifact_checks,
         }
         files_json = json.dumps(
             {
@@ -1314,6 +1327,8 @@ class AdvancedExecutor(Executor):
             chosen_skills: list[str] = []
             last_test = ""
 
+            metrics = {"tool_errors": 0, "parse_errors": 0}
+
             def finalize(**extra):
                 self._finalize_role(
                     client=client,
@@ -1331,6 +1346,8 @@ class AdvancedExecutor(Executor):
                     last_test=last_test or None,
                     phase=phase_name,
                     lock=io_lock,
+                    tool_errors=metrics["tool_errors"],
+                    parse_errors=metrics["parse_errors"],
                     **extra,
                 )
 
@@ -1414,6 +1431,8 @@ class AdvancedExecutor(Executor):
                         continue
 
                     for call in calls:
+                        if call.get("error"):
+                            metrics["parse_errors"] += 1
                         halted = halted_now()
                         if halted:
                             mark_halted(halted)
@@ -1440,6 +1459,8 @@ class AdvancedExecutor(Executor):
 
                         exec_start = time.time()
                         exec_res = sess.exec_tool(call)
+                        if isinstance(exec_res, str) and exec_res.startswith("ERROR"):
+                            metrics["tool_errors"] += 1
                         exec_ms = int((time.time() - exec_start) * 1000)
                         exec_res_sanitized = sanitize_artifact(exec_res[:10000])
                         emit_action(
