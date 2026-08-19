@@ -11,6 +11,7 @@ app.add_middleware(
     allow_origins=[
         # Exact production frontend origins (tighten from wildcard *.vercel.app
         # so any unrelated Vercel page cannot make credentialed requests).
+        "https://seekharness.vercel.app",
         "https://agent-arena-blond.vercel.app",
         "https://frontend-seven-snowy-59.vercel.app",
         # Local development.
