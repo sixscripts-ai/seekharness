@@ -42,6 +42,24 @@ FIXES = {
         """
     ).strip()
     + "\n",
+    "RE solve race": (
+        "FIRMWARE = bytes([0x58, 0x4F, 0x07, 0x59, 0x45, 0x46, 0x5C, 0x4F, 0x4E, 0x07, 0x45, 0x41])\n"
+        "\n"
+        "\n"
+        "def extract_license() -> str:\n"
+        "    return ''.join(chr(b ^ 0x2A) for b in FIRMWARE)\n"
+    ),
+    "Pwn exploit race": (
+        "BLACKLIST = [';', '|', '&', '$', '`']\n"
+        "\n"
+        "\n"
+        "def validate(command: str) -> bool:\n"
+        "    return not any(bad in command.split()[0] for bad in BLACKLIST)\n"
+        "\n"
+        "\n"
+        "def exploit() -> str:\n"
+        "    return 'ls ; whoami'\n"
+    ),
 }
 
 INJECTION_EXPLOIT = "from solution import search_notes\nprint(search_notes(''))\n"
@@ -73,7 +91,7 @@ def _run(tmp_path, solution_src: str, test_src: str, extra_files: dict | None = 
 
 @pytest.mark.parametrize(
     "name",
-    ["Debugging race", "Code review duel", "Injection agent vs hardened agent"],
+    ["Debugging race", "Code review duel", "Injection agent vs hardened agent", "RE solve race", "Pwn exploit race"],
 )
 def test_buggy_target_fails_and_fix_passes(name, tmp_path):
     extra = FORMAT_EXTRA[name]

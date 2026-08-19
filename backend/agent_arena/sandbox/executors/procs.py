@@ -90,7 +90,7 @@ class ProcessManager:
         self._lock = threading.Lock()
         self._seq = 0
 
-    def start(self, name: str, command: str) -> ManagedProcess:
+    def start(self, name: str, command: str, env: dict | None = None) -> ManagedProcess:
         name = (name or f"bg{self._seq + 1}").strip()
         with self._lock:
             if name in self._procs and self._procs[name].alive():
@@ -101,7 +101,7 @@ class ProcessManager:
             script = bg_dir / f"{name}.sh"
             script.write_text(command, encoding="utf-8")
             script.chmod(0o755)
-            env = os.environ.copy()
+            env = dict(env) if env is not None else os.environ.copy()
             env["ARENA_BG_NAME"] = name
             try:
                 proc = subprocess.Popen(

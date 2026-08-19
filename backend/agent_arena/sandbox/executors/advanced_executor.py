@@ -97,6 +97,7 @@ _FETCH_BIN = re.compile(
 _ABS_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])(/[^\s;|&<>`'\"\)]*)")
 _DOTDOT_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(/])\.\.(?:/|[\s;|&<>`'\"\)]|$)")
 _HOME_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])~(?:/|$)")
+_ENV_HOME_IN_CMD = re.compile(r"(?:\$HOME|\$\{HOME\})(?![A-Za-z0-9_])")
 
 
 def _looks_like_fetch_target(token: str) -> bool:
@@ -157,6 +158,23 @@ def _fetch_targets_in_command(command: str) -> list[str]:
     return out
 
 
+def _strip_secret_env(env: dict) -> dict:
+    """Remove credential-bearing variables before handing env to child processes.
+
+    The Modal sandbox env only carries BATTLE_TOKEN/BACKEND_PUBLIC_URL, but
+    in-process runs inherit the full backend env (APPWRITE_API_KEY, HOST_* keys,
+    FERNET_KEY, ...). A fighter could otherwise `TOOL SHELL env` them back.
+    """
+    _EXACT = {"FERNET_KEY", "FERNET_KEY_OLD", "INTERNAL_API_KEY", "BATTLE_TOKEN"}
+    _SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
+    out = dict(env)
+    for name in list(out):
+        up = name.upper()
+        if up in _EXACT or up.endswith(_SUFFIXES):
+            out.pop(name, None)
+    return out
+
+
 def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
     """Reject shell/install commands that escape the workdir jail or bypass fetch SSRF."""
     if command is None or not str(command).strip():
@@ -166,6 +184,8 @@ def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
         return "path escape '..' rejected"
     if _HOME_PATH_IN_CMD.search(text):
         return "home path '~' rejected"
+    if _ENV_HOME_IN_CMD.search(text):
+        return "home env expansion '$HOME' rejected"
     abs_match = _ABS_PATH_IN_CMD.search(text)
     if abs_match:
         return f"absolute path rejected: {abs_match.group(1)}"
@@ -556,7 +576,7 @@ class ToolSession:
 
     def run(self, path: str | None = None, inline: str | None = None) -> str:
         try:
-            env = os.environ.copy()
+            env = _strip_secret_env(os.environ.copy())
             env["ARENA_ROOT"] = str(self.root)
             env["ARENA_WORKDIR"] = str(self.workdir)
             work = str(self.workdir.resolve())
@@ -625,7 +645,7 @@ class ToolSession:
         if blocked:
             self.steps += 1
             return f"ERROR: {blocked}"
-        env = os.environ.copy()
+        env = _strip_secret_env(os.environ.copy())
         env["ARENA_ROOT"] = str(self.root)
         env["ARENA_WORKDIR"] = str(self.workdir)
         work = str(self.workdir.resolve())
@@ -809,7 +829,9 @@ class ToolSession:
             self.steps += 1
             return f"ERROR: {blocked}"
         try:
-            mgr = self.procs.start(name, content or "")
+            mgr = self.procs.start(
+                name, content or "", env=_strip_secret_env(os.environ.copy())
+            )
             self.steps += 1
             return f"BG STARTED {mgr.name} pid={mgr.proc.pid}"
         except Exception as exc:

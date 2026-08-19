@@ -692,6 +692,25 @@ def test_shell_rejects_dotdot(tmp_path):
     assert ".." in out
 
 
+def test_shell_rejects_home_env_expansion(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    for cmd in ("cd $HOME", "cat ${HOME}/secret.txt", "ls $HOME"):
+        out = sess.shell(cmd)
+        assert "ERROR" in out, cmd
+        assert "HOME" in out, cmd
+
+
+def test_shell_env_strips_secret_vars(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPWRITE_API_KEY", "supersecret-key-123")
+    monkeypatch.setenv("HOST_OPENROUTER_KEY", "sk-host-456")
+    monkeypatch.setenv("BATTLE_TOKEN", "battle-tok-789")
+    sess = ToolSession(tmp_path / "work")
+    out = sess.shell("env")
+    assert "supersecret-key-123" not in out
+    assert "sk-host-456" not in out
+    assert "battle-tok-789" not in out
+
+
 def test_shell_allows_relative_workdir_file(tmp_path):
     sess = ToolSession(tmp_path / "work")
     sess.write("hello.txt", "workdir-only")
@@ -736,6 +755,41 @@ def test_bg_rejects_absolute_path(tmp_path):
     out = sess.bg("escape", "cat /etc/passwd")
     assert "ERROR" in out
     assert "absolute" in out.lower()
+
+
+def test_flipped_formats_resolve_to_advanced_executor():
+    from agent_arena.seed_formats import ALL_FORMATS
+
+    flipped = {
+        "Tool-using coding race",
+        "Code review duel",
+        "Debugging race",
+        "Injection agent vs hardened agent",
+        "RE solve race",
+        "Pwn exploit race",
+    }
+    by_name = {c["name"]: c for c in ALL_FORMATS}
+    for name in flipped:
+        assert isinstance(get_executor(by_name[name]), AdvancedExecutor), name
+
+
+def test_flipped_formats_carry_tailored_harnesses():
+    from agent_arena.seed_formats import ALL_FORMATS
+
+    universal = {
+        "Code review duel",
+        "Debugging race",
+        "Injection agent vs hardened agent",
+        "RE solve race",
+        "Pwn exploit race",
+    }
+    by_name = {c["name"]: c for c in ALL_FORMATS}
+    for name in universal:
+        cfg = by_name[name]
+        assert cfg.get("universal") is True, name
+        assert cfg.get("target_code"), name
+        assert "Implement solution.py for this format" not in cfg["target_code"], name
+        assert cfg.get("test_code"), name
 
 
 # --- A2: test() no longer double-counts the step budget ----------------------

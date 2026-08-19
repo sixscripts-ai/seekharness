@@ -29,6 +29,8 @@ FLIP_FORMAT_NAMES = (
     "Debugging race",
     "Code review duel",
     "Injection agent vs hardened agent",
+    "RE solve race",
+    "Pwn exploit race",
 )
 
 # Only these keys are overlaid onto the live config; everything else is kept.

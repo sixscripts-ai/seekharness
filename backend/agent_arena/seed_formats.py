@@ -584,6 +584,140 @@ FORMAT_EXTRA = {
             "expected": ["exploit.py"],
         },
     },
+    "RE solve race": {
+        "universal": True,
+        "target_code": (
+            "# TARGET: A firmware blob XOR-obfuscated with key 0x2A.\n"
+            "# Reverse it and return the decoded ASCII license string.\n"
+            "FIRMWARE = bytes([0x58, 0x4F, 0x07, 0x59, 0x45, 0x46, 0x5C, 0x4F, 0x4E, 0x07, 0x45, 0x41])\n"
+            "\n"
+            "\n"
+            "def extract_license() -> str:\n"
+            "    # buggy: returns the raw blob instead of XOR-decoding it\n"
+            "    return FIRMWARE.decode('ascii', errors='ignore')\n"
+        ),
+        "test_code": (
+            "from solution import extract_license\n"
+            "\n"
+            "\n"
+            "def main() -> None:\n"
+            "    lic = extract_license()\n"
+            "    assert isinstance(lic, str) and lic, 'extract_license() returned nothing'\n"
+            "    assert lic == 're-solved-ok', f'wrong license: {lic!r}'\n"
+            "    print('TEST_PASS')\n"
+            "\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        ),
+        "seed_solution_roles": ["player_a", "player_b"],
+        "max_tool_turns": 6,
+        "max_tool_steps": 14,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 3,
+        "competitive": True,
+        "objectives": [
+            "Reverse the XOR-encoded FIRMWARE blob in TARGET so tests/test_target.py passes.",
+            "Use the full toolbelt: read the target, write solution.py, run tests, iterate.",
+        ],
+        "recommended_skills": [
+            "python-kata-fixer",
+            "secure-code-execution",
+            "sandbox-runtime-engineer",
+        ],
+        "environment": {"languages": ["python3"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 6,
+            "max_tool_steps": 14,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": [
+                "DONE",
+                "TEST_PASS",
+                "TEST_FAIL",
+                "STEP_BUDGET_EXCEEDED",
+            ],
+        },
+        "artifacts": {"required": ["solution.py"], "expected": ["THEORY.md"]},
+    },
+    "Pwn exploit race": {
+        "universal": True,
+        "target_code": (
+            "# TARGET: A command validator with a first-token anchoring bug.\n"
+            "# Craft a payload that passes validation but still contains a\n"
+            "# BLACKLIST separator, and return it from exploit().\n"
+            "BLACKLIST = [';', '|', '&', '$', '`']\n"
+            "\n"
+            "\n"
+            "def validate(command: str) -> bool:\n"
+            "    # buggy: only inspects the first whitespace token\n"
+            "    return not any(bad in command.split()[0] for bad in BLACKLIST)\n"
+            "\n"
+            "\n"
+            "def exploit() -> str:\n"
+            "    # TASK: return a payload string that validate() accepts\n"
+            "    # but that still contains a BLACKLIST separator.\n"
+            "    return ''\n"
+        ),
+        "test_code": (
+            "from solution import exploit, validate\n"
+            "\n"
+            "\n"
+            "def main() -> None:\n"
+            "    payload = exploit()\n"
+            "    assert isinstance(payload, str) and payload.strip(), 'exploit() returned nothing'\n"
+            "    assert any(bad in payload for bad in [';', '|', '&', '$', '`']), 'payload has no separator'\n"
+            "    assert validate(payload) is True, 'validate() rejected the payload'\n"
+            "    print('TEST_PASS')\n"
+            "\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        ),
+        "seed_solution_roles": ["player_a", "player_b"],
+        "max_tool_turns": 6,
+        "max_tool_steps": 14,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 3,
+        "competitive": True,
+        "objectives": [
+            "Craft an exploit payload that passes the buggy validate() while carrying a separator.",
+            "Use the full toolbelt: read the target, write solution.py, run tests, iterate.",
+        ],
+        "recommended_skills": [
+            "python-kata-fixer",
+            "secure-code-execution",
+            "sandbox-runtime-engineer",
+        ],
+        "environment": {"languages": ["python3"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 6,
+            "max_tool_steps": 14,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": [
+                "DONE",
+                "TEST_PASS",
+                "TEST_FAIL",
+                "STEP_BUDGET_EXCEEDED",
+            ],
+        },
+        "artifacts": {"required": ["solution.py"], "expected": ["THEORY.md"]},
+    },
 }
 
 
