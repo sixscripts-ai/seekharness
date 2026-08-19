@@ -168,6 +168,22 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
             winner = groups[0][0]["fighter_id"]
         else:
             tie = True
+
+    # "A winner" and "a verified successful solution" are different facts.
+    # Ranking still happens when nobody passed; the verified flag must not.
+    def _verified(f):
+        prs = list((f.get("phases") or {}).values())
+        if not prs:
+            return False
+        for p in prs:
+            if p.get("status") != "completed" or _is_ineligible(p):
+                return False
+            c = p.get("correctness") or {}
+            if not c.get("total") or c.get("passed") != c.get("total"):
+                return False
+        return True
+
+    verified = [f["fighter_id"] for f in fighters if _verified(f)]
     return {
         "winner": winner,
         "tie": tie,
@@ -175,6 +191,9 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
         "ranking": [f["fighter_id"] for g in groups for f in g],
         "groups": [[f["fighter_id"] for f in g] for g in groups],
         "reason": "deterministic",
+        "verified_solution": bool(verified),
+        "verified_fighters": verified,
+        "best_attempt": None if verified else winner,
     }
 
 

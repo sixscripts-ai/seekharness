@@ -188,6 +188,24 @@ def test_warning_policy_ranks_below_clean_but_is_eligible():
     assert decision["ineligible"] == []
 
 
+def test_verified_solution_distinct_from_winner():
+    a = _mk("A", outcome="TEST_FAIL", passed=False, steps=5)
+    b = _mk("B", outcome="TEST_FAIL", passed=False, steps=12)
+    _, decision, _ = _decide([a, b])
+    assert decision["winner"] == "A"  # still ranked...
+    assert decision["verified_solution"] is False  # ...but nothing works
+    assert decision["verified_fighters"] == []
+    assert decision["best_attempt"] == "A"
+
+    a2 = _mk("A")
+    b2 = _mk("B", outcome="TEST_FAIL", passed=False)
+    _, decision2, _ = _decide([a2, b2])
+    assert decision2["winner"] == "A"
+    assert decision2["verified_solution"] is True
+    assert decision2["verified_fighters"] == ["A"]
+    assert decision2["best_attempt"] is None
+
+
 def test_case10_determinism():
     results = [
         _mk("A", tests={"passed": 9, "total": 10}, judge_quality=7.0),

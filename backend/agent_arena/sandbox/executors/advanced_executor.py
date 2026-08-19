@@ -1119,10 +1119,32 @@ class AdvancedExecutor(Executor):
         step budget was later burned by extra tool calls.
         """
         files, theory = self._collect_workspace(work)
-        if retest or last_test is None:
-            test_res = sess.test("")
-        else:
-            test_res = last_test
+        # Trusted verification: the canonical harness lives in executor memory.
+        # Before the final test we detect tampering (hash mismatch) and always
+        # restore the canonical harness, so a fighter can never fake TEST_PASS
+        # by editing its own tests. Tampering is recorded as policy evidence.
+        canonical_test_code = str(
+            ((format_config or {}).get("role_test_code") or {}).get(role)
+            or (format_config or {}).get("test_code")
+            or DEFAULT_TEST_CODE
+        )
+        harness_path = work / "tests" / "test_target.py"
+        canonical_hash = hashlib.sha256(
+            canonical_test_code.encode("utf-8")
+        ).hexdigest()
+        try:
+            harness_tampered = (
+                hashlib.sha256(harness_path.read_bytes()).hexdigest() != canonical_hash
+            )
+        except Exception:
+            harness_tampered = True
+        if harness_tampered:
+            harness_path.parent.mkdir(parents=True, exist_ok=True)
+            harness_path.write_text(canonical_test_code, encoding="utf-8")
+        # The final verdict ALWAYS comes from a fresh run of the restored
+        # canonical harness. A mid-battle TEST_PASS observed through a tampered
+        # harness can never become the recorded outcome.
+        test_res = sess.test("")
         passed = self._harness_passed(test_res)
         skill_read_ok = bool(chosen_skills) and set(chosen_skills).issubset(
             sess.skill_reads
@@ -1160,6 +1182,10 @@ class AdvancedExecutor(Executor):
             "tool_errors": tool_errors,
             "parse_errors": parse_errors,
             "artifact_checks": artifact_checks,
+            "policy": {
+                "status": "invalid" if harness_tampered else "clean",
+                "violations": ["harness-tampered"] if harness_tampered else [],
+            },
             "chosen_skills": chosen_skills,
             "theory": theory[:2000],
             "skill_read_ok": skill_read_ok,
@@ -1289,7 +1315,9 @@ class AdvancedExecutor(Executor):
             duration_ms=0,
             result="",
             turn_id=0,
-            exec_id="",
+            tool_step=0,
+            tool_call_id="",
+            exec_id=None,
             reason="",
             response_hash="",
         ):
@@ -1300,7 +1328,9 @@ class AdvancedExecutor(Executor):
                     "fighter_id": model_id,
                     "phase_id": phase_name,
                     "turn_id": int(turn_id),
-                    "step_id": int(seq["n"]),
+                    "event_sequence": int(seq["n"]),
+                    "tool_step": int(tool_step),
+                    "tool_call_id": tool_call_id,
                     "exec_id": exec_id,
                     "action": action,
                     "target": target,
@@ -1455,7 +1485,7 @@ class AdvancedExecutor(Executor):
             chosen_skills: list[str] = []
             last_test = ""
 
-            metrics = {"tool_errors": 0, "parse_errors": 0}
+            metrics = {"tool_errors": 0, "parse_errors": 0, "tool_calls": 0}
 
             def finalize(**extra):
                 self._finalize_role(
@@ -1560,6 +1590,9 @@ class AdvancedExecutor(Executor):
                             "tool_parse_failed",
                             state="failed",
                             turn_id=turn + 1,
+                            tool_step=sess.steps,
+                            tool_call_id="",
+                            exec_id=None,
                             reason="no tool calls parsed from model response",
                             response_hash=hashlib.sha256(
                                 (content or "").encode("utf-8", errors="ignore")
@@ -1598,7 +1631,16 @@ class AdvancedExecutor(Executor):
                             break
 
                         exec_start = time.time()
-                        exec_id = "exec_" + uuid.uuid4().hex[:12]
+                        step_before = sess.steps
+                        metrics["tool_calls"] = metrics.get("tool_calls", 0) + 1
+                        tool_call_id = f"tool_{metrics['tool_calls']:03d}"
+                        tool_name_now = call.get("tool", "?")
+                        process_tool = tool_name_now in {
+                            "shell", "install", "run", "test", "bg",
+                        }
+                        exec_id = (
+                            "exec_" + uuid.uuid4().hex[:12] if process_tool else None
+                        )
                         exec_res = sess.exec_tool(call)
                         if isinstance(exec_res, str) and exec_res.startswith("ERROR"):
                             metrics["tool_errors"] += 1
@@ -1606,7 +1648,7 @@ class AdvancedExecutor(Executor):
                         exec_res_sanitized = sanitize_artifact(exec_res[:10000])
                         emit_action(
                             model_id,
-                            call.get("tool", "?"),
+                            tool_name_now,
                             target=call.get("path")
                             or call.get("name")
                             or call.get("url")
@@ -1615,6 +1657,8 @@ class AdvancedExecutor(Executor):
                             duration_ms=exec_ms,
                             result=exec_res_sanitized[:4000],
                             turn_id=turn + 1,
+                            tool_step=step_before + 1,
+                            tool_call_id=tool_call_id,
                             exec_id=exec_id,
                         )
                         record_artifact(model_id, exec_res_sanitized, role)
@@ -1678,7 +1722,12 @@ class AdvancedExecutor(Executor):
         # which re-parses the persisted EXECUTOR_RESULT events — so we do not
         # write to Appwrite here (the sandbox has no credentials anyway).
         try:
-            passed_results = [r for r in results if r.get("passed")]
+            passed_results = [
+                r
+                for r in results
+                if r.get("passed")
+                and (r.get("policy") or {}).get("status") != "invalid"
+            ]
             winner = (
                 min(passed_results, key=lambda x: x.get("steps", 999))
                 if passed_results

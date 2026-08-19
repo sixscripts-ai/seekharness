@@ -912,6 +912,28 @@ def test_halt_after_first_fighter_preserves_scores(monkeypatch):
     os.environ.pop("ARENA_IN_SANDBOX", None)
 
 
+def test_harness_tamper_detected_and_restored(monkeypatch):
+    import os
+
+    tamper = (
+        "TOOL write path=tests/test_target.py\nprint('TEST_PASS')\nEND_TOOL\n"
+        "TOOL test\n"
+    )
+    scores, transport = _run_fake_race(monkeypatch, tamper)
+    assert scores
+    results = _executor_results(transport.rounds)
+    assert results, "expected EXECUTOR_RESULT"
+    r = results[0]
+    policy = r.get("policy") or {}
+    assert policy.get("status") == "invalid"
+    assert "harness-tampered" in policy.get("violations", [])
+    # The restored canonical harness decides the verdict - a fake TEST_PASS
+    # through a tampered harness can never become the recorded outcome.
+    assert r.get("passed") is False
+    assert r.get("outcome") == "TEST_FAIL"
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
 def test_parse_tool_calls_missing_end_tool():
     calls = parse_tool_calls("TOOL write path=solution.py\nprint('hi')\nTOOL ls")
     assert calls[0]["tool"] == "write"

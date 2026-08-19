@@ -72,14 +72,29 @@ def test_action_log_carries_execution_identity(monkeypatch):
             identity = json.loads(r["artifact"])
             break
     assert identity, "expected an action_log event"
-    for key in ("battle_id", "fighter_id", "phase_id", "turn_id", "step_id", "exec_id"):
+    for key in (
+        "battle_id", "fighter_id", "phase_id", "turn_id",
+        "event_sequence", "tool_step", "tool_call_id", "exec_id",
+    ):
         assert key in identity, key
     # Backward-compatible payload shape for existing consumers.
     for key in ("action", "target", "state", "duration_ms", "result"):
         assert key in identity, key
     assert identity["battle_id"] == "race-1"
     assert identity["fighter_id"] in ("a", "b")
-    assert identity["exec_id"].startswith("exec_")
+    # The first logged action is a file read: a tool call, not an OS exec.
+    assert identity["tool_call_id"].startswith("tool_")
+    assert identity["tool_step"] >= 1
+    assert identity["exec_id"] is None
+    # A process-producing tool must carry a real exec_id.
+    exec_events = [
+        json.loads(r["artifact"])
+        for r in transport.rounds
+        if r.get("event_type") == "action_log"
+        and json.loads(r["artifact"]).get("action") == "test"
+    ]
+    assert exec_events, "expected a test action log"
+    assert exec_events[0]["exec_id"].startswith("exec_")
     os.environ.pop("ARENA_IN_SANDBOX", None)
 
 
