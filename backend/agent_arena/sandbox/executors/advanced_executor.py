@@ -410,6 +410,8 @@ class ToolSession:
             env = os.environ.copy()
             env["ARENA_ROOT"] = str(self.root)
             env["ARENA_WORKDIR"] = str(self.workdir)
+            work = str(self.workdir.resolve())
+            env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
             if path:
                 p = self._resolve(path)
                 proc = subprocess.Popen(
@@ -419,6 +421,7 @@ class ToolSession:
                     stderr=subprocess.PIPE,
                     text=True,
                     start_new_session=True,
+                    env=env,
                 )
             elif inline:
                 proc = subprocess.Popen(
@@ -428,6 +431,7 @@ class ToolSession:
                     stderr=subprocess.PIPE,
                     text=True,
                     start_new_session=True,
+                    env=env,
                 )
             else:
                 return "ERROR: run needs path"
@@ -469,6 +473,8 @@ class ToolSession:
         env = os.environ.copy()
         env["ARENA_ROOT"] = str(self.root)
         env["ARENA_WORKDIR"] = str(self.workdir)
+        work = str(self.workdir.resolve())
+        env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
         cmd_timeout = timeout or self.tool_timeout or 90
         try:
             proc = subprocess.Popen(
@@ -478,6 +484,7 @@ class ToolSession:
                 stderr=subprocess.PIPE,
                 text=True,
                 start_new_session=True,
+                env=env,
             )
             try:
                 out, err = proc.communicate(timeout=cmd_timeout)
@@ -738,6 +745,129 @@ class ToolSession:
 
 
 class AdvancedExecutor(Executor):
+    @staticmethod
+    def _collect_workspace(work: Path) -> tuple[dict[str, str], str]:
+        files: dict[str, str] = {}
+        for p in work.rglob("*"):
+            if p.is_file() and p.stat().st_size < 20000:
+                try:
+                    rel = str(p.relative_to(work))
+                    if rel.startswith(".agents/skills/") and rel.endswith("SKILL.md"):
+                        files[rel] = "(mounted skill)"
+                        continue
+                    if rel.startswith(".kilo"):
+                        continue
+                    files[rel] = p.read_text(encoding="utf-8", errors="ignore")[:10000]
+                except Exception:
+                    pass
+        try:
+            theory = (work / "THEORY.md").read_text()[:5000]
+        except Exception:
+            theory = ""
+        return files, theory
+
+    @staticmethod
+    def _harness_passed(test_res: str | None) -> bool:
+        text = test_res or ""
+        return "TEST_PASS" in text and "rc=0" in text
+
+    def _finalize_role(
+        self,
+        *,
+        client,
+        battle_id: str,
+        work: Path,
+        sess: ToolSession,
+        model_id: str,
+        role: str,
+        chosen_skills: list[str],
+        preview_url: str,
+        format_config: dict,
+        history: list[dict],
+        results: list[dict],
+        seq: dict,
+        last_test: str | None = None,
+        budget_exceeded: bool = False,
+        retest: bool = False,
+    ) -> dict:
+        """Collect workspace + score the harness. Credits TEST_PASS even if the
+        step budget was later burned by extra tool calls.
+        """
+        files, theory = self._collect_workspace(work)
+        if retest or last_test is None:
+            test_res = sess.test("")
+        else:
+            test_res = last_test
+        passed = self._harness_passed(test_res)
+        skill_read_ok = bool(chosen_skills) and set(chosen_skills).issubset(
+            sess.skill_reads
+        )
+        if not skill_read_ok:
+            passed = False
+        if passed:
+            outcome = "TEST_PASS"
+        elif budget_exceeded:
+            outcome = "STEP_BUDGET_EXCEEDED"
+        else:
+            outcome = "TEST_FAIL"
+        outcome = self.guard(
+            outcome,
+            format_config.get("outcome_markers", []),
+            default=outcome,
+        )
+        result = {
+            "model_id": model_id,
+            "role": role,
+            "outcome": outcome,
+            "passed": passed,
+            "steps": sess.steps,
+            "files": files,
+            "chosen_skills": chosen_skills,
+            "theory": theory,
+            "skill_read_ok": skill_read_ok,
+            "preview_url": preview_url,
+        }
+        line = self.emit_result(client, battle_id, "race", result)
+        files_json = json.dumps(
+            {
+                "files": files,
+                "chosen_skills": chosen_skills,
+                "theory": theory,
+                "outcome": outcome,
+                "steps": sess.steps,
+                "skill_read_ok": skill_read_ok,
+                "preview_url": preview_url,
+            },
+            indent=2,
+        )
+        seq["n"] += 1
+        client.round(
+            battle_id,
+            "race",
+            model_id,
+            sanitize_artifact(files_json),
+            event_type="artifact",
+            sequence=seq["n"],
+        )
+        history.append(
+            {
+                "phase": "race",
+                "model_id": model_id,
+                "artifact": sanitize_artifact(files_json),
+                "role": role,
+            }
+        )
+        history.append(
+            {
+                "phase": "race",
+                "model_id": model_id,
+                "artifact": line,
+                "role": role,
+            }
+        )
+        results.append(result)
+        return result
+
     def run_battle(
         self,
         *,
@@ -882,9 +1012,7 @@ class AdvancedExecutor(Executor):
                 )
 
                 chosen_skills: list[str] = []
-                theory = ""
-                passed = False
-                steps = 0
+                last_test = ""
 
                 for turn in range(max_turns):
                     halted = self.halted(status_check, deadline)
@@ -912,7 +1040,8 @@ class AdvancedExecutor(Executor):
                         f"You MUST emit SKILLS: a,b,... ({pick_n} names) then TOOL use_skill "
                         "name=<skill> for each chosen skill before writing solution.py.\n"
                         "Write THEORY.md explaining the pick. Write solution.py. Run TOOL test "
-                        "(harness is tests/test_target.py; do not fake TEST_PASS).\n"
+                        "(harness is tests/test_target.py; do not fake TEST_PASS). "
+                        "After a real TEST_PASS, emit DONE and stop.\n"
                         f"Prior: {prior or '(none)'}"
                     )
                     user_prompt = f"Workdir files:\n{sess.ls()}\n\nTARGET:\n{target_code[:2000]}\n\nYour turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. Emit TOOL calls."
@@ -950,30 +1079,22 @@ class AdvancedExecutor(Executor):
 
                     for call in calls:
                         if sess.steps >= max_steps:
-                            result = {
-                                "model_id": model_id,
-                                "role": role,
-                                "outcome": self.guard(
-                                    "STEP_BUDGET_EXCEEDED",
-                                    format_config.get("outcome_markers", []),
-                                    default="STEP_BUDGET_EXCEEDED",
-                                ),
-                                "passed": False,
-                                "steps": sess.steps,
-                                "files": {},
-                                "chosen_skills": chosen_skills,
-                                "theory": theory,
-                            }
-                            line = self.emit_result(client, battle_id, "race", result)
-                            history.append(
-                                {
-                                    "phase": "race",
-                                    "model_id": model_id,
-                                    "artifact": line,
-                                    "role": role,
-                                }
+                            self._finalize_role(
+                                client=client,
+                                battle_id=battle_id,
+                                work=work,
+                                sess=sess,
+                                model_id=model_id,
+                                role=role,
+                                chosen_skills=chosen_skills,
+                                preview_url=preview_url,
+                                format_config=format_config,
+                                history=history,
+                                results=results,
+                                seq=seq,
+                                last_test=last_test or None,
+                                budget_exceeded=True,
                             )
-                            results.append(result)
                             break
 
                         if call.get("tool") == "skills":
@@ -1003,86 +1124,22 @@ class AdvancedExecutor(Executor):
                             continue
 
                         if call.get("tool") == "done":
-                            # Collect files for file-tree artifact
-                            files = {}
-                            for p in work.rglob("*"):
-                                if p.is_file() and p.stat().st_size < 20000:
-                                    try:
-                                        rel = str(p.relative_to(work))
-                                        if rel.startswith(
-                                            ".agents/skills/"
-                                        ) and rel.endswith("SKILL.md"):
-                                            files[rel] = "(mounted skill)"
-                                            continue
-                                        if rel.startswith(".kilo"):
-                                            continue
-                                        files[rel] = p.read_text(
-                                            encoding="utf-8", errors="ignore"
-                                        )[:10000]
-                                    except Exception:
-                                        pass
-                            # Try to read THEORY.md
-                            try:
-                                theory = (work / "THEORY.md").read_text()[:5000]
-                            except Exception:
-                                theory = ""
-                            # Check if solution.py exists and test
-                            test_res = sess.test("")
-                            passed = "TEST_PASS" in test_res and "rc=0" in test_res
-                            skill_read_ok = bool(chosen_skills) and set(
-                                chosen_skills
-                            ).issubset(sess.skill_reads)
-                            if not skill_read_ok:
-                                passed = False
-                            outcome = "TEST_PASS" if passed else "TEST_FAIL"
-                            result = {
-                                "model_id": model_id,
-                                "role": role,
-                                "outcome": self.guard(
-                                    outcome,
-                                    format_config.get("outcome_markers", []),
-                                    default=outcome,
-                                ),
-                                "passed": passed,
-                                "steps": sess.steps,
-                                "files": files,
-                                "chosen_skills": chosen_skills,
-                                "theory": theory,
-                                "skill_read_ok": skill_read_ok,
-                                "preview_url": preview_url,
-                            }
-                            line = self.emit_result(client, battle_id, "race", result)
-                            # Emit structured files JSON for frontend file-tree
-                            files_json = json.dumps(
-                                {
-                                    "files": files,
-                                    "chosen_skills": chosen_skills,
-                                    "theory": theory,
-                                    "outcome": outcome,
-                                    "steps": sess.steps,
-                                    "skill_read_ok": skill_read_ok,
-                                    "preview_url": preview_url,
-                                },
-                                indent=2,
+                            self._finalize_role(
+                                client=client,
+                                battle_id=battle_id,
+                                work=work,
+                                sess=sess,
+                                model_id=model_id,
+                                role=role,
+                                chosen_skills=chosen_skills,
+                                preview_url=preview_url,
+                                format_config=format_config,
+                                history=history,
+                                results=results,
+                                seq=seq,
+                                last_test=last_test or None,
+                                retest=True,
                             )
-                            client.round(
-                                battle_id,
-                                "race",
-                                model_id,
-                                sanitize_artifact(files_json),
-                                event_type="artifact",
-                                sequence=seq["n"] + 1,
-                            )
-                            seq["n"] += 1
-                            history.append(
-                                {
-                                    "phase": "race",
-                                    "model_id": model_id,
-                                    "artifact": sanitize_artifact(files_json),
-                                    "role": role,
-                                }
-                            )
-                            results.append(result)
                             break
 
                         exec_start = time.time()
@@ -1117,82 +1174,47 @@ class AdvancedExecutor(Executor):
                         )
                         seq["n"] += 1
 
-                        if call.get("tool") == "done":
-                            break
-                    else:
-                        # No DONE in this turn, continue loop
-                        pass
+                        if call.get("tool") == "test":
+                            last_test = exec_res_sanitized
+                            if self._harness_passed(exec_res_sanitized):
+                                self._finalize_role(
+                                    client=client,
+                                    battle_id=battle_id,
+                                    work=work,
+                                    sess=sess,
+                                    model_id=model_id,
+                                    role=role,
+                                    chosen_skills=chosen_skills,
+                                    preview_url=preview_url,
+                                    format_config=format_config,
+                                    history=history,
+                                    results=results,
+                                    seq=seq,
+                                    last_test=exec_res_sanitized,
+                                )
+                                break
 
-                    # Check if result already recorded for this role (DONE)
+                    # Check if result already recorded for this role (DONE / TEST_PASS / budget)
                     if any(r["model_id"] == model_id for r in results):
                         break
 
-                # If no result recorded (no DONE), create one
+                # If no result recorded (no DONE / TEST_PASS), score from workspace
                 if not any(r["model_id"] == model_id for r in results):
-                    files = {}
-                    for p in work.rglob("*"):
-                        if p.is_file() and p.stat().st_size < 20000:
-                            try:
-                                rel = str(p.relative_to(work))
-                                if rel.startswith(".agents/skills/") and rel.endswith(
-                                    "SKILL.md"
-                                ):
-                                    files[rel] = "(mounted skill)"
-                                    continue
-                                if rel.startswith(".kilo"):
-                                    continue
-                                files[rel] = p.read_text(
-                                    encoding="utf-8", errors="ignore"
-                                )[:10000]
-                            except Exception:
-                                pass
-                    try:
-                        theory = (work / "THEORY.md").read_text()[:5000]
-                    except Exception:
-                        theory = ""
-                    result = {
-                        "model_id": model_id,
-                        "role": role,
-                        "outcome": self.guard(
-                            "DONE",
-                            format_config.get("outcome_markers", []),
-                            default="DONE",
-                        ),
-                        "passed": False,
-                        "steps": sess.steps,
-                        "files": files,
-                        "chosen_skills": chosen_skills,
-                        "theory": theory,
-                        "preview_url": preview_url,
-                    }
-                    line = self.emit_result(client, battle_id, "race", result)
-                    files_json = json.dumps(
-                        {
-                            "files": files,
-                            "chosen_skills": chosen_skills,
-                            "theory": theory,
-                            "outcome": "DONE",
-                            "steps": sess.steps,
-                            "preview_url": preview_url,
-                        },
-                        indent=2,
+                    self._finalize_role(
+                        client=client,
+                        battle_id=battle_id,
+                        work=work,
+                        sess=sess,
+                        model_id=model_id,
+                        role=role,
+                        chosen_skills=chosen_skills,
+                        preview_url=preview_url,
+                        format_config=format_config,
+                        history=history,
+                        results=results,
+                        seq=seq,
+                        last_test=last_test or None,
                     )
-                    client.round(
-                        battle_id,
-                        "race",
-                        model_id,
-                        sanitize_artifact(files_json),
-                        event_type="artifact",
-                    )
-                    history.append(
-                        {
-                            "phase": "race",
-                            "model_id": model_id,
-                            "artifact": sanitize_artifact(files_json),
-                            "role": role,
-                        }
-                    )
-                    results.append(result)
 
                 if preview_server is not None:
                     try:

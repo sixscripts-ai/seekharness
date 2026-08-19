@@ -1,3 +1,5 @@
+import json
+
 from agent_arena.sandbox.executors.advanced_executor import (
     AdvancedExecutor,
     ToolSession,
@@ -142,6 +144,24 @@ def test_get_executor_resolves_advanced():
     assert isinstance(get_executor("agent_tool_race"), AE)
 
 
+def test_universal_flag_routes_to_advanced():
+    # A non-race engine opts into the toolbelt purely via `universal: True`.
+    cfg = {
+        "name": "Debugging race",
+        "id": "debugging-race",
+        "engine": "same_target_race",
+        "universal": True,
+    }
+    assert isinstance(get_executor(cfg), AE)
+    # Without the flag, the same engine resolves to its prose executor.
+    from agent_arena.sandbox.executors.same_target_race import SameTargetRaceExecutor
+
+    assert isinstance(
+        get_executor({"name": "Debugging race", "engine": "same_target_race"}),
+        SameTargetRaceExecutor,
+    )
+
+
 def test_race_loop_reads_skill_and_passes_harness(monkeypatch):
     import os
 
@@ -194,6 +214,109 @@ def test_race_loop_reads_skill_and_passes_harness(monkeypatch):
     artifacts = "\n".join(r.get("artifact", "") for r in transport.rounds)
     assert "python-kata-fixer" in artifacts
     assert "TEST_PASS" in artifacts
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+_PASSING_TOOLS = (
+    "SKILLS: python-kata-fixer\n"
+    "TOOL read path=.agents/skills/python-kata-fixer/SKILL.md\n"
+    "TOOL write path=solution.py\n"
+    "def is_palindrome(s: str) -> bool:\n"
+    "    n = ''.join(c.lower() for c in s if c.isalnum())\n"
+    "    return n == n[::-1]\n"
+    "END_TOOL\n"
+    "TOOL write path=THEORY.md\n"
+    "Used python-kata-fixer.\n"
+    "END_TOOL\n"
+    "TOOL test\n"
+)
+
+_RACE_FORMAT = {
+    "name": "Tool-using coding race",
+    "engine": "agent_tool_race",
+    "roles": ["player_a", "player_b", "judge"],
+    "phases": [{"name": "race", "participants": ["player_a", "player_b"]}],
+    "target_code": "def is_palindrome(s): return s == s[::-1]\n",
+    "pick_per_battle": 1,
+    "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL"],
+}
+
+
+def _executor_results(rounds):
+    found = []
+    marker = "EXECUTOR_RESULT:"
+    for r in rounds:
+        art = r.get("artifact") or ""
+        if marker not in art:
+            continue
+        payload = art.split(marker, 1)[1].strip()
+        found.append(json.loads(payload))
+    return found
+
+
+def _run_fake_race(monkeypatch, reply, *, max_tool_turns=2, max_tool_steps=20):
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    transport = FakeTransport()
+    transport.model_replies = {"a": reply, "b": reply}
+    transport.judge_result = {
+        "scores": {"a": 90.0, "b": 80.0},
+        "justifications": {"a": "pass", "b": "pass"},
+        "judge_model": "mock",
+    }
+    client = InternalClient(transport)
+    ex = AdvancedExecutor()
+    scores = ex.run_battle(
+        battle_id="race-1",
+        format_config={
+            **_RACE_FORMAT,
+            "max_tool_turns": max_tool_turns,
+            "max_tool_steps": max_tool_steps,
+        },
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=60,
+        role_to_model={"player_a": "a", "player_b": "b"},
+        client=client,
+    )
+    return scores, transport
+
+
+def test_race_loop_passes_without_done(monkeypatch):
+    import os
+
+    scores, transport = _run_fake_race(monkeypatch, _PASSING_TOOLS)
+    assert scores["a"] == 90.0
+    results = _executor_results(transport.rounds)
+    assert results, "expected EXECUTOR_RESULT"
+    assert all(r.get("passed") is True for r in results)
+    assert all(r.get("outcome") == "TEST_PASS" for r in results)
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_race_loop_pass_then_step_cap_still_passed(monkeypatch):
+    import os
+
+    extra_ls = "\n".join(["TOOL ls"] * 20) + "\n"
+    scores, transport = _run_fake_race(
+        monkeypatch,
+        _PASSING_TOOLS + extra_ls,
+        max_tool_turns=4,
+        max_tool_steps=8,
+    )
+    assert scores["a"] == 90.0
+    results = _executor_results(transport.rounds)
+    assert results, "expected EXECUTOR_RESULT"
+    assert all(r.get("passed") is True for r in results)
+    assert all(r.get("outcome") == "TEST_PASS" for r in results)
+    wiped = [
+        r
+        for r in results
+        if r.get("outcome") == "STEP_BUDGET_EXCEEDED" and r.get("passed") is False
+    ]
+    assert wiped == []
     os.environ.pop("ARENA_IN_SANDBOX", None)
 
 
