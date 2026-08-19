@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import modal
@@ -19,7 +20,10 @@ app = modal.App("agent-arena-backend", image=image)
 @app.function(
     secrets=[modal.Secret.from_name("agent-arena-dotenv")],
     min_containers=1,
-    env={"ARENA_SKILLS_ROOT": "/opt/arena-skills"},
+    env={
+        "ARENA_SKILLS_ROOT": "/opt/arena-skills",
+        "ARENA_BUILD_SHA": os.environ.get("ARENA_BUILD_SHA") or "unknown",
+    },
 )
 @modal.concurrent(max_inputs=100)
 @modal.asgi_app()

@@ -1,8 +1,11 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from . import battles, formats, internal_router, leaderboard_router, providers, stats
+from .evidence import EVIDENCE_SCHEMA_VERSION, SCORING_VERSION
 
 app = FastAPI(title="Agent Arena", version="0.1.0")
 
@@ -40,4 +43,11 @@ app.include_router(stats.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "project": settings()["APPWRITE_PROJECT_ID"]}
+    return {
+        "status": "ok",
+        "project": settings()["APPWRITE_PROJECT_ID"],
+        # Set at deploy time: modal deploy modal_entry.py --env ARENA_BUILD_SHA=$(git rev-parse HEAD)
+        "build_sha": os.environ.get("ARENA_BUILD_SHA") or "unknown",
+        "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
+        "scoring_version": SCORING_VERSION,
+    }
