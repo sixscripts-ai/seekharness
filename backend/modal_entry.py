@@ -17,7 +17,7 @@ app = modal.App("agent-arena-backend", image=image)
 
 
 @app.function(
-    secrets=[modal.Secret.from_dotenv(str(_BASE_DIR / ".env"))],
+    secrets=[modal.Secret.from_name("agent-arena-dotenv")],
     min_containers=1,
     env={"ARENA_SKILLS_ROOT": "/opt/arena-skills"},
 )
@@ -30,7 +30,7 @@ def fastapi_app():
 
 
 @app.function(
-    secrets=[modal.Secret.from_dotenv(str(_BASE_DIR / ".env"))],
+    secrets=[modal.Secret.from_name("agent-arena-dotenv")],
     schedule=modal.Period(minutes=1),
 )
 def reap_stale_battles():
