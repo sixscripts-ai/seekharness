@@ -9,6 +9,26 @@ if TYPE_CHECKING:
     from ..client import InternalClient
 
 
+def judge_weights(format_config: dict) -> dict[str, float] | None:
+    """Merge nested scoring.weights (tests/skills/theory) with phase scoring_weights.
+
+    Criteria from the challenge manifest / difficulty preset go in first; phase
+    keys overwrite on collision so existing format rubrics stay intact.
+    """
+    merged: dict[str, float] = {}
+    criteria = (format_config.get("scoring") or {}).get("weights") or {}
+    phases = format_config.get("scoring_weights") or {}
+    if isinstance(criteria, dict):
+        for key, value in criteria.items():
+            if isinstance(value, (int, float)):
+                merged[str(key)] = float(value)
+    if isinstance(phases, dict):
+        for key, value in phases.items():
+            if isinstance(value, (int, float)):
+                merged[str(key)] = float(value)
+    return merged or None
+
+
 class Executor:
     def run_phase(
         self,
@@ -90,7 +110,7 @@ class Executor:
         on_status: "Callable[[str], None] | None" = None,
     ) -> dict:
         rubric = format_config.get("judge_rubric") or "Score each model 0-100 fairly."
-        weights = format_config.get("scoring_weights")
+        weights = judge_weights(format_config)
         result = client.judge(battle_id, rubric, history, weights=weights)
         scores = result.get("scores") or {}
         client.round(

@@ -49,12 +49,21 @@ def run_battle_loop(
     try:
         if on_status:
             on_status("running")
-        roles = format_config.get("roles", [])
+        cfg = format_config
+        difficulty = (format_config or {}).get("difficulty")
+        if difficulty:
+            try:
+                from ..seed_formats import apply_difficulty
+
+                cfg = apply_difficulty(format_config, difficulty)
+            except Exception:
+                cfg = format_config
+        roles = cfg.get("roles", [])
         role_to_model = map_roles(roles, model_ids)
-        executor = get_executor(format_config)
+        executor = get_executor(cfg)
         return executor.run_battle(
             battle_id=battle_id,
-            format_config=format_config,
+            format_config=cfg,
             model_ids=model_ids,
             round_visibility=round_visibility,
             timeout_seconds=timeout_seconds,

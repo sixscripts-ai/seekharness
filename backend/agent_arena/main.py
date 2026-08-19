@@ -14,12 +14,18 @@ app.add_middleware(
         "https://seekharness.vercel.app",
         "https://agent-arena-blond.vercel.app",
         "https://frontend-seven-snowy-59.vercel.app",
-        # Local development.
+        # Local development (Vite default 5173; 3000/3010 for other tools).
         "http://localhost:3000",
         "http://localhost:3010",
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://localhost:5175",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+        "http://127.0.0.1:5175",
     ],
-    # allow_origin_regex kept off: a wildcard regex reintroduces the same
-    # permissive behaviour the explicit list above is meant to close.
+    # Localhost any port only — not a Vercel wildcard.
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_methods=["*"],
     allow_headers=["*"],
 )

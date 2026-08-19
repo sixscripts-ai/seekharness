@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --port 3000",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
@@ -21,6 +21,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@alwaysmeticulous/recorder-plugin": "^2.293.0",
     "@eslint/js": "^9.25.0",
     "@types/node": "^22.15.30",
     "@types/react": "^18.3.12",

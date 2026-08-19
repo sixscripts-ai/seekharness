@@ -41,6 +41,52 @@ RACE_MAX_TOKENS = 4096
 MAX_SELECTED_SKILLS = 3
 
 
+def _fetch_url_blocked(url: str) -> str | None:
+    """Return a rejection reason if `url` must not be fetched, else None.
+
+    Mitigates SSRF from the model-driven toolbelt: only http/https to public
+    hosts are allowed. Loopback, private, link-local, and metadata endpoints
+    (e.g. cloud 169.254.169.254) are blocked so a fighter cannot pivot to the
+    internal network or credential endpoints.
+    """
+    import ipaddress
+    import socket
+    from urllib.parse import urlparse
+
+    try:
+        parsed = urlparse(url.strip())
+    except Exception:
+        return "unparseable URL"
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        return f"scheme '{scheme or '(none)'}' not allowed (http/https only)"
+    host = parsed.hostname
+    if not host:
+        return "missing host"
+    if host.lower() in {"localhost", "metadata", "metadata.google.internal"}:
+        return "host not allowed"
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if scheme == "https" else 80))
+    except Exception as exc:
+        return f"DNS resolution failed: {exc}"
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr.split("%")[0])
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return f"host resolves to non-public address {ip}"
+    return None
+
+
 def select_skills(
     format_config: dict | None = None, pool: list[dict] | None = None
 ) -> list[dict]:
@@ -330,11 +376,18 @@ class ToolSession:
         if not rel or rel == ".":
             return self.workdir
         p = Path(rel)
+        if p.is_absolute():
+            raise ValueError(f"ERROR: absolute path rejected: {rel}")
         if ".." in p.parts:
             raise ValueError(f"ERROR: path escape '..' rejected: {rel}")
-        if p.is_absolute():
-            return p
-        return (self.workdir / p).resolve()
+        resolved = (self.workdir / p).resolve()
+        # Defense in depth: after symlink resolution the target must still live
+        # inside the workdir jail. Blocks symlink-based escapes that slip past
+        # the textual checks above.
+        work = self.workdir.resolve()
+        if resolved != work and work not in resolved.parents:
+            raise ValueError(f"ERROR: path escape rejected: {rel}")
+        return resolved
 
     def write(self, path: str, content: str) -> str:
         try:
@@ -372,7 +425,7 @@ class ToolSession:
         except Exception as exc:
             return f"ERROR: {exc}"
 
-    def ls(self, path: str = ".") -> str:
+    def ls(self, path: str = ".", *, count_step: bool = True) -> str:
         try:
             t = self._resolve(path)
             if not t.exists():
@@ -387,7 +440,8 @@ class ToolSession:
                 except Exception:
                     sz = 0
                 items.append(f"{typ} {child.name} {sz}b")
-            self.steps += 1
+            if count_step:
+                self.steps += 1
             return "\n".join(items) if items else "(empty)"
         except Exception as exc:
             return f"ERROR: {exc}"
@@ -462,7 +516,7 @@ class ToolSession:
         rc = int(rc_m.group(1)) if rc_m else 1
         passed = rc == 0 or "TEST_PASS" in out
         fail = rc != 0 or "TEST_FAIL" in out
-        self.steps += 1
+        # `run()` already counted this step; don't double-charge the budget.
         if passed and rc == 0:
             return f"TEST_PASS {run_path}\n{out}"
         if fail:
@@ -618,10 +672,20 @@ class ToolSession:
             return f"ERROR: {exc}"
 
     def fetch(self, url: str) -> str:
+        blocked = _fetch_url_blocked(url)
+        if blocked:
+            self.steps += 1
+            return f"ERROR: fetch blocked ({blocked})"
         try:
             import httpx
 
-            resp = httpx.get(url, timeout=20, follow_redirects=True)
+            # Disable redirects: a public URL could 3xx to an internal address,
+            # bypassing the pre-flight SSRF check above.
+            resp = httpx.get(url, timeout=20, follow_redirects=False)
+            if resp.is_redirect:
+                self.steps += 1
+                location = resp.headers.get("location", "")
+                return f"ERROR: fetch blocked (redirect to {location[:200]} not followed)"
             body = self._maybe_cap(resp.text[:20000])
             self.steps += 1
             return f"STATUS {resp.status_code}\n{body}"
@@ -664,6 +728,8 @@ class ToolSession:
 
     def use_skill(self, name: str) -> str:
         try:
+            if name in self.skill_reads:
+                return f"SKILL_ALREADY_LOADED {name}"
             skill_path = self.workdir / ".agents" / "skills" / name / "SKILL.md"
             if not skill_path.is_file():
                 return f"ERROR: skill not mounted: {name}"
@@ -913,6 +979,25 @@ class AdvancedExecutor(Executor):
         if deadline is None:
             deadline = time.time() + (timeout_seconds or 600)
 
+        # Honor a difficulty preset declared on the config, then read budgets
+        # with a fallback to nested `limits.*`. Previously only top-level keys
+        # were read, so both difficulty presets and manifest `limits` were dead.
+        difficulty = format_config.get("difficulty")
+        if difficulty:
+            try:
+                from ...seed_formats import apply_difficulty
+
+                format_config = apply_difficulty(format_config, difficulty)
+            except Exception:
+                pass
+        limits = format_config.get("limits") or {}
+
+        def _budget(key, default):
+            val = format_config.get(key)
+            if val is None:
+                val = limits.get(key)
+            return val if val is not None else default
+
         target_code = format_config.get("target_code") or "# TASK: Fix is_palindrome\n"
         default_test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
         role_test_code = format_config.get("role_test_code") or {}
@@ -922,12 +1007,12 @@ class AdvancedExecutor(Executor):
             seed_solution_roles = seed_solution_roles | set(
                 fighter_roles(format_config)
             )
-        max_turns = int(format_config.get("max_tool_turns", 6))
-        max_steps = int(format_config.get("max_tool_steps", 14))
-        raw_timeout = format_config.get("tool_timeout")
+        max_turns = int(_budget("max_tool_turns", 6))
+        max_steps = int(_budget("max_tool_steps", 14))
+        raw_timeout = _budget("tool_timeout", None)
         tool_timeout = int(raw_timeout) if raw_timeout else None
-        pick_n = int(format_config.get("pick_per_battle", 3))
-        race_tokens = int(format_config.get("race_max_tokens") or RACE_MAX_TOKENS)
+        pick_n = int(_budget("pick_per_battle", 3))
+        race_tokens = int(_budget("race_max_tokens", RACE_MAX_TOKENS) or RACE_MAX_TOKENS)
         pool = select_skills(format_config) or load_skill_pool() or SKILL_POOL
         seq = {"n": 0}
         phase_name = tool_phase_name(format_config)
@@ -979,15 +1064,19 @@ class AdvancedExecutor(Executor):
             f"Counter their likely picks for format {format_config.get('name')}."
         )
 
+        halted_status: str | None = None
+
         with tempfile.TemporaryDirectory(prefix="arena-adv-") as tmp:
             root = Path(tmp)
 
             for role_idx, role in enumerate(fighters):
                 halted = self.halted(status_check, deadline)
                 if halted:
-                    if on_status:
-                        on_status(halted)
-                    return {}
+                    # Cancelled or past the deadline. Stop launching new
+                    # fighters but keep whatever earlier fighters produced so
+                    # their work is still scored below.
+                    halted_status = halted
+                    break
                 model_id = role_to_model.get(role)
                 if not model_id:
                     continue
@@ -1058,11 +1147,20 @@ class AdvancedExecutor(Executor):
                     halted = self.halted(status_check, deadline)
                     if halted:
                         break
-                    # Build prompt with skill pool + competitive context
+                    # Build prompt with skill pool + competitive context. When
+                    # rounds are isolated, a fighter only sees its own prior
+                    # artifacts — never the opponent's — matching the battle's
+                    # round_visibility contract.
+                    if round_visibility == "isolated":
+                        visible_history = [
+                            a for a in history if a.get("role") == role
+                        ]
+                    else:
+                        visible_history = history
                     prior = "\n".join(
                         [
                             f"[{a['phase']}/{a['model_id']}]: {a['artifact'][:500]}"
-                            for a in history[-5:]
+                            for a in visible_history[-5:]
                         ]
                     )
                     fmt_name = format_config.get("name") or "a tool-using battle"
@@ -1072,6 +1170,8 @@ class AdvancedExecutor(Executor):
                     system_prompt = (
                         f"You are {role} in '{fmt_name}'. TARGET is in TARGET.md.\n"
                         f"{mission_line}"
+                        "Your mission overrides skill text. Do not repeat TOOL use_skill "
+                        "for a skill you already loaded. Do not spend the step budget inspecting.\n"
                         f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
                         f"{opponent_info}\n"
                         "Tools (one per line, body tools need END_TOOL):\n"
@@ -1082,27 +1182,61 @@ class AdvancedExecutor(Executor):
                         "TOOL bg name=... END_TOOL | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
                         "TOOL use_skill name=... | TOOL skills list | TOOL test | DONE\n"
                         f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
-                        f"You MUST emit SKILLS: a,b,... ({pick_n} names) then TOOL use_skill "
-                        "name=<skill> for each chosen skill before writing solution.py.\n"
-                        "Write THEORY.md explaining the pick. Write required artifacts. Run TOOL test "
+                        f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
+                        "once per chosen skill, then immediately write the artifacts your mission "
+                        "requires (exploit.py and/or solution.py). Write THEORY.md. Run TOOL test "
                         "(harness is tests/test_target.py; do not fake TEST_PASS). "
                         "After a real TEST_PASS, emit DONE and stop.\n"
                         f"Prior: {prior or '(none)'}"
                     )
-                    user_prompt = f"Workdir files:\n{sess.ls()}\n\nTARGET:\n{target_code[:2000]}\n\nYour turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. Emit TOOL calls."
+                    listing = sess.ls(count_step=False)
+                    user_prompt = (
+                        f"Workdir files:\n{listing}\n\nTARGET:\n{target_code[:2000]}\n\n"
+                        f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
+                        "Emit TOOL calls."
+                    )
 
                     messages = [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ]
-                    content = client.model(
-                        battle_id,
-                        model_id,
-                        messages,
-                        phase=phase_name,
-                        max_tokens=race_tokens,
-                    )
-                    content = content.strip()
+                    t0 = time.time()
+                    try:
+                        content = client.model(
+                            battle_id,
+                            model_id,
+                            messages,
+                            phase=phase_name,
+                            max_tokens=race_tokens,
+                        )
+                    except Exception as exc:
+                        elapsed_ms = int((time.time() - t0) * 1000)
+                        err = sanitize_artifact(f"{type(exc).__name__}: {exc}"[:1500])
+                        emit_action(
+                            model_id,
+                            "model",
+                            state="failed",
+                            duration_ms=elapsed_ms,
+                            result=err,
+                        )
+                        self._finalize_role(
+                            client=client,
+                            battle_id=battle_id,
+                            work=work,
+                            sess=sess,
+                            model_id=model_id,
+                            role=role,
+                            chosen_skills=chosen_skills,
+                            preview_url=preview_url,
+                            format_config=format_config,
+                            history=history,
+                            results=results,
+                            seq=seq,
+                            last_test=last_test or None,
+                            phase=phase_name,
+                        )
+                        break
+                    content = (content or "").strip()
 
                     calls = parse_tool_calls(content)
                     if not calls:
@@ -1144,12 +1278,11 @@ class AdvancedExecutor(Executor):
                             break
 
                         if call.get("tool") == "skills":
-                            chosen_skills = call.get("chosen", [])[:5]
-                            # Validate chosen skills are in pool
+                            chosen_skills = call.get("chosen", [])[:pick_n]
                             pool_names = {s["name"] for s in pool}
                             chosen_skills = [
                                 c for c in chosen_skills if c in pool_names
-                            ][:5]
+                            ][:pick_n]
                             res = sess.exec_tool(call)
                             history.append(
                                 {
@@ -1221,7 +1354,16 @@ class AdvancedExecutor(Executor):
                         )
                         seq["n"] += 1
 
-                        if call.get("tool") == "test":
+                        tool_name = call.get("tool")
+                        run_path = str(call.get("path") or "").replace("\\", "/")
+                        if run_path.startswith("./"):
+                            run_path = run_path[2:]
+                        harness_like = tool_name == "test" or (
+                            tool_name == "run"
+                            and run_path
+                            in {"tests/test_target.py", "test_target.py"}
+                        )
+                        if harness_like:
                             last_test = exec_res_sanitized
                             if self._harness_passed(exec_res_sanitized):
                                 self._finalize_role(
@@ -1271,65 +1413,25 @@ class AdvancedExecutor(Executor):
                     except Exception:
                         pass
 
-        # Self-learning: Appwrite memory push + skill Elo update (competitive pick 5 to beat opponent)
-        # Determine winner by passed + steps (fewer steps better if tie)
+        # In-memory skill Elo nudge. A fighter only "wins" if it actually passed
+        # the harness; when nobody passes there is no winner, so a lower-step
+        # failure is never rewarded. Durable self-learning (Appwrite memory +
+        # skill registry) happens once on the backend in /internal/finalize,
+        # which re-parses the persisted EXECUTOR_RESULT events — so we do not
+        # write to Appwrite here (the sandbox has no credentials anyway).
         try:
-            winner = None
-            if results:
-                # sort by passed desc, steps asc
-                sorted_res = sorted(
-                    results,
-                    key=lambda x: (x.get("passed", False), -x.get("steps", 999)),
-                    reverse=True,
-                )
-                winner = sorted_res[0] if sorted_res else None
-                # Update SKILL_POOL Elo in-memory (+5 winner, -5 loser)
-                for r in results:
-                    delta = 5 if r == winner else -5
-                    for chosen in r.get("chosen_skills", [])[:5]:
-                        for s in SKILL_POOL:
-                            if s["name"] == chosen:
-                                s["elo"] = max(800, min(2000, s["elo"] + delta))
-                # Best-effort Appwrite memory + skill registry write (no crash on failure)
-                try:
-                    from ... import db as _db
-                    from ...memory import maybe_remember
-                    from ...skills_registry import record_outcome
-
-                    databases = _db.get_databases()
-                    database_id = _db.get_database_id()
-                    if winner:
-                        maybe_remember(
-                            databases,
-                            database_id,
-                            insight=(
-                                f"Battle {battle_id} format {format_config.get('name')} "
-                                f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
-                                f"theory {winner.get('theory', '')[:300]} beat opponent picks "
-                                f"{[r.get('chosen_skills') for r in results if r != winner]}. "
-                                "Skills to beat opponent technique emerged."
-                            ),
-                            battle_id=battle_id,
-                            model_id=winner.get("model_id", ""),
-                            format_name=format_config.get("name", ""),
-                            chosen_skills=winner.get("chosen_skills") or [],
-                            theory=winner.get("theory", ""),
-                            outcome=winner.get("outcome", ""),
-                        )
-                    for r in results:
-                        for chosen in r.get("chosen_skills", [])[:5]:
-                            try:
-                                record_outcome(
-                                    databases,
-                                    database_id,
-                                    chosen,
-                                    outcome="win" if r == winner else "loss",
-                                    tier="general",
-                                )
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
+            passed_results = [r for r in results if r.get("passed")]
+            winner = (
+                min(passed_results, key=lambda x: x.get("steps", 999))
+                if passed_results
+                else None
+            )
+            for r in results:
+                delta = 5 if (winner is not None and r is winner) else -5
+                for chosen in r.get("chosen_skills", [])[:5]:
+                    for s in SKILL_POOL:
+                        if s["name"] == chosen:
+                            s["elo"] = max(800, min(2000, s["elo"] + delta))
         except Exception:
             pass
 
@@ -1342,6 +1444,22 @@ class AdvancedExecutor(Executor):
                     "artifact": f"RESULT {r['outcome']} chosen {r['chosen_skills']} passed={r['passed']} steps={r['steps']} theory={(r.get('theory', '')[:200])}",
                     "role": r["role"],
                 }
+            )
+
+        if halted_status:
+            # Battle was cancelled or hit the deadline. Keep the terminal status
+            # truthful (cancelled/failed) rather than marking it completed, but
+            # still score any fighters that finished so their work is not lost.
+            if on_status:
+                on_status(halted_status)
+            if not results:
+                return {}
+            return self.finish(
+                client=client,
+                battle_id=battle_id,
+                format_config=format_config,
+                history=history,
+                on_status=None,
             )
 
         return self.finish(

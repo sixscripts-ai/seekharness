@@ -262,7 +262,7 @@ def _decrypt_with_any(token: str) -> str:
     last_err: Exception | None = None
     for key in _fernet_keys():
         try:
-            return decrypt_key(token, key)
+            return crypto.decrypt_key(token, key)
         except ValueError as exc:
             last_err = exc
     raise HTTPException(

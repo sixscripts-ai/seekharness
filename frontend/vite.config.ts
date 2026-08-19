@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tsconfigPaths from "vite-tsconfig-paths";
+import meticulous from "@alwaysmeticulous/recorder-plugin/vite";
 
 // Single source of truth for the Modal backend URL. Injected into the app as
 // `__DEFAULT_MODAL_URL__` so api.ts does not hardcode a second copy that can
@@ -20,6 +21,11 @@ if (rawModalUrl) {
     : DEFAULT_MODAL_URL;
 }
 
+// Record on localhost and Vercel preview builds, but never on production so
+// real users' Appwrite JWTs and BYOK provider keys stay out of Meticulous.
+// Vercel sets VERCEL_ENV to "production" only on production deploys.
+const recorderEnabled = process.env.VERCEL_ENV === "production" ? "never" : "always";
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   define: {
@@ -33,6 +39,10 @@ export default defineConfig(({ mode }) => ({
     sourcemap: false,
   },
   plugins: [
+    meticulous({
+      recordingToken: "SIXsivbq1OdSAgXG3JQAnP0C06ACznSU3vm0Cg6b",
+      enabled: recorderEnabled,
+    }),
     react({
       babel: mode === 'development'
         ? {

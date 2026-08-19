@@ -1,0 +1,61 @@
+name: Meticulous
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: {}
+  workflow_dispatch: {}
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: read
+
+jobs:
+  test:
+    name: Meticulous
+    # Skip on fork PRs: they cannot access METICULOUS_API_TOKEN, so the job
+    # would always fail. Still runs on push to main, same-repo PRs, and dispatch.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Use Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build project
+        working-directory: frontend
+        env:
+          METICULOUS_BUILD: "true"
+        run: pnpm build
+
+      - name: Run Meticulous tests
+        uses: alwaysmeticulous/report-diffs-action/upload-assets@v1
+        with:
+          api-token: ${{ secrets.METICULOUS_API_TOKEN }}
+          app-directory: frontend/dist
+          rewrites: |
+            [
+              { "source": "/(.*)", "destination": "/index.html" }
+            ]

@@ -38,7 +38,10 @@ def _upsert(databases, database_id, model_id, format_id, new_elo) -> None:
 
 
 def apply_result(databases, database_id, format_id, model_ids, scores) -> None:
-    for scope in (format_id, "overall"):
+    scopes = [format_id]
+    if format_id != "overall":
+        scopes.append("overall")
+    for scope in scopes:
         for i in range(len(model_ids)):
             for j in range(i + 1, len(model_ids)):
                 a, b = model_ids[i], model_ids[j]
@@ -52,11 +55,27 @@ def apply_result(databases, database_id, format_id, model_ids, scores) -> None:
 
 
 def get_rankings(databases, database_id, format_id="overall") -> list[dict]:
-    res = databases.list_documents(
-        database_id, "leaderboard",
-        queries=[Query.equal("format_id", format_id), Query.limit(100)],
-    )
-    entries = sorted(res.documents, key=lambda e: e.data["elo"], reverse=True)
+    page = 100
+    offset = 0
+    docs = []
+    while True:
+        res = databases.list_documents(
+            database_id,
+            "leaderboard",
+            queries=[
+                Query.equal("format_id", format_id),
+                Query.limit(page),
+                Query.offset(offset),
+            ],
+        )
+        batch = list(res.documents)
+        docs.extend(batch)
+        if len(batch) < page:
+            break
+        offset += page
+        if offset > 10000:
+            break
+    entries = sorted(docs, key=lambda e: e.data["elo"], reverse=True)
     return [
         {"model_id": e.data["model_id"], "elo": e.data["elo"], "games_played": e.data["games_played"], "rank": i + 1}
         for i, e in enumerate(entries)

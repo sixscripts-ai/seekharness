@@ -411,3 +411,369 @@ def test_extract_on_py_write(tmp_path):
     text = sess.read("solution.py")
     assert "Here is the code" not in text
     assert "def is_palindrome" in text
+
+
+def test_injection_toolbelt_attacker_and_defender(monkeypatch):
+    import os
+
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+    from agent_arena.sandbox.executors import get_executor
+    from agent_arena.seed_formats import ALL_FORMATS
+    from tests.test_universal_targets import FIXES, INJECTION_EXPLOIT
+
+    cfg = next(
+        c for c in ALL_FORMATS if c["name"] == "Injection agent vs hardened agent"
+    )
+    cfg = {**cfg, "pick_per_battle": 1, "max_tool_turns": 2, "max_tool_steps": 20}
+    exe = get_executor(cfg)
+    assert isinstance(exe, AdvancedExecutor)
+    assert fighter_roles(cfg) == ["agent_a", "agent_b"]
+
+    atk = (
+        "SKILLS: python-kata-fixer\n"
+        "TOOL read path=.agents/skills/python-kata-fixer/SKILL.md\n"
+        "TOOL write path=exploit.py\n"
+        f"{INJECTION_EXPLOIT}"
+        "END_TOOL\n"
+        "TOOL write path=THEORY.md\n"
+        "empty query dumps FLAG\n"
+        "END_TOOL\n"
+        "TOOL test\n"
+    )
+    dfn = (
+        "SKILLS: python-kata-fixer\n"
+        "TOOL read path=.agents/skills/python-kata-fixer/SKILL.md\n"
+        "TOOL write path=solution.py\n"
+        f"{FIXES['Injection agent vs hardened agent']}"
+        "END_TOOL\n"
+        "TOOL write path=THEORY.md\n"
+        "never return FLAG\n"
+        "END_TOOL\n"
+        "TOOL test\n"
+    )
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    transport = FakeTransport()
+    transport.model_replies = {"a": atk, "b": dfn}
+    transport.judge_result = {
+        "scores": {"a": 90.0, "b": 80.0},
+        "justifications": {"a": "leak", "b": "harden"},
+        "judge_model": "mock",
+    }
+    scores = exe.run_battle(
+        battle_id="inj-1",
+        format_config=cfg,
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=60,
+        role_to_model={"agent_a": "a", "agent_b": "b"},
+        client=InternalClient(transport),
+    )
+    results = {r.get("role"): r for r in _executor_results(transport.rounds)}
+    assert scores["a"] == 90.0
+    assert set(results) == {"agent_a", "agent_b"}
+    assert results["agent_a"].get("passed") is True
+    assert results["agent_a"].get("outcome") == "TEST_PASS"
+    assert results["agent_b"].get("passed") is True
+    assert results["agent_b"].get("outcome") == "TEST_PASS"
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_ls_prompt_does_not_count_step(tmp_path):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.py").write_text("x", encoding="utf-8")
+    sess = ToolSession(work)
+    sess.ls(count_step=False)
+    assert sess.steps == 0
+    sess.ls()
+    assert sess.steps == 1
+
+
+def test_duplicate_use_skill_does_not_count(tmp_path):
+    pool = load_skill_pool()
+    work = tmp_path / "work"
+    work.mkdir()
+    mount_skills(work, pool)
+    sess = ToolSession(work)
+    first = sess.use_skill("python-kata-fixer")
+    assert "solution.py" in first
+    assert sess.steps == 1
+    second = sess.use_skill("python-kata-fixer")
+    assert "SKILL_ALREADY_LOADED" in second
+    assert sess.steps == 1
+
+
+def test_injection_format_picks_one_skill():
+    from agent_arena.seed_formats import ALL_FORMATS
+
+    cfg = next(
+        c for c in ALL_FORMATS if c["name"] == "Injection agent vs hardened agent"
+    )
+    assert cfg["pick_per_battle"] == 1
+
+
+def test_tool_run_harness_early_stop(monkeypatch):
+    import os
+
+    reply = (
+        _PASSING_TOOLS.replace("TOOL test\n", "TOOL run path=tests/test_target.py\nEND_TOOL\n")
+        + "\n".join(["TOOL ls"] * 20)
+        + "\n"
+    )
+    scores, transport = _run_fake_race(
+        monkeypatch,
+        reply,
+        max_tool_turns=4,
+        max_tool_steps=8,
+    )
+    assert scores["a"] == 90.0
+    results = _executor_results(transport.rounds)
+    assert results, "expected EXECUTOR_RESULT"
+    assert all(r.get("passed") is True for r in results)
+    assert all(r.get("outcome") == "TEST_PASS" for r in results)
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_injection_attacker_duplicate_skills_then_exploit(monkeypatch):
+    import os
+
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+    from agent_arena.sandbox.executors import get_executor
+    from agent_arena.seed_formats import ALL_FORMATS
+    from tests.test_universal_targets import FIXES, INJECTION_EXPLOIT
+
+    cfg = next(
+        c for c in ALL_FORMATS if c["name"] == "Injection agent vs hardened agent"
+    )
+    cfg = {**cfg, "pick_per_battle": 3, "max_tool_turns": 2, "max_tool_steps": 11}
+    exe = get_executor(cfg)
+    waste = (
+        "SKILLS: python-kata-fixer, secure-code-execution, sandbox-runtime-engineer\n"
+        "TOOL use_skill name=python-kata-fixer\n"
+        "TOOL use_skill name=secure-code-execution\n"
+        "TOOL use_skill name=sandbox-runtime-engineer\n"
+        "TOOL read path=TARGET.md\n"
+        "TOOL read path=solution.py\n"
+        "TOOL read path=README.md\n"
+        "TOOL ls path=tests\n"
+        "TOOL use_skill name=python-kata-fixer\n"
+        "TOOL use_skill name=secure-code-execution\n"
+        "TOOL use_skill name=sandbox-runtime-engineer\n"
+        "TOOL read path=tests/test_target.py\n"
+        "TOOL write path=exploit.py\n"
+        f"{INJECTION_EXPLOIT}"
+        "END_TOOL\n"
+        "TOOL write path=THEORY.md\n"
+        "empty query dumps FLAG\n"
+        "END_TOOL\n"
+        "TOOL test\n"
+    )
+    dfn = (
+        "SKILLS: python-kata-fixer\n"
+        "TOOL use_skill name=python-kata-fixer\n"
+        "TOOL write path=solution.py\n"
+        f"{FIXES['Injection agent vs hardened agent']}"
+        "END_TOOL\n"
+        "TOOL write path=THEORY.md\n"
+        "never return FLAG\n"
+        "END_TOOL\n"
+        "TOOL test\n"
+    )
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    transport = FakeTransport()
+    transport.model_replies = {"a": waste, "b": dfn}
+    transport.judge_result = {
+        "scores": {"a": 90.0, "b": 80.0},
+        "justifications": {"a": "leak", "b": "harden"},
+        "judge_model": "mock",
+    }
+    scores = exe.run_battle(
+        battle_id="inj-waste-1",
+        format_config=cfg,
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=60,
+        role_to_model={"agent_a": "a", "agent_b": "b"},
+        client=InternalClient(transport),
+    )
+    results = {r.get("role"): r for r in _executor_results(transport.rounds)}
+    assert scores["a"] == 90.0
+    assert results["agent_a"].get("passed") is True
+    assert results["agent_a"].get("outcome") == "TEST_PASS"
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_model_error_does_not_abort_opponent(monkeypatch):
+    import os
+
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+
+    class BoomA(FakeTransport):
+        def post(self, path, json):
+            if path == "/internal/model" and json.get("model_id") == "a":
+                raise RuntimeError(
+                    "internal /internal/model exhausted retries: server 502"
+                )
+            return super().post(path, json)
+
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    transport = BoomA()
+    transport.model_replies = {"a": _PASSING_TOOLS, "b": _PASSING_TOOLS}
+    transport.judge_result = {
+        "scores": {"a": 10.0, "b": 90.0},
+        "justifications": {"a": "fail", "b": "pass"},
+        "judge_model": "mock",
+    }
+    ex = AdvancedExecutor()
+    scores = ex.run_battle(
+        battle_id="boom-a",
+        format_config={
+            **_RACE_FORMAT,
+            "max_tool_turns": 2,
+            "max_tool_steps": 20,
+        },
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=60,
+        role_to_model={"player_a": "a", "player_b": "b"},
+        client=InternalClient(transport),
+    )
+    results = {r.get("model_id"): r for r in _executor_results(transport.rounds)}
+    assert scores["b"] == 90.0
+    assert results["a"].get("passed") is False
+    assert results["b"].get("passed") is True
+    assert results["b"].get("outcome") == "TEST_PASS"
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+# --- A1: workdir jail escape -------------------------------------------------
+
+
+def test_tool_session_reject_absolute_path(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    try:
+        sess._resolve("/etc/passwd")
+        assert False, "absolute path should be rejected"
+    except ValueError as e:
+        assert "absolute" in str(e).lower() or "reject" in str(e).lower()
+
+
+def test_tool_session_reject_symlink_escape(tmp_path):
+    import os
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("TOP_SECRET", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir()
+    os.symlink(outside, work / "link")
+    sess = ToolSession(work)
+    # Reading through a symlink that points outside the jail must be blocked.
+    out = sess.read("link/secret.txt")
+    assert "ERROR" in out
+    assert "TOP_SECRET" not in out
+
+
+# --- A2: test() no longer double-counts the step budget ----------------------
+
+
+def test_test_counts_single_step(tmp_path):
+    work = tmp_path / "work"
+    (work / "tests").mkdir(parents=True)
+    (work / "tests" / "test_target.py").write_text(
+        "from solution import is_palindrome\n"
+        "assert is_palindrome('racecar') is True\n"
+        "print('TEST_PASS')\n",
+        encoding="utf-8",
+    )
+    (work / "solution.py").write_text(
+        "def is_palindrome(s):\n    return s == s[::-1]\n", encoding="utf-8"
+    )
+    sess = ToolSession(work)
+    assert sess.steps == 0
+    sess.test("")
+    # One harness run = one step (previously counted as two).
+    assert sess.steps == 1
+
+
+# --- A3: no self-learning winner when both fighters fail ----------------------
+
+
+_FAILING_TOOLS = (
+    "SKILLS: python-kata-fixer\n"
+    "TOOL read path=.agents/skills/python-kata-fixer/SKILL.md\n"
+    "TOOL write path=solution.py\n"
+    "def is_palindrome(s):\n"
+    "    return False\n"
+    "END_TOOL\n"
+    "TOOL write path=THEORY.md\n"
+    "Tried and failed.\n"
+    "END_TOOL\n"
+    "TOOL test\n"
+)
+
+
+def test_race_both_fail_awards_no_skill_win(monkeypatch):
+    import os
+
+    from agent_arena.sandbox.executors.advanced_executor import SKILL_POOL
+
+    before = {s["name"]: s["elo"] for s in SKILL_POOL}
+    scores, transport = _run_fake_race(monkeypatch, _FAILING_TOOLS)
+    results = _executor_results(transport.rounds)
+    assert results, "expected EXECUTOR_RESULT"
+    assert all(r.get("passed") is False for r in results)
+    # When nobody passes there is no winner, so no skill Elo may increase.
+    assert all(s["elo"] <= before[s["name"]] for s in SKILL_POOL)
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+# --- A4: halt mid-battle still scores fighters that finished ------------------
+
+
+def test_halt_after_first_fighter_preserves_scores(monkeypatch):
+    import os
+
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    transport = FakeTransport()
+    transport.model_replies = {"a": _PASSING_TOOLS, "b": _PASSING_TOOLS}
+    transport.judge_result = {
+        "scores": {"a": 90.0, "b": 80.0},
+        "justifications": {"a": "pass", "b": "pass"},
+        "judge_model": "mock",
+    }
+
+    def status_check():
+        # Cancel as soon as the first fighter has recorded a result.
+        for r in transport.rounds:
+            if "EXECUTOR_RESULT:" in (r.get("artifact") or ""):
+                return "cancelled"
+        return ""
+
+    statuses: list[str] = []
+    ex = AdvancedExecutor()
+    scores = ex.run_battle(
+        battle_id="halt-1",
+        format_config={**_RACE_FORMAT, "max_tool_turns": 2, "max_tool_steps": 20},
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=60,
+        role_to_model={"player_a": "a", "player_b": "b"},
+        client=InternalClient(transport),
+        status_check=status_check,
+        on_status=statuses.append,
+    )
+    results = _executor_results(transport.rounds)
+    # The first fighter's work is scored, not discarded...
+    assert scores, "partial battle should still return judge scores"
+    assert any(r.get("role") == "player_a" for r in results)
+    # ...but the terminal status stays truthful (cancelled), never completed.
+    assert "cancelled" in statuses
+    assert "completed" not in statuses
+    os.environ.pop("ARENA_IN_SANDBOX", None)

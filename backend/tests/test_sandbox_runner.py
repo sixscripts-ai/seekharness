@@ -149,3 +149,56 @@ def test_http_transport_retries_non_json():
     out = t.post("/internal/model", {"x": 1})
     assert out == {"content": "ok"}
     assert calls["n"] == 3
+
+
+def test_judge_weights_merges_criteria_and_phases():
+    from agent_arena.sandbox.executors.base import judge_weights
+
+    assert judge_weights({}) is None
+    merged = judge_weights(
+        {
+            "scoring_weights": {"race": 1.0},
+            "scoring": {"weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2}},
+        }
+    )
+    assert merged["race"] == 1.0
+    assert merged["tests"] == 0.6
+    assert merged["skills"] == 0.2
+    assert merged["theory"] == 0.2
+    # Phase keys win on collision.
+    assert judge_weights(
+        {
+            "scoring_weights": {"tests": 1.0},
+            "scoring": {"weights": {"tests": 0.6}},
+        }
+    )["tests"] == 1.0
+
+
+def test_finish_sends_merged_weights_to_judge():
+    from agent_arena.sandbox.executors.base import Executor
+
+    transport = FakeTransport()
+    transport.judge_result = {
+        "scores": {"m1": 70.0},
+        "justifications": {"m1": "ok"},
+        "judge_model": "mock",
+    }
+    client = InternalClient(transport)
+    scores = Executor().finish(
+        client=client,
+        battle_id="b-w",
+        format_config={
+            "judge_rubric": "score fairly",
+            "scoring_weights": {"race": 1.0},
+            "scoring": {"weights": {"tests": 0.6, "skills": 0.3, "theory": 0.1}},
+        },
+        history=[],
+    )
+    assert scores["m1"] == 70.0
+    judge_calls = [body for path, body in transport.calls if path == "/internal/judge"]
+    assert judge_calls
+    weights = judge_calls[0]["weights"]
+    assert weights["race"] == 1.0
+    assert weights["tests"] == 0.6
+    assert weights["skills"] == 0.3
+    assert weights["theory"] == 0.1

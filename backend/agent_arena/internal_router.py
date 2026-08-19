@@ -355,14 +355,21 @@ def internal_model(
     if body.model_id not in battle.data.get("model_ids", []):
         raise HTTPException(status_code=400, detail="model not in battle")
     base, style, key, model = get_model_call_spec(body.model_id, battle.data["user_id"])
-    content = llm_client.chat_completion(
-        base_url=base,
-        auth_style=style,
-        api_key=key,
-        model=model,
-        messages=body.messages,
-        max_tokens=body.max_tokens,
-    )
+    try:
+        content = llm_client.chat_completion(
+            base_url=base,
+            auth_style=style,
+            api_key=key,
+            model=model,
+            messages=body.messages,
+            max_tokens=body.max_tokens,
+        )
+    except HTTPException as exc:
+        print(
+            f"internal_model fail battle={body.battle_id} "
+            f"model={body.model_id} slug={model} detail={str(exc.detail)[:300]!r}"
+        )
+        raise
     return {"content": content}
 
 

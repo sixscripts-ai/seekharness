@@ -15,9 +15,17 @@ function isBattlePath(pathname: string): boolean {
   return pathname === "/battles/new" || pathname.startsWith("/battles/");
 }
 
+// The live battle view streams non-deterministic model/harness output (SSE),
+// so we exclude it from Meticulous visual diffs via the `meticulous-ignore`
+// class. The setup form at /battles/new is stable and stays covered.
+function isLiveBattlePath(pathname: string): boolean {
+  return pathname.startsWith("/battles/") && pathname !== "/battles/new";
+}
+
 function AppShell() {
   const loc = useLocation();
   const battle = isBattlePath(loc.pathname);
+  const liveBattle = isLiveBattlePath(loc.pathname);
 
   useEffect(() => {
     document.documentElement.classList.add("theme-void");
@@ -27,7 +35,14 @@ function AppShell() {
   return (
     <>
       <SiteHeader />
-      <main className={battle ? "px-0 py-0" : "mx-auto max-w-[1360px] px-6 py-8"}>
+      <main
+        className={[
+          battle ? "px-0 py-0" : "mx-auto max-w-[1360px] px-6 py-8",
+          liveBattle ? "meticulous-ignore" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
