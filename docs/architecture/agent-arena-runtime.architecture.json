@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Agent Arena runtime",
+    "quality_profile": "showcase",
+    "viewBox": [1720, 780],
+    "repository": {
+      "url": "https://github.com/sixscripts-ai/seekharness",
+      "revision": "eb325f2c8309b1a1be895192082ec269db1c6ac2"
+    },
+    "views": [
+      {
+        "id": "battle-path",
+        "label": "Battle path",
+        "focus": ["browser", "spa", "fastapi", "launcher", "sandbox", "executor", "internal", "llm", "models"],
+        "note": "Follow POST /battles from the SPA through sandbox spawn to a host or BYOK model call."
+      },
+      {
+        "id": "trust-plane",
+        "label": "Trust",
+        "focus": ["secrets", "internal", "sandbox", "executor", "llm"],
+        "note": "Provider keys stay in the Modal backend; the sandbox holds only a battle-scoped token."
+      },
+      {
+        "id": "identity-state",
+        "label": "Identity",
+        "focus": ["spa", "appwrite-auth", "fastapi", "appwrite-db"],
+        "note": "Appwrite issues the JWT; FastAPI verifies it and owns battle documents."
+      },
+      {
+        "id": "score-live",
+        "label": "Judge",
+        "focus": ["executor", "internal", "judge", "events", "spa"],
+        "note": "The sandbox asks /internal/judge; events persist and stream back on GET /battles/:id/stream."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "external",
+      "label": "Player browser",
+      "sublabel": "session cookie + JWT",
+      "pos": [40, 310],
+      "size": [140, 64]
+    },
+    {
+      "id": "spa",
+      "type": "frontend",
+      "label": "Vite SPA",
+      "sublabel": "seekharness.vercel.app",
+      "brand": "vercel",
+      "tag": "no secrets",
+      "pos": [240, 310],
+      "size": [148, 64],
+      "sources": [
+        { "path": "frontend/src/lib/api.ts", "line": 37, "label": "api client" },
+        { "path": "frontend/src/lib/appwrite.ts", "line": 37, "label": "createJWT" }
+      ]
+    },
+    {
+      "id": "appwrite-auth",
+      "type": "security",
+      "label": "Appwrite Account",
+      "sublabel": "sfo.cloud.appwrite.io",
+      "tag": "public project id",
+      "pos": [240, 100],
+      "size": [148, 64],
+      "sources": [
+        { "path": "frontend/src/lib/appwrite.ts", "line": 21, "label": "login" },
+        { "path": "backend/agent_arena/auth.py", "line": 8, "label": "get_current_user" }
+      ]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "FastAPI app",
+      "sublabel": "agent-arena-backend",
+      "tag": "Modal ASGI",
+      "pos": [450, 310],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/main.py", "line": 7, "label": "app" },
+        { "path": "backend/agent_arena/battles.py", "line": 61, "label": "POST /battles" },
+        { "path": "backend/modal_entry.py", "line": 19, "label": "fastapi_app" }
+      ]
+    },
+    {
+      "id": "secrets",
+      "type": "security",
+      "label": "Modal secret",
+      "sublabel": "agent-arena-dotenv",
+      "tag": "Fernet + HOST_*",
+      "pos": [450, 100],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/modal_entry.py", "line": 20, "label": "from_name" },
+        { "path": "backend/agent_arena/crypto.py", "line": 21, "label": "encrypt_key" }
+      ]
+    },
+    {
+      "id": "launcher",
+      "type": "backend",
+      "label": "sandbox_launcher",
+      "sublabel": "issue_battle_token",
+      "pos": [666, 310],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/sandbox_launcher.py", "line": 225, "label": "try_spawn" },
+        { "path": "backend/agent_arena/battle_token.py", "line": 46, "label": "issue token" }
+      ]
+    },
+    {
+      "id": "sandbox",
+      "type": "cloud",
+      "label": "Modal Sandbox",
+      "sublabel": "BATTLE_TOKEN only",
+      "tag": "untrusted",
+      "pos": [882, 310],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/sandbox_launcher.py", "line": 274, "label": "Sandbox.create" }
+      ]
+    },
+    {
+      "id": "appwrite-db",
+      "type": "database",
+      "label": "Appwrite Databases",
+      "sublabel": "battles · providers · events",
+      "pos": [450, 520],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/db.py", "line": 1, "label": "server key" }
+      ]
+    },
+    {
+      "id": "events",
+      "type": "messagebus",
+      "label": "event_bus",
+      "sublabel": "SSE + battle_events",
+      "pos": [666, 520],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/event_bus.py", "line": 47, "label": "publish" },
+        { "path": "backend/agent_arena/battles.py", "line": 167, "label": "GET /stream" }
+      ]
+    },
+    {
+      "id": "executor",
+      "type": "backend",
+      "label": "Battle executor",
+      "sublabel": "runner + skills",
+      "pos": [882, 520],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/sandbox/entrypoint.py", "line": 10, "label": "main" },
+        { "path": "backend/agent_arena/sandbox/runner.py", "line": 1, "label": "run_battle_loop" }
+      ]
+    },
+    {
+      "id": "internal",
+      "type": "security",
+      "label": "/internal/*",
+      "sublabel": "X-Sandbox-Token",
+      "tag": "hidden OpenAPI",
+      "pos": [1098, 520],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/internal_router.py", "line": 35, "label": "battle token" }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "llm_client",
+      "sublabel": "host + BYOK decrypt",
+      "pos": [1314, 520],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/llm_client.py", "line": 1, "label": "chat" },
+        { "path": "backend/agent_arena/providers.py", "line": 196, "label": "call spec" },
+        { "path": "backend/agent_arena/ssrf.py", "line": 20, "label": "validate URL" }
+      ]
+    },
+    {
+      "id": "judge",
+      "type": "backend",
+      "label": "Host judge",
+      "sublabel": "Kimi-K3 modal_proxy",
+      "pos": [1314, 310],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/judge.py", "line": 61, "label": "judge spec" }
+      ]
+    },
+    {
+      "id": "models",
+      "type": "external",
+      "label": "Host / BYOK LLMs",
+      "sublabel": "OpenRouter · Groq · custom",
+      "pos": [1530, 520],
+      "size": [154, 64],
+      "sources": [
+        { "path": "backend/agent_arena/providers.py", "line": 25, "label": "HOST_PROVIDERS" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Vercel — static SPA only",
+      "wraps": ["spa"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Trusted Modal backend — keys never leave",
+      "wraps": ["fastapi", "secrets", "launcher", "events", "internal", "llm", "judge"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Untrusted sandbox — no provider keys",
+      "wraps": ["sandbox", "executor"]
+    },
+    {
+      "kind": "region",
+      "label": "Appwrite Account — identity",
+      "wraps": ["appwrite-auth"]
+    },
+    {
+      "kind": "region",
+      "label": "Appwrite Databases — documents",
+      "wraps": ["appwrite-db"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-spa",
+      "from": "browser",
+      "to": "spa",
+      "label": "HTTPS",
+      "variant": "emphasis",
+      "labelDy": -28
+    },
+    {
+      "id": "spa-auth",
+      "from": "spa",
+      "to": "appwrite-auth",
+      "label": "createJWT",
+      "variant": "security",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -22
+    },
+    {
+      "id": "spa-fastapi",
+      "from": "spa",
+      "to": "fastapi",
+      "label": "POST /battles",
+      "variant": "emphasis",
+      "labelDy": -28
+    },
+    {
+      "id": "fastapi-db",
+      "from": "fastapi",
+      "to": "appwrite-db",
+      "label": "server API key",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 28
+    },
+    {
+      "id": "fastapi-launcher",
+      "from": "fastapi",
+      "to": "launcher",
+      "label": "start_battle",
+      "variant": "emphasis",
+      "labelDy": -28
+    },
+    {
+      "id": "launcher-sandbox",
+      "from": "launcher",
+      "to": "sandbox",
+      "label": "BATTLE_TOKEN",
+      "variant": "emphasis",
+      "labelDy": -28
+    },
+    {
+      "id": "sandbox-executor",
+      "from": "sandbox",
+      "to": "executor",
+      "label": "entrypoint.main",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 28
+    },
+    {
+      "id": "executor-internal",
+      "from": "executor",
+      "to": "internal",
+      "label": "/internal/model",
+      "variant": "security",
+      "labelDy": -28
+    },
+    {
+      "id": "internal-llm",
+      "from": "internal",
+      "to": "llm",
+      "label": "decrypt + call spec",
+      "variant": "emphasis",
+      "labelDy": -28
+    },
+    {
+      "id": "llm-models",
+      "from": "llm",
+      "to": "models",
+      "label": "HTTPS chat",
+      "variant": "emphasis",
+      "labelDy": -28
+    },
+    {
+      "id": "secrets-fastapi",
+      "from": "secrets",
+      "to": "fastapi",
+      "label": "inject env",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 28
+    },
+    {
+      "id": "internal-judge",
+      "from": "internal",
+      "to": "judge",
+      "label": "/internal/judge",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -28
+    },
+    {
+      "id": "launcher-events",
+      "from": "launcher",
+      "to": "events",
+      "label": "publish status",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 28
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Trust boundary",
+      "items": [
+        "SPA and sandbox never see APPWRITE_API_KEY, FERNET_KEY, or HOST_* keys",
+        "Sandbox callbacks require X-Sandbox-Token bound to one battle_id; legacy X-Internal-Key is ignored",
+        "BYOK stores Fernet ciphertext; ssrf.validate_base_url blocks private/link-local egress"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Primary request",
+      "items": [
+        "Browser logs in via Appwrite; SPA sends Bearer JWT to POST /battles",
+        "FastAPI persists queued; BackgroundTasks call sandbox_launcher.start_battle",
+        "ARENA_USE_MOCK=1 swaps mock_runner for Modal Sandbox; skills mount at /opt/arena-skills"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Live stream and score",
+      "items": [
+        "event_bus writes battle_events; LiveBattle uses GET /battles/:id/stream",
+        "Judge is host Kimi-K3 over modal_proxy; artifacts are redacted before scoring",
+        "Elo updates on finalize; reaper fails stale queued/running battles every minute"
+      ]
+    }
+  ]
+}
