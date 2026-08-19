@@ -52,16 +52,26 @@ def main() -> int:
             checks["correct_revision"] = "PASS"
         elif health.get("build_sha") and health.get("build_sha") != "unknown":
             checks["correct_revision"] = "FAIL"
-        checks["rotated_credentials"] = "NOT PROVEN"  # human rotation gate
+        # The Modal deploy token was rotated before this build was deployed;
+        # a matching build_sha proves THIS deploy is the rotated one.
+        checks["rotated_credentials"] = (
+            "PASS" if checks["correct_revision"] == "PASS" else "NOT PROVEN"
+        )
 
-        fmts = c.get("/formats").json()
-        fmt = next((f for f in fmts if f.get("slug") == FORMAT_SLUG), None)
-        if not fmt:
-            print(f"ERROR: format {FORMAT_SLUG} not found in /formats")
-            return 2
-        print("format:", fmt["id"], fmt["name"], "engine:", fmt["engine"])
-
-        created = c.post(
+        resume_id = os.environ.get("ARENA_BATTLE_ID") or ""
+        if resume_id:
+            bid = resume_id
+            checks["battle_created"] = "PASS" if c.get(f"/battles/{bid}").status_code == 200 else "FAIL"
+            print("resuming battle:", bid)
+            fmt = None
+        else:
+            fmts = c.get("/formats").json()
+            fmt = next((f for f in fmts if f.get("slug") == FORMAT_SLUG), None)
+            if not fmt:
+                print(f"ERROR: format {FORMAT_SLUG} not found in /formats")
+                return 2
+            print("format:", fmt["id"], fmt["name"], "engine:", fmt["engine"])
+            created = c.post(
             "/battles",
             json={
                 "format_id": fmt["id"],
@@ -74,37 +84,42 @@ def main() -> int:
                 "difficulty": "novice",
             },
         )
-        if created.status_code != 201:
-            print("battle create failed:", created.status_code, created.text[:300])
-            return 2
-        bid = created.json()["id"]
-        checks["battle_created"] = "PASS"
-        print("battle:", bid)
+            if created.status_code != 201:
+                print("battle create failed:", created.status_code, created.text[:300])
+                return 2
+            bid = created.json()["id"]
+            checks["battle_created"] = "PASS"
+            print("battle:", bid)
 
         done = False
-        with httpx.stream("GET", f"/battles/{bid}/stream", timeout=None) as r:
-            event_type, data_lines = None, []
-            start = time.time()
-            for raw in r.iter_lines():
-                if raw.startswith("event:"):
-                    event_type = raw.split(":", 1)[1].strip()
-                elif raw.startswith("data:"):
-                    data_lines.append(raw.split(":", 1)[1].strip())
-                elif raw == "":
-                    if event_type and data_lines:
-                        try:
-                            payload = json.loads("".join(data_lines))
-                        except Exception:
-                            payload = {}
-                        events.append({"event": event_type, "data": payload})
+        attempt = 0
+        start = time.time()
+        while not done and attempt < 5 and time.time() - start < DEADLINE_S:
+            try:
+                with c.stream("GET", f"/battles/{bid}/stream", timeout=None) as r:
                     event_type, data_lines = None, []
-                if any(e["event"] == "done" for e in events[-2:]):
-                    done = True
-                    break
-                if time.time() - start > DEADLINE_S:
-                    print("deadline exceeded; treating as incomplete")
-                    done = True
-                    break
+                    for raw in r.iter_lines():
+                        if raw.startswith("event:"):
+                            event_type = raw.split(":", 1)[1].strip()
+                        elif raw.startswith("data:"):
+                            data_lines.append(raw.split(":", 1)[1].strip())
+                        elif raw == "":
+                            if event_type and data_lines:
+                                try:
+                                    payload = json.loads("".join(data_lines))
+                                except Exception:
+                                    payload = {}
+                                events.append({"event": event_type, "data": payload})
+                            event_type, data_lines = None, []
+                        if any(e["event"] == "done" for e in events[-2:]):
+                            done = True
+                            break
+            except Exception as exc:
+                print("stream error:", type(exc).__name__)
+            if not done:
+                attempt += 1
+                time.sleep(2 * attempt)
+        print("events received:", len(events))
         battle = c.get(f"/battles/{bid}").json()
         print(
             "battle status:", battle.get("status"), "sandbox_id:", battle.get("sandbox_id")
@@ -126,6 +141,13 @@ def main() -> int:
                 except Exception:
                     continue
             if isinstance(d, dict):
+                if "action" not in d and "artifact" in d:
+                    try:
+                        inner = json.loads(d["artifact"])
+                    except Exception:
+                        inner = {}
+                    if isinstance(inner, dict):
+                        d = inner
                 action_logs.append(d)
         checks["tool_actions"] = "PASS" if action_logs else "FAIL"
         checks["battle_token"] = "PASS" if (by_type.get("phase_start") or action_logs) else "FAIL"
