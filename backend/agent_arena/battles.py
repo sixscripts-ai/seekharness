@@ -101,6 +101,8 @@ def create_battle(
     }
     if body.judge_provider_id:
         payload["judge_provider_id"] = body.judge_provider_id
+    if body.difficulty:
+        payload["difficulty"] = body.difficulty
     battle = databases.create_document(database_id, "battles", "unique()", payload)
     battle_id = battle.id
     # Prefer real sandbox runner; mock_runner remains for ARENA_USE_MOCK=1

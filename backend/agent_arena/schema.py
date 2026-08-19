@@ -35,6 +35,7 @@ COLLECTIONS = {
         ("preview_urls", "string", False),  # JSON map model_id -> tunnel URL
         ("failure_reason", "string", False),
         ("started_at", "float", False),
+        ("difficulty", "string", False),
     ],
     "battle_events": [
         ("battle_id", "string", True),

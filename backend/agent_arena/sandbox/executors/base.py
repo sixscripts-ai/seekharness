@@ -66,7 +66,7 @@ class Executor:
         history: list[dict] = []
 
         for phase in phases:
-            halted = self.halted(status_check, deadline)
+            halted = self.halted(status_check, deadline, stop)
             if halted:
                 if on_status:
                     on_status(halted)
@@ -121,7 +121,11 @@ class Executor:
         return scores
 
     @staticmethod
-    def halted(status_check, deadline) -> str | None:
+    def halted(status_check, deadline, stop=None) -> str | None:
+        if stop is not None and stop.is_set():
+            if status_check and status_check() == "cancelled":
+                return "cancelled"
+            return "failed"
         if status_check and status_check() == "cancelled":
             return "cancelled"
         if deadline and time.time() > deadline:

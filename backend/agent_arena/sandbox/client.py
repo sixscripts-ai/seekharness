@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import threading
 import time
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -125,8 +126,13 @@ class FakeTransport:
         }
         self.rounds: list[dict] = []
         self.battle_status: str = "running"
+        self._lock = threading.Lock()
 
     def post(self, path: str, json: dict) -> dict:
+        with self._lock:
+            return self._post_locked(path, json)
+
+    def _post_locked(self, path: str, json: dict) -> dict:
         self.calls.append((path, json))
         if path == "/internal/model":
             mid = json.get("model_id", "")

@@ -15,7 +15,9 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -84,6 +86,97 @@ def _fetch_url_blocked(url: str) -> str | None:
             or ip.is_unspecified
         ):
             return f"host resolves to non-public address {ip}"
+    return None
+
+
+_URL_IN_TEXT = re.compile(r"(?:[a-z][a-z0-9+.-]*)://[^\s\"'<>]+", re.I)
+_FETCH_BIN = re.compile(
+    r"(?:^|[\s;&|`(\n])(?:sudo\s+)?(?:[A-Za-z0-9._/-]+/)?(?:curl|wget)\b",
+    re.I,
+)
+_ABS_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])(/[^\s;|&<>`'\"\)]*)")
+_DOTDOT_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(/])\.\.(?:/|[\s;|&<>`'\"\)]|$)")
+_HOME_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])~(?:/|$)")
+
+
+def _looks_like_fetch_target(token: str) -> bool:
+    t = token.strip().strip("'\"")
+    if not t:
+        return False
+    if "://" in t:
+        return True
+    host = t.split("/")[0].split(":")[0].lower()
+    if host in {"localhost", "metadata", "metadata.google.internal"}:
+        return True
+    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:/.*)?", t):
+        return True
+    if re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", host):
+        return True
+    return False
+
+
+def _normalize_fetch_url(token: str) -> str:
+    t = token.strip().strip("'\"")
+    if "://" in t:
+        return t
+    return "http://" + t
+
+
+def _fetch_targets_in_command(command: str) -> list[str]:
+    found: list[str] = []
+    for match in _URL_IN_TEXT.finditer(command):
+        found.append(match.group(0).rstrip(".,;)]}"))
+    if _FETCH_BIN.search(command):
+        for match in re.finditer(
+            r"(?:^|[\s;&|`(\n])(?:sudo\s+)?(?:[A-Za-z0-9._/-]+/)?(?:curl|wget)\b(.*)",
+            command,
+            re.I | re.S,
+        ):
+            tokens = match.group(1).replace("\n", " ").split()
+            idx = 0
+            while idx < len(tokens):
+                tok = tokens[idx]
+                if tok.startswith("--url="):
+                    found.append(tok.split("=", 1)[1])
+                    break
+                if tok == "--url" and idx + 1 < len(tokens):
+                    found.append(tokens[idx + 1])
+                    break
+                if tok.startswith("-"):
+                    idx += 1
+                    continue
+                if _looks_like_fetch_target(tok):
+                    found.append(tok)
+                break
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in found:
+        if raw and raw not in seen:
+            seen.add(raw)
+            out.append(raw)
+    return out
+
+
+def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
+    """Reject shell/install commands that escape the workdir jail or bypass fetch SSRF."""
+    if command is None or not str(command).strip():
+        return "empty command"
+    text = str(command)
+    if _DOTDOT_IN_CMD.search(text):
+        return "path escape '..' rejected"
+    if _HOME_PATH_IN_CMD.search(text):
+        return "home path '~' rejected"
+    abs_match = _ABS_PATH_IN_CMD.search(text)
+    if abs_match:
+        return f"absolute path rejected: {abs_match.group(1)}"
+    has_fetch_bin = bool(_FETCH_BIN.search(text))
+    targets = _fetch_targets_in_command(text)
+    if (has_fetch_bin or targets) and not allow_network:
+        return "network fetch blocked (format environment.network is false)"
+    for raw in targets:
+        reason = _fetch_url_blocked(_normalize_fetch_url(raw))
+        if reason:
+            return f"fetch blocked ({reason})"
     return None
 
 
@@ -350,6 +443,7 @@ class ToolSession:
         root: Path | None = None,
         tool_timeout: int | None = None,
         output_cap: int | None = None,
+        allow_network: bool = False,
     ):
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -359,6 +453,7 @@ class ToolSession:
         self._max_output = int(output_cap) if output_cap else None
         self.skill_reads: set[str] = set()
         self.seq = 0
+        self.allow_network = bool(allow_network)
         self.procs = ProcessManager(self.workdir)
 
     def _maybe_cap(self, data: str) -> str:
@@ -524,6 +619,12 @@ class ToolSession:
         return f"TEST_UNKNOWN {run_path}\n{out}"
 
     def _run_command(self, command: str, timeout: int | None = None) -> str:
+        blocked = _shell_command_blocked(
+            command, allow_network=self.allow_network
+        )
+        if blocked:
+            self.steps += 1
+            return f"ERROR: {blocked}"
         env = os.environ.copy()
         env["ARENA_ROOT"] = str(self.root)
         env["ARENA_WORKDIR"] = str(self.workdir)
@@ -701,6 +802,12 @@ class ToolSession:
         )
 
     def bg(self, name: str, content: str) -> str:
+        blocked = _shell_command_blocked(
+            content or "", allow_network=self.allow_network
+        )
+        if blocked:
+            self.steps += 1
+            return f"ERROR: {blocked}"
         try:
             mgr = self.procs.start(name, content or "")
             self.steps += 1
@@ -876,6 +983,7 @@ class AdvancedExecutor(Executor):
         budget_exceeded: bool = False,
         retest: bool = False,
         phase: str = "race",
+        lock: threading.Lock | None = None,
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -889,8 +997,6 @@ class AdvancedExecutor(Executor):
         skill_read_ok = bool(chosen_skills) and set(chosen_skills).issubset(
             sess.skill_reads
         )
-        if not skill_read_ok:
-            passed = False
         if passed:
             outcome = "TEST_PASS"
         elif budget_exceeded:
@@ -914,7 +1020,6 @@ class AdvancedExecutor(Executor):
             "skill_read_ok": skill_read_ok,
             "preview_url": preview_url,
         }
-        line = self.emit_result(client, battle_id, phase, result)
         files_json = json.dumps(
             {
                 "files": files,
@@ -927,33 +1032,41 @@ class AdvancedExecutor(Executor):
             },
             indent=2,
         )
-        seq["n"] += 1
-        client.round(
-            battle_id,
-            phase,
-            model_id,
-            sanitize_artifact(files_json),
-            event_type="artifact",
-            sequence=seq["n"],
-        )
-        history.append(
-            {
-                "phase": phase,
-                "model_id": model_id,
-                "artifact": sanitize_artifact(files_json),
-                "role": role,
-            }
-        )
-        history.append(
-            {
-                "phase": phase,
-                "model_id": model_id,
-                "artifact": line,
-                "role": role,
-            }
-        )
-        results.append(result)
-        return result
+
+        def _commit():
+            line = self.emit_result(client, battle_id, phase, result)
+            seq["n"] += 1
+            client.round(
+                battle_id,
+                phase,
+                model_id,
+                sanitize_artifact(files_json),
+                event_type="artifact",
+                sequence=seq["n"],
+            )
+            history.append(
+                {
+                    "phase": phase,
+                    "model_id": model_id,
+                    "artifact": sanitize_artifact(files_json),
+                    "role": role,
+                }
+            )
+            history.append(
+                {
+                    "phase": phase,
+                    "model_id": model_id,
+                    "artifact": line,
+                    "role": role,
+                }
+            )
+            results.append(result)
+            return result
+
+        if lock is not None:
+            with lock:
+                return _commit()
+        return _commit()
 
     def run_battle(
         self,
@@ -979,17 +1092,8 @@ class AdvancedExecutor(Executor):
         if deadline is None:
             deadline = time.time() + (timeout_seconds or 600)
 
-        # Honor a difficulty preset declared on the config, then read budgets
-        # with a fallback to nested `limits.*`. Previously only top-level keys
-        # were read, so both difficulty presets and manifest `limits` were dead.
-        difficulty = format_config.get("difficulty")
-        if difficulty:
-            try:
-                from ...seed_formats import apply_difficulty
-
-                format_config = apply_difficulty(format_config, difficulty)
-            except Exception:
-                pass
+        # Difficulty presets are applied once in run_battle_loop. Read budgets
+        # from top-level keys with a fallback to nested `limits.*`.
         limits = format_config.get("limits") or {}
 
         def _budget(key, default):
@@ -1018,37 +1122,60 @@ class AdvancedExecutor(Executor):
         phase_name = tool_phase_name(format_config)
         fighters = fighter_roles(format_config)
 
+        io_lock = threading.Lock()
+
         def emit(phase, model_id, artifact, event_type="artifact"):
-            seq["n"] += 1
-            client.round(
-                battle_id,
-                phase,
-                model_id,
-                artifact,
-                event_type=event_type,
-                sequence=seq["n"],
-            )
+            with io_lock:
+                seq["n"] += 1
+                client.round(
+                    battle_id,
+                    phase,
+                    model_id,
+                    artifact,
+                    event_type=event_type,
+                    sequence=seq["n"],
+                )
 
         def emit_action(
             model_id, action, target="", state="", duration_ms=0, result=""
         ):
-            seq["n"] += 1
-            client.round(
-                battle_id,
-                phase_name,
-                model_id,
-                json.dumps(
+            with io_lock:
+                seq["n"] += 1
+                client.round(
+                    battle_id,
+                    phase_name,
+                    model_id,
+                    json.dumps(
+                        {
+                            "action": action,
+                            "target": target,
+                            "state": state,
+                            "duration_ms": int(duration_ms),
+                            "result": (result or "")[:4000],
+                        }
+                    ),
+                    event_type="action_log",
+                    sequence=seq["n"],
+                )
+
+        def record_artifact(model_id, artifact, role):
+            with io_lock:
+                seq["n"] += 1
+                client.round(
+                    battle_id,
+                    phase_name,
+                    model_id,
+                    artifact,
+                    sequence=seq["n"],
+                )
+                history.append(
                     {
-                        "action": action,
-                        "target": target,
-                        "state": state,
-                        "duration_ms": int(duration_ms),
-                        "result": (result or "")[:4000],
+                        "phase": phase_name,
+                        "model_id": model_id,
+                        "artifact": artifact,
+                        "role": role,
                     }
-                ),
-                event_type="action_log",
-                sequence=seq["n"],
-            )
+                )
 
         history: list[dict] = []
         results: list[dict] = []
@@ -1065,98 +1192,133 @@ class AdvancedExecutor(Executor):
         )
 
         halted_status: str | None = None
+        halt_lock = threading.Lock()
 
-        with tempfile.TemporaryDirectory(prefix="arena-adv-") as tmp:
-            root = Path(tmp)
+        def halted_now():
+            return self.halted(status_check, deadline, stop)
 
-            for role_idx, role in enumerate(fighters):
-                halted = self.halted(status_check, deadline)
-                if halted:
-                    # Cancelled or past the deadline. Stop launching new
-                    # fighters but keep whatever earlier fighters produced so
-                    # their work is still scored below.
-                    halted_status = halted
-                    break
-                model_id = role_to_model.get(role)
-                if not model_id:
-                    continue
+        def mark_halted(reason):
+            nonlocal halted_status
+            if not reason:
+                return
+            with halt_lock:
+                if halted_status is None:
+                    halted_status = reason
 
-                work = root / f"work_{role}"
-                work.mkdir(exist_ok=True)
-                mount_skills(work, pool)
-                (work / "TARGET.md").write_text(target_code, encoding="utf-8")
-                tests_dir = work / "tests"
-                tests_dir.mkdir(exist_ok=True)
-                test_code = role_test_code.get(role) or default_test_code
-                (tests_dir / "test_target.py").write_text(test_code, encoding="utf-8")
-                mission = str(role_missions.get(role) or "").strip()
-                if role in seed_solution_roles:
-                    (work / "solution.py").write_text(target_code, encoding="utf-8")
-                (work / "README.md").write_text(
-                    f"# Task for {role}\n"
-                    + (
-                        f"{mission}\n"
-                        if mission
-                        else (
-                            f"Pick {pick_n} skills, TOOL read each SKILL.md, "
-                            "write solution.py, TOOL test.\n"
-                        )
-                    ),
-                    encoding="utf-8",
+        def role_recorded(model_id):
+            with io_lock:
+                return any(r["model_id"] == model_id for r in results)
+
+        def visible_for(role):
+            with io_lock:
+                if round_visibility == "isolated":
+                    return [a for a in history if a.get("role") == role]
+                return list(history)
+
+        def run_fighter(role_idx, role):
+            halted = halted_now()
+            if halted:
+                mark_halted(halted)
+                return
+            model_id = role_to_model.get(role)
+            if not model_id:
+                return
+
+            work = root / f"work_{role}"
+            work.mkdir(exist_ok=True)
+            mount_skills(work, pool)
+            (work / "TARGET.md").write_text(target_code, encoding="utf-8")
+            tests_dir = work / "tests"
+            tests_dir.mkdir(exist_ok=True)
+            test_code = role_test_code.get(role) or default_test_code
+            (tests_dir / "test_target.py").write_text(test_code, encoding="utf-8")
+            mission = str(role_missions.get(role) or "").strip()
+            if role in seed_solution_roles:
+                (work / "solution.py").write_text(target_code, encoding="utf-8")
+            (work / "README.md").write_text(
+                f"# Task for {role}\n"
+                + (
+                    f"{mission}\n"
+                    if mission
+                    else (
+                        f"Pick {pick_n} skills, TOOL read each SKILL.md, "
+                        "write solution.py, TOOL test.\n"
+                    )
+                ),
+                encoding="utf-8",
+            )
+
+            env_cfg = format_config.get("environment") or {}
+            sess = ToolSession(
+                work,
+                root=work,
+                tool_timeout=tool_timeout,
+                allow_network=bool(env_cfg.get("network")),
+            )
+
+            preview_server = None
+            preview_url = ""
+            if preview_enabled():
+                try:
+                    preview_server = StaticPreviewServer(
+                        workdir=work,
+                        port=port_for_index(role_idx),
+                    )
+                    preview_server.start()
+                    preview_url = f"http://localhost:{port_for_index(role_idx)}"
+                    emit_action(
+                        model_id,
+                        "preview",
+                        state="starting",
+                        target=preview_url,
+                        result="Static preview server up for fighter artifacts",
+                    )
+                except Exception as exc:
+                    emit_action(
+                        model_id,
+                        "preview",
+                        state="failed",
+                        result=f"Could not start preview server: {exc}",
+                    )
+
+            emit(
+                phase_name,
+                model_id,
+                f"phase_start:{role} workdir {work.name}"
+                + (f" preview {preview_url}" if preview_url else ""),
+                "phase_start",
+            )
+
+            chosen_skills: list[str] = []
+            last_test = ""
+
+            def finalize(**extra):
+                self._finalize_role(
+                    client=client,
+                    battle_id=battle_id,
+                    work=work,
+                    sess=sess,
+                    model_id=model_id,
+                    role=role,
+                    chosen_skills=chosen_skills,
+                    preview_url=preview_url,
+                    format_config=format_config,
+                    history=history,
+                    results=results,
+                    seq=seq,
+                    last_test=last_test or None,
+                    phase=phase_name,
+                    lock=io_lock,
+                    **extra,
                 )
 
-                sess = ToolSession(work, root=work, tool_timeout=tool_timeout)
-
-                preview_server = None
-                preview_url = ""
-                if preview_enabled():
-                    try:
-                        preview_server = StaticPreviewServer(
-                            workdir=work,
-                            port=port_for_index(role_idx),
-                        )
-                        preview_server.start()
-                        preview_url = f"http://localhost:{port_for_index(role_idx)}"
-                        emit_action(
-                            model_id,
-                            "preview",
-                            state="starting",
-                            target=preview_url,
-                            result="Static preview server up for fighter artifacts",
-                        )
-                    except Exception as exc:
-                        emit_action(
-                            model_id,
-                            "preview",
-                            state="failed",
-                            result=f"Could not start preview server: {exc}",
-                        )
-
-                emit(
-                    phase_name,
-                    model_id,
-                    f"phase_start:{role} workdir {work.name}"
-                    + (f" preview {preview_url}" if preview_url else ""),
-                    "phase_start",
-                )
-
-                chosen_skills: list[str] = []
-                last_test = ""
-
+            try:
                 for turn in range(max_turns):
-                    halted = self.halted(status_check, deadline)
+                    halted = halted_now()
                     if halted:
+                        mark_halted(halted)
                         break
-                    # Build prompt with skill pool + competitive context. When
-                    # rounds are isolated, a fighter only sees its own prior
-                    # artifacts — never the opponent's — matching the battle's
-                    # round_visibility contract.
-                    if round_visibility == "isolated":
-                        visible_history = [
-                            a for a in history if a.get("role") == role
-                        ]
-                    else:
-                        visible_history = history
+                    visible_history = visible_for(role)
                     prior = "\n".join(
                         [
                             f"[{a['phase']}/{a['model_id']}]: {a['artifact'][:500]}"
@@ -1219,62 +1381,23 @@ class AdvancedExecutor(Executor):
                             duration_ms=elapsed_ms,
                             result=err,
                         )
-                        self._finalize_role(
-                            client=client,
-                            battle_id=battle_id,
-                            work=work,
-                            sess=sess,
-                            model_id=model_id,
-                            role=role,
-                            chosen_skills=chosen_skills,
-                            preview_url=preview_url,
-                            format_config=format_config,
-                            history=history,
-                            results=results,
-                            seq=seq,
-                            last_test=last_test or None,
-                            phase=phase_name,
-                        )
-                        break
+                        finalize()
+                        return
                     content = (content or "").strip()
 
                     calls = parse_tool_calls(content)
                     if not calls:
-                        # If no TOOL, treat whole content as artifact (fallback)
                         artifact = sanitize_artifact(content[:10000])
-                        history.append(
-                            {
-                                "phase": phase_name,
-                                "model_id": model_id,
-                                "artifact": artifact,
-                                "role": role,
-                            }
-                        )
-                        client.round(
-                            battle_id, phase_name, model_id, artifact, sequence=seq["n"] + 1
-                        )
-                        seq["n"] += 1
+                        record_artifact(model_id, artifact, role)
                         continue
 
                     for call in calls:
+                        halted = halted_now()
+                        if halted:
+                            mark_halted(halted)
+                            break
                         if sess.steps >= max_steps:
-                            self._finalize_role(
-                                client=client,
-                                battle_id=battle_id,
-                                work=work,
-                                sess=sess,
-                                model_id=model_id,
-                                role=role,
-                                chosen_skills=chosen_skills,
-                                preview_url=preview_url,
-                                format_config=format_config,
-                                history=history,
-                                results=results,
-                                seq=seq,
-                                last_test=last_test or None,
-                                budget_exceeded=True,
-                                phase=phase_name,
-                            )
+                            finalize(budget_exceeded=True)
                             break
 
                         if call.get("tool") == "skills":
@@ -1284,42 +1407,13 @@ class AdvancedExecutor(Executor):
                                 c for c in chosen_skills if c in pool_names
                             ][:pick_n]
                             res = sess.exec_tool(call)
-                            history.append(
-                                {
-                                    "phase": phase_name,
-                                    "model_id": model_id,
-                                    "artifact": sanitize_artifact(f"{res}"),
-                                    "role": role,
-                                }
+                            record_artifact(
+                                model_id, sanitize_artifact(f"{res}"), role
                             )
-                            client.round(
-                                battle_id,
-                                phase_name,
-                                model_id,
-                                sanitize_artifact(res),
-                                sequence=seq["n"] + 1,
-                            )
-                            seq["n"] += 1
                             continue
 
                         if call.get("tool") == "done":
-                            self._finalize_role(
-                                client=client,
-                                battle_id=battle_id,
-                                work=work,
-                                sess=sess,
-                                model_id=model_id,
-                                role=role,
-                                chosen_skills=chosen_skills,
-                                preview_url=preview_url,
-                                format_config=format_config,
-                                history=history,
-                                results=results,
-                                seq=seq,
-                                last_test=last_test or None,
-                                retest=True,
-                                phase=phase_name,
-                            )
+                            finalize(retest=True)
                             break
 
                         exec_start = time.time()
@@ -1337,22 +1431,7 @@ class AdvancedExecutor(Executor):
                             duration_ms=exec_ms,
                             result=exec_res_sanitized[:4000],
                         )
-                        history.append(
-                            {
-                                "phase": phase_name,
-                                "model_id": model_id,
-                                "artifact": exec_res_sanitized,
-                                "role": role,
-                            }
-                        )
-                        client.round(
-                            battle_id,
-                            phase_name,
-                            model_id,
-                            exec_res_sanitized,
-                            sequence=seq["n"] + 1,
-                        )
-                        seq["n"] += 1
+                        record_artifact(model_id, exec_res_sanitized, role)
 
                         tool_name = call.get("tool")
                         run_path = str(call.get("path") or "").replace("\\", "/")
@@ -1366,52 +1445,45 @@ class AdvancedExecutor(Executor):
                         if harness_like:
                             last_test = exec_res_sanitized
                             if self._harness_passed(exec_res_sanitized):
-                                self._finalize_role(
-                                    client=client,
-                                    battle_id=battle_id,
-                                    work=work,
-                                    sess=sess,
-                                    model_id=model_id,
-                                    role=role,
-                                    chosen_skills=chosen_skills,
-                                    preview_url=preview_url,
-                                    format_config=format_config,
-                                    history=history,
-                                    results=results,
-                                    seq=seq,
-                                    last_test=exec_res_sanitized,
-                                    phase=phase_name,
-                                )
+                                finalize()
                                 break
 
-                    # Check if result already recorded for this role (DONE / TEST_PASS / budget)
-                    if any(r["model_id"] == model_id for r in results):
+                    if role_recorded(model_id):
                         break
 
-                # If no result recorded (no DONE / TEST_PASS), score from workspace
-                if not any(r["model_id"] == model_id for r in results):
-                    self._finalize_role(
-                        client=client,
-                        battle_id=battle_id,
-                        work=work,
-                        sess=sess,
-                        model_id=model_id,
-                        role=role,
-                        chosen_skills=chosen_skills,
-                        preview_url=preview_url,
-                        format_config=format_config,
-                        history=history,
-                        results=results,
-                        seq=seq,
-                        last_test=last_test or None,
-                        phase=phase_name,
-                    )
-
+                if not role_recorded(model_id):
+                    finalize()
+            finally:
                 if preview_server is not None:
                     try:
                         preview_server.stop()
                     except Exception:
                         pass
+
+        with tempfile.TemporaryDirectory(prefix="arena-adv-") as tmp:
+            root = Path(tmp)
+            jobs = [
+                (idx, role)
+                for idx, role in enumerate(fighters)
+                if role_to_model.get(role)
+            ]
+            if jobs:
+                with ThreadPoolExecutor(max_workers=len(jobs)) as pool_exec:
+                    futs = [
+                        pool_exec.submit(run_fighter, idx, role)
+                        for idx, role in jobs
+                    ]
+                    errors = []
+                    for fut in futs:
+                        try:
+                            fut.result()
+                        except Exception as exc:
+                            errors.append(exc)
+                    if errors and not results:
+                        raise errors[0]
+            late = halted_now()
+            if late:
+                mark_halted(late)
 
         # In-memory skill Elo nudge. A fighter only "wins" if it actually passed
         # the harness; when nobody passes there is no winner, so a lower-step

@@ -677,6 +677,67 @@ def test_tool_session_reject_symlink_escape(tmp_path):
     assert "TOP_SECRET" not in out
 
 
+def test_shell_rejects_absolute_path(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    out = sess.shell("cat /etc/passwd")
+    assert "ERROR" in out
+    assert "absolute" in out.lower()
+    assert "root:" not in out
+
+
+def test_shell_rejects_dotdot(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    out = sess.shell("cat ../secret.txt")
+    assert "ERROR" in out
+    assert ".." in out
+
+
+def test_shell_allows_relative_workdir_file(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    sess.write("hello.txt", "workdir-only")
+    out = sess.shell("cat hello.txt")
+    assert "workdir-only" in out
+    assert "ERROR:" not in out
+
+
+def test_shell_blocks_curl_without_network(tmp_path):
+    sess = ToolSession(tmp_path / "work", allow_network=False)
+    out = sess.shell("curl https://example.invalid/pwn")
+    assert "ERROR" in out
+    assert "network" in out.lower() or "blocked" in out.lower()
+
+
+def test_install_blocks_wget_without_network(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    out = sess.install("wget http://10.0.0.1/pkg")
+    assert "ERROR" in out
+    assert "blocked" in out.lower()
+
+
+def test_shell_ssrf_even_when_network_enabled(tmp_path):
+    sess = ToolSession(tmp_path / "work", allow_network=True)
+    out = sess.shell("curl http://127.0.0.1/")
+    assert "ERROR" in out
+    assert "blocked" in out.lower()
+    assert "127.0.0.1" in out or "loopback" in out.lower() or "not allowed" in out.lower() or "non-public" in out.lower()
+
+
+def test_shell_blocks_urlopen_loopback(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    out = sess.shell(
+        "python3 -c \"import urllib.request; urllib.request.urlopen('http://169.254.169.254/')\""
+    )
+    assert "ERROR" in out
+    assert "blocked" in out.lower()
+
+
+def test_bg_rejects_absolute_path(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    out = sess.bg("escape", "cat /etc/passwd")
+    assert "ERROR" in out
+    assert "absolute" in out.lower()
+
+
 # --- A2: test() no longer double-counts the step budget ----------------------
 
 
@@ -776,4 +837,102 @@ def test_halt_after_first_fighter_preserves_scores(monkeypatch):
     # ...but the terminal status stays truthful (cancelled), never completed.
     assert "cancelled" in statuses
     assert "completed" not in statuses
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_parse_tool_calls_missing_end_tool():
+    calls = parse_tool_calls("TOOL write path=solution.py\nprint('hi')\nTOOL ls")
+    assert calls[0]["tool"] == "write"
+    assert "missing END_TOOL" in (calls[0].get("error") or "")
+    assert all(c.get("tool") != "ls" for c in calls)
+
+
+_PASSING_NO_SKILL = (
+    "TOOL write path=solution.py\n"
+    "def is_palindrome(s: str) -> bool:\n"
+    "    n = ''.join(c.lower() for c in s if c.isalnum())\n"
+    "    return n == n[::-1]\n"
+    "END_TOOL\n"
+    "TOOL write path=THEORY.md\n"
+    "Skipped skills.\n"
+    "END_TOOL\n"
+    "TOOL test\n"
+)
+
+
+def test_harness_pass_without_skill_read_still_passes(monkeypatch):
+    import os
+
+    scores, transport = _run_fake_race(monkeypatch, _PASSING_NO_SKILL)
+    results = _executor_results(transport.rounds)
+    assert scores["a"] == 90.0
+    assert results, "expected EXECUTOR_RESULT"
+    assert all(r.get("passed") is True for r in results)
+    assert all(r.get("outcome") == "TEST_PASS" for r in results)
+    assert all(r.get("skill_read_ok") is False for r in results)
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_fetch_url_blocked_ssrf():
+    from agent_arena.sandbox.executors.advanced_executor import _fetch_url_blocked
+
+    assert _fetch_url_blocked("http://127.0.0.1/")
+    assert _fetch_url_blocked("http://localhost/secret")
+    assert _fetch_url_blocked("http://169.254.169.254/latest/meta-data")
+    assert _fetch_url_blocked("http://10.0.0.1/")
+    assert _fetch_url_blocked("file:///etc/passwd")
+    assert _fetch_url_blocked("ftp://example.com/x")
+    assert _fetch_url_blocked("not-a-url")
+
+
+def test_tool_session_fetch_blocks_loopback(tmp_path):
+    sess = ToolSession(tmp_path / "work")
+    out = sess.fetch("http://127.0.0.1/")
+    assert "ERROR" in out
+    assert "blocked" in out.lower()
+
+
+def test_fighters_run_in_parallel(monkeypatch):
+    import os
+    import threading
+    import time
+
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+
+    overlap = threading.Event()
+    started: dict[str, float] = {}
+
+    class Slow(FakeTransport):
+        def post(self, path, json):
+            if path == "/internal/model":
+                mid = str(json.get("model_id") or "")
+                started[mid] = time.time()
+                if len(started) >= 2:
+                    overlap.set()
+                overlap.wait(2.0)
+            return super().post(path, json)
+
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    transport = Slow()
+    transport.model_replies = {"a": _PASSING_TOOLS, "b": _PASSING_TOOLS}
+    transport.judge_result = {
+        "scores": {"a": 90.0, "b": 80.0},
+        "justifications": {"a": "pass", "b": "pass"},
+        "judge_model": "mock",
+    }
+    t0 = time.time()
+    scores = AdvancedExecutor().run_battle(
+        battle_id="par-1",
+        format_config={**_RACE_FORMAT, "max_tool_turns": 2, "max_tool_steps": 20},
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=60,
+        role_to_model={"player_a": "a", "player_b": "b"},
+        client=InternalClient(transport),
+    )
+    elapsed = time.time() - t0
+    assert scores["a"] == 90.0
+    assert overlap.is_set()
+    assert elapsed < 1.5
     os.environ.pop("ARENA_IN_SANDBOX", None)

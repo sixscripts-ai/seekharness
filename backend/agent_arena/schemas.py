@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -34,3 +36,4 @@ class BattleCreate(BaseModel):
     round_visibility: str = Field(default="isolated", pattern="^(isolated|open)$")
     save: bool = False
     judge_provider_id: str | None = None
+    difficulty: Literal["novice", "general", "advanced", "expert"] | None = None

@@ -5,7 +5,7 @@ from tests.conftest import requires_appwrite
 
 def test_collection_spec_has_expected_battles_fields():
     battle_fields = {a[0] for a in COLLECTIONS["battles"]}
-    assert {"user_id", "format_id", "model_ids", "status", "saved"} <= battle_fields
+    assert {"user_id", "format_id", "model_ids", "status", "saved", "difficulty"} <= battle_fields
 
 
 @requires_appwrite

@@ -37,6 +37,10 @@ def _load_battle(battle_id: str):
         database_id, "formats", battle.data["format_id"]
     )
     cfg = json.loads(format_doc.data["config"])
+    difficulty = battle.data.get("difficulty")
+    if difficulty:
+        cfg = dict(cfg)
+        cfg["difficulty"] = difficulty
     return databases, database_id, battle, cfg
 
 

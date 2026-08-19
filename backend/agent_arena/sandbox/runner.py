@@ -34,12 +34,16 @@ def run_battle_loop(
 ) -> dict:
     """Resolve the executor and drive the battle. Returns scores dict."""
     deadline = time.time() + timeout_seconds
-    stop = threading.Event()
+    abort = threading.Event()
+    watchdog_done = threading.Event()
 
     def watchdog():
         remaining = max(0.0, deadline - time.time())
-        if stop.wait(remaining):
+        if watchdog_done.wait(remaining):
             return
+        if watchdog_done.is_set():
+            return
+        abort.set()
         if on_status:
             on_status("failed")
 
@@ -72,11 +76,11 @@ def run_battle_loop(
             status_check=status_check,
             on_status=on_status,
             deadline=deadline,
-            stop=stop,
+            stop=abort,
         )
     except Exception:
         if on_status:
             on_status("failed")
         raise
     finally:
-        stop.set()
+        watchdog_done.set()

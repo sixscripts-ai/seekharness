@@ -112,3 +112,52 @@ def test_escape_refusal_sets_extract_ok_false():
     assert "escaped=False" in art
     assert WIN_MARKER not in art.split("---STDOUT---")[1].split("---STDERR---")[0]
     assert arts[0].get("escaped") is False
+
+
+def test_build_and_break_shares_workspace_across_phases():
+    import json
+
+    marker = "LIVE_SANDBOX_TOKEN_QQZ"
+    transport = FakeTransport()
+    transport.model_replies = {
+        "builder": (
+            "```python\n"
+            f"# {marker}\n"
+            "print('SANDBOX_READY')\n"
+            "```\n"
+        ),
+        "breaker": f"```python\nprint('{WIN_MARKER}')\n```\n",
+    }
+    transport.judge_result = {
+        "scores": {"builder": 50.0, "breaker": 50.0},
+        "justifications": {"builder": "ok", "breaker": "ok"},
+        "judge_model": "mock",
+    }
+    client = InternalClient(transport)
+    ex = BuildAndBreakExecutor()
+    scores = ex.run_battle(
+        battle_id="bb-share",
+        format_config={
+            "name": "Build and break",
+            "engine": "build_and_break",
+            "roles": ["builder", "breaker", "judge"],
+            "phases": [
+                {"name": "build", "participants": ["builder"]},
+                {"name": "break", "participants": ["breaker"]},
+            ],
+            "exec_timeout_seconds": 10,
+            "judge_rubric": "score",
+        },
+        model_ids=["builder", "breaker"],
+        round_visibility="open",
+        timeout_seconds=30,
+        role_to_model={"builder": "builder", "breaker": "breaker"},
+        client=client,
+    )
+    assert scores["builder"] == 50.0
+    breaker_msgs = [
+        body.get("messages")
+        for path, body in transport.calls
+        if path == "/internal/model" and body.get("model_id") == "breaker"
+    ]
+    assert marker in json.dumps(breaker_msgs)

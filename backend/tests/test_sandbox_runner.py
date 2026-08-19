@@ -202,3 +202,75 @@ def test_finish_sends_merged_weights_to_judge():
     assert weights["tests"] == 0.6
     assert weights["skills"] == 0.3
     assert weights["theory"] == 0.1
+
+
+def test_watchdog_sets_stop_and_aborts_workers(monkeypatch):
+    import time
+
+    seen: dict = {}
+
+    class SlowExec:
+        def run_battle(self, **kwargs):
+            seen["stop"] = kwargs.get("stop")
+            t0 = time.time()
+            while kwargs["stop"] is None or not kwargs["stop"].is_set():
+                if time.time() - t0 > 5:
+                    break
+                time.sleep(0.02)
+            seen["elapsed"] = time.time() - t0
+            return {}
+
+    monkeypatch.setattr(
+        "agent_arena.sandbox.runner.get_executor", lambda cfg: SlowExec()
+    )
+    statuses: list[str] = []
+    t0 = time.time()
+    scores = run_battle_loop(
+        battle_id="wd1",
+        format_config={
+            "name": "x",
+            "engine": "scripted",
+            "roles": ["a", "b", "judge"],
+            "phases": [{"name": "p", "participants": ["a", "b"]}],
+        },
+        model_ids=["m1", "m2"],
+        timeout_seconds=0.2,
+        client=InternalClient(FakeTransport()),
+        on_status=statuses.append,
+    )
+    assert scores == {}
+    assert seen["stop"] is not None and seen["stop"].is_set()
+    assert seen["elapsed"] < 2.0
+    assert time.time() - t0 < 2.0
+    assert "failed" in statuses
+
+
+def test_run_battle_loop_applies_difficulty(monkeypatch):
+    seen: dict = {}
+
+    class Capture:
+        def run_battle(self, **kwargs):
+            seen["cfg"] = kwargs["format_config"]
+            return {"m1": 1.0, "m2": 2.0}
+
+    monkeypatch.setattr(
+        "agent_arena.sandbox.runner.get_executor", lambda cfg: Capture()
+    )
+    scores = run_battle_loop(
+        battle_id="diff-1",
+        format_config={
+            "name": "x",
+            "engine": "scripted",
+            "roles": ["a", "b", "judge"],
+            "phases": [{"name": "p", "participants": ["a", "b"]}],
+            "difficulty": "novice",
+        },
+        model_ids=["m1", "m2"],
+        timeout_seconds=30,
+        client=InternalClient(FakeTransport()),
+        on_status=lambda s: None,
+    )
+    assert scores == {"m1": 1.0, "m2": 2.0}
+    assert seen["cfg"]["difficulty"] == "novice"
+    assert seen["cfg"]["max_tool_steps"] == 8
+    assert seen["cfg"]["scoring"]["weights"]["tests"] == 0.7
