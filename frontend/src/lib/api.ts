@@ -125,6 +125,7 @@ export type BattleCreate = {
   round_visibility: "isolated" | "open";
   save: boolean;
   judge_provider_id?: string | null;
+  difficulty?: "novice" | "general" | "advanced" | "expert" | null;
 };
 
 export type BattleOut = {
@@ -138,6 +139,7 @@ export type BattleOut = {
   timeout_seconds: number;
   round_visibility: string;
   saved: boolean;
+  difficulty?: string | null;
   sandbox_id?: string;
   preview_urls?: Record<string, string>;
 };

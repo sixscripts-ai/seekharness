@@ -41,6 +41,7 @@ export default function NewBattle() {
   const [judgeId, setJudgeId] = useState("");
   const [timeoutSec, setTimeoutSec] = useState(600);
   const [visibility, setVisibility] = useState<"isolated" | "open">("isolated");
+  const [difficulty, setDifficulty] = useState<"novice" | "general" | "advanced" | "expert">("general");
   const [save, setSave] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -98,6 +99,7 @@ export default function NewBattle() {
         arena_size: selected.length,
         timeout_seconds: timeoutSec,
         round_visibility: visibility,
+        difficulty,
         save,
         judge_provider_id: judgeId || null,
       });
@@ -139,7 +141,7 @@ export default function NewBattle() {
             </h1>
           </div>
           <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
-            {need} fighters · {visibility} · {timeoutSec}s
+            {need} fighters · {visibility} · {difficulty} · {timeoutSec}s
           </div>
         </div>
       </div>
@@ -212,7 +214,7 @@ export default function NewBattle() {
       </div>
 
       <div className="mx-auto grid max-w-[1360px] grid-cols-12 gap-0 border-b border-border">
-        <div className="col-span-12 space-y-2 border-b border-border px-6 py-5 md:col-span-4 md:border-b-0 md:border-r">
+        <div className="col-span-12 space-y-2 border-b border-border px-6 py-5 md:col-span-3 md:border-b-0 md:border-r">
           <label className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Judge</label>
           <select className="select font-mono text-[12px]" value={judgeId} onChange={(e) => setJudgeId(e.target.value)}>
             <option value="">Default host judge (Kimi-K3)</option>
@@ -224,7 +226,16 @@ export default function NewBattle() {
           <label className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Timeout</label>
           <input type="number" min={30} max={3600} value={timeoutSec} onChange={(e) => setTimeoutSec(Number(e.target.value))} className="input font-mono" />
         </div>
-        <div className="col-span-6 space-y-2 px-6 py-5 md:col-span-3 md:border-r">
+        <div className="col-span-6 space-y-2 border-r border-border px-6 py-5 md:col-span-2">
+          <label className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Difficulty</label>
+          <select value={difficulty} onChange={(e) => setDifficulty(e.target.value as typeof difficulty)} className="select font-mono text-[12px]">
+            <option value="novice">novice</option>
+            <option value="general">general</option>
+            <option value="advanced">advanced</option>
+            <option value="expert">expert</option>
+          </select>
+        </div>
+        <div className="col-span-6 space-y-2 px-6 py-5 md:col-span-2 md:border-r">
           <label className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Visibility</label>
           <select value={visibility} onChange={(e) => setVisibility(e.target.value as "isolated" | "open")} className="select font-mono text-[12px]">
             <option value="isolated">isolated</option>
