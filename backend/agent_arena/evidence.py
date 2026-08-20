@@ -79,6 +79,9 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
     if isinstance(checks, dict):
         present = [str(r) for r in (checks.get("present") or [])]
         missing = [str(r) for r in (checks.get("missing") or [])]
+        check_required = [str(r) for r in (checks.get("required") or [])]
+        if check_required:
+            required = check_required
     else:
         files = result.get("files") or {}
         fkeys = set(files.keys()) if isinstance(files, dict) else set()
@@ -177,7 +180,8 @@ def build_battle_evidence(
     for mid in sorted(by_model):
         slot = by_model[mid]
         phases = {
-            ph: build_phase_result(slot["results"].get(ph), cfg) for ph in phases_order
+            ph: build_phase_result(res, cfg)
+            for ph, res in (slot.get("results") or {}).items()
         }
         fighters.append(
             {

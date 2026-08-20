@@ -102,19 +102,59 @@ def _fighter_advantage(fa: dict, fb: dict, weights: dict) -> float:
             w = 1.0
         if pa is None and pb is None:
             continue
-        if pa is None:
-            total -= w
+        if pa is None or pb is None:
             continue
-        if pb is None:
-            total += w
-            continue
-        # compare returns -1 when pa is better; flip so advantage is positive.
         total += w * (-compare_phase_result(pa, pb))
     return total
 
 
 def _fighter_ineligible(fighter: dict) -> bool:
     return any(_is_ineligible(pr) for pr in (fighter.get("phases") or {}).values())
+
+
+def _fighter_verified(fighter: dict) -> bool:
+    prs = list((fighter.get("phases") or {}).values())
+    if not prs:
+        return False
+    for p in prs:
+        if p.get("status") != "completed" or _is_ineligible(p):
+            return False
+        c = p.get("correctness") or {}
+        if not c.get("total") or c.get("passed") != c.get("total"):
+            return False
+    return True
+
+
+def _phase_sets_disjoint(fighters: list) -> bool:
+    if len(fighters) < 2:
+        return False
+    seen: list[set] = []
+    for f in fighters:
+        keys = set((f.get("phases") or {}))
+        for other in seen:
+            if keys & other:
+                return False
+        seen.append(keys)
+    return True
+
+
+def _battle_plan_rank_key(fighter: dict, phase_order: list[str]) -> tuple:
+    phases = fighter.get("phases") or {}
+    idxs = [phase_order.index(p) for p in phases if p in phase_order]
+    latest = max(idxs) if idxs else -1
+    earliest_completed = min(
+        (
+            phase_order.index(p)
+            for p, pr in phases.items()
+            if p in phase_order and pr.get("status") == "completed"
+        ),
+        default=999,
+    )
+    if _fighter_verified(fighter):
+        return (2, latest)
+    if earliest_completed < 999:
+        return (1, -earliest_completed)
+    return (0, latest)
 
 
 def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
@@ -147,15 +187,31 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
     weights = cfg.get("scoring_weights") or {}
     if not isinstance(weights, dict):
         weights = {}
+    phase_order = list(evidence.get("phases") or [])
+    use_plan_rank = bool(cfg.get("battle_plan")) and _phase_sets_disjoint(fighters)
 
     def cmp_fighters(x, y):
+        if use_plan_rank:
+            kx = _battle_plan_rank_key(x, phase_order)
+            ky = _battle_plan_rank_key(y, phase_order)
+            if kx != ky:
+                return -1 if kx > ky else 1
+            return 0
         adv = _fighter_advantage(x, y, weights)
         return -1 if adv > 0 else (1 if adv < 0 else 0)
 
     ordered = sorted(eligible, key=functools.cmp_to_key(cmp_fighters))
     groups: list[list[dict]] = []
     for f in ordered:
-        if groups and _fighter_advantage(groups[-1][0], f, weights) == 0:
+        tied = False
+        if groups:
+            if use_plan_rank:
+                tied = _battle_plan_rank_key(groups[-1][0], phase_order) == (
+                    _battle_plan_rank_key(f, phase_order)
+                )
+            else:
+                tied = _fighter_advantage(groups[-1][0], f, weights) == 0
+        if tied:
             groups[-1].append(f)
         else:
             groups.append([f])
@@ -169,21 +225,7 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
         else:
             tie = True
 
-    # "A winner" and "a verified successful solution" are different facts.
-    # Ranking still happens when nobody passed; the verified flag must not.
-    def _verified(f):
-        prs = list((f.get("phases") or {}).values())
-        if not prs:
-            return False
-        for p in prs:
-            if p.get("status") != "completed" or _is_ineligible(p):
-                return False
-            c = p.get("correctness") or {}
-            if not c.get("total") or c.get("passed") != c.get("total"):
-                return False
-        return True
-
-    verified = [f["fighter_id"] for f in fighters if _verified(f)]
+    verified = [f["fighter_id"] for f in fighters if _fighter_verified(f)]
     return {
         "winner": winner,
         "tie": tie,

@@ -1123,6 +1123,7 @@ class AdvancedExecutor(Executor):
         canonical_test_code: str | None = None,
         required_artifacts: list[str] | None = None,
         phase_type: str | None = None,
+        emit_action=None,
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -1155,6 +1156,15 @@ class AdvancedExecutor(Executor):
         # canonical harness. A mid-battle TEST_PASS observed through a tampered
         # harness can never become the recorded outcome.
         test_res = sess.test("")
+        if emit_action is not None:
+            emit_action(
+                model_id,
+                "test",
+                target="tests/test_target.py",
+                state="done",
+                result=str(test_res or "")[:4000],
+                exec_id="exec_" + uuid.uuid4().hex[:12],
+            )
         passed = self._harness_passed(test_res)
         skill_read_ok = bool(chosen_skills) and set(chosen_skills).issubset(
             sess.skill_reads
@@ -1175,6 +1185,7 @@ class AdvancedExecutor(Executor):
                 ((format_config or {}).get("artifacts") or {}).get("required") or []
             )
         artifact_checks = {
+            "required": list(required_artifacts),
             "present": [r for r in required_artifacts if r in files],
             "missing": [r for r in required_artifacts if r not in files],
         }
@@ -1457,10 +1468,6 @@ class AdvancedExecutor(Executor):
                 kwargs.setdefault("phase_id", local_phase)
                 return _record_artifact(*args, **kwargs)
 
-            def record_artifact(*args, **kwargs):
-                kwargs.setdefault("phase_id", local_phase)
-                return _record_artifact(*args, **kwargs)
-
             halted = halted_now()
             if halted:
                 mark_halted(halted)
@@ -1566,6 +1573,7 @@ class AdvancedExecutor(Executor):
                     parse_errors=metrics["parse_errors"],
                     canonical_test_code=test_code,
                     required_artifacts=required_outputs,
+                    emit_action=emit_action,
                     **extra,
                 )
 
@@ -1755,6 +1763,52 @@ class AdvancedExecutor(Executor):
             plan = parse_battle_plan(format_config)
             if plan is not None:
                 snapshots: dict = {}
+
+                def record_missing_handoff(phase, missing_refs):
+                    model_id = role_to_model.get(phase.actor)
+                    if not model_id:
+                        return
+                    missing = [str(r) for r in missing_refs]
+                    result = {
+                        "executor_version": ADVANCED_EXECUTOR_VERSION,
+                        "model_id": model_id,
+                        "role": phase.actor,
+                        "phase": phase.phase_id,
+                        "phase_type": phase.phase_type,
+                        "outcome": "TEST_FAIL",
+                        "passed": False,
+                        "steps": 0,
+                        "tool_errors": 0,
+                        "parse_errors": 0,
+                        "artifact_checks": {
+                            "required": missing,
+                            "present": [],
+                            "missing": missing,
+                        },
+                        "policy": {
+                            "status": "invalid",
+                            "violations": ["missing-handoff"],
+                        },
+                        "chosen_skills": [],
+                        "theory": "",
+                        "skill_read_ok": False,
+                        "preview_url": "",
+                    }
+                    with io_lock:
+                        line = self.emit_result(
+                            client, battle_id, phase.phase_id, result
+                        )
+                        seq["n"] += 1
+                        client.round(
+                            battle_id,
+                            phase.phase_id,
+                            model_id,
+                            line,
+                            event_type="result",
+                            sequence=seq["n"],
+                        )
+                        results.append(result)
+
                 for idx, phase in enumerate(plan.phases):
                     halted = halted_now()
                     if halted:
@@ -1771,11 +1825,35 @@ class AdvancedExecutor(Executor):
                             data = files.get(ref)
                             if isinstance(data, (bytes, bytearray)):
                                 starter[ref] = bytes(data)
+                    needed = list(
+                        dict.fromkeys(
+                            list(phase.handoff_artifacts or [])
+                            + list(phase.protected_artifacts or [])
+                        )
+                    )
+                    missing = [rel for rel in needed if rel not in starter]
+                    if phase.handoff_from and needed and missing:
+                        record_missing_handoff(phase, missing)
+                        snapshots[phase.phase_id] = {
+                            "files": {},
+                            "manifest": [{"path": rel, "missing": True} for rel in missing],
+                        }
+                        continue
                     protected = {
                         rel: starter[rel]
                         for rel in phase.protected_artifacts
                         if rel in starter
                     }
+                    if phase.protected_artifacts and not protected:
+                        record_missing_handoff(phase, list(phase.protected_artifacts))
+                        snapshots[phase.phase_id] = {
+                            "files": {},
+                            "manifest": [
+                                {"path": rel, "missing": True}
+                                for rel in phase.protected_artifacts
+                            ],
+                        }
+                        continue
                     try:
                         run_fighter(
                             idx,
@@ -1794,6 +1872,8 @@ class AdvancedExecutor(Executor):
                     work = root / f"work_{phase.actor}"
                     snap_refs = phase.required_outputs or phase.handoff_artifacts
                     snapshots[phase.phase_id] = snapshot_handoff(work, snap_refs)
+                    if work.exists():
+                        shutil.rmtree(work, ignore_errors=True)
             else:
                 jobs = [
                     (idx, role)

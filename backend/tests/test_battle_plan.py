@@ -128,6 +128,8 @@ TOOL write path=auth.py
 print('CHEAT')
 END_TOOL
 TOOL write path=exploit.py
+from pathlib import Path
+assert not Path('../work_builder').exists()
 import auth
 tok = auth.login('admin', 'nope')
 print('AUTH_BROKEN', tok)
@@ -135,7 +137,21 @@ END_TOOL
 TOOL write path=THEORY.md
 Used the admin shortcut.
 END_TOOL
-TOOL test
+DONE
+"""
+
+_BREAKER_STUB = """SKILLS: python-kata-fixer
+TOOL write path=exploit.py
+print('AUTH_BROKEN')
+END_TOOL
+DONE
+"""
+
+_BUILDER_NO_AUTH = """SKILLS: python-kata-fixer
+TOOL write path=THEORY.md
+No auth.py on purpose.
+END_TOOL
+DONE
 """
 
 
@@ -151,13 +167,13 @@ def _executor_results(rounds):
     return found
 
 
-def test_auth_vs_breaker_two_phase_fake_battle(monkeypatch):
+def _run_auth_battle(monkeypatch, builder_reply, breaker_reply):
     from agent_arena.sandbox.client import FakeTransport, InternalClient
 
     monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
     monkeypatch.setenv("ARENA_PREVIEW", "0")
     transport = FakeTransport()
-    transport.model_replies = {"builder": _BUILDER_OK, "breaker": _BREAKER_OK}
+    transport.model_replies = {"builder": builder_reply, "breaker": breaker_reply}
     transport.judge_result = {
         "scores": {"builder": 70.0, "breaker": 80.0},
         "justifications": {"builder": "ok", "breaker": "ok"},
@@ -177,7 +193,15 @@ def test_auth_vs_breaker_two_phase_fake_battle(monkeypatch):
         role_to_model={"builder": "builder", "breaker": "breaker"},
         client=client,
     )
-    assert scores["builder"] == 70.0
+    monkeypatch.delenv("ARENA_IN_SANDBOX", raising=False)
+    monkeypatch.delenv("ARENA_PREVIEW", raising=False)
+    return scores, transport, cfg
+
+
+def test_auth_vs_breaker_two_phase_fake_battle(monkeypatch):
+    from agent_arena import evidence, scoring
+
+    _scores, transport, cfg = _run_auth_battle(monkeypatch, _BUILDER_OK, _BREAKER_OK)
     results = _executor_results(transport.rounds)
     phases = {r.get("phase"): r for r in results}
     assert "build" in phases and "break" in phases
@@ -189,19 +213,22 @@ def test_auth_vs_breaker_two_phase_fake_battle(monkeypatch):
     assert phases["break"]["outcome"] == "TEST_PASS"
     assert (phases["build"].get("policy") or {}).get("status") == "clean"
     assert (phases["break"].get("policy") or {}).get("status") == "clean"
-    action_phases = set()
-    breaker_auth = ""
+    action_logs = []
     for r in transport.rounds:
-        if r.get("event_type") == "action_log":
-            payload = json.loads(r.get("artifact") or "{}")
-            action_phases.add(payload.get("phase_id"))
-        if r.get("event_type") == "artifact" and r.get("model_id") == "breaker":
-            art = r.get("artifact") or ""
-            if "FROZEN" in art or "admin-tok" in art or "CHEAT" in art or "auth.py" in art:
-                breaker_auth += art
+        if r.get("event_type") != "action_log":
+            continue
+        payload = json.loads(r.get("artifact") or "{}")
+        action_logs.append(payload)
+    action_phases = {p.get("phase_id") for p in action_logs}
     assert "build" in action_phases
     assert "break" in action_phases
-    # Protected restore: final breaker workspace snapshot must keep frozen auth, not CHEAT.
+    finalize_tests = [
+        p
+        for p in action_logs
+        if p.get("action") == "test"
+        and str(p.get("exec_id") or "").startswith("exec_")
+    ]
+    assert finalize_tests
     break_files = None
     for r in transport.rounds:
         if r.get("event_type") != "artifact" or r.get("model_id") != "breaker":
@@ -217,5 +244,48 @@ def test_auth_vs_breaker_two_phase_fake_battle(monkeypatch):
     assert "admin-tok" in auth_src
     assert "CHEAT" not in auth_src
     assert "exploit.py" in (break_files.get("files") or {})
-    monkeypatch.delenv("ARENA_IN_SANDBOX", raising=False)
-    monkeypatch.delenv("ARENA_PREVIEW", raising=False)
+    summary = evidence.build_battle_evidence("auth-1", results, cfg)
+    decision = scoring.decide_winner(summary, cfg)
+    assert decision["reason"] != "incomplete_evidence"
+    assert decision["winner"] == "breaker"
+    assert decision["verified_solution"] is True
+    assert "breaker" in decision["verified_fighters"]
+    assert set(summary["fighters"][0]["phases"]) <= {"build", "break"}
+    builder_f = next(f for f in summary["fighters"] if f["role"] == "builder")
+    breaker_f = next(f for f in summary["fighters"] if f["role"] == "breaker")
+    assert set(builder_f["phases"]) == {"build"}
+    assert set(breaker_f["phases"]) == {"break"}
+
+
+def test_stub_auth_broken_print_fails(monkeypatch):
+    _scores, transport, _cfg = _run_auth_battle(
+        monkeypatch, _BUILDER_OK, _BREAKER_STUB
+    )
+    results = _executor_results(transport.rounds)
+    phases = {r.get("phase"): r for r in results}
+    assert phases["build"]["passed"] is True
+    assert phases["break"]["passed"] is False
+
+
+def test_missing_auth_handoff_skips_break(monkeypatch):
+    _scores, transport, _cfg = _run_auth_battle(
+        monkeypatch, _BUILDER_NO_AUTH, _BREAKER_OK
+    )
+    results = _executor_results(transport.rounds)
+    phases = {r.get("phase"): r for r in results}
+    assert phases["build"]["passed"] is False
+    assert phases["break"]["passed"] is False
+    assert (phases["break"].get("policy") or {}).get("status") == "invalid"
+    assert "missing-handoff" in (phases["break"].get("policy") or {}).get(
+        "violations"
+    )
+    assert not any(
+        (r.get("event_type") == "phase_start" and r.get("phase") == "break")
+        or (
+            r.get("event_type") == "action_log"
+            and json.loads(r.get("artifact") or "{}").get("phase_id") == "break"
+            and json.loads(r.get("artifact") or "{}").get("action")
+            in {"write", "read", "preview"}
+        )
+        for r in transport.rounds
+    )

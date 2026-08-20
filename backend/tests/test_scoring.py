@@ -253,3 +253,53 @@ def test_evidence_builds_from_executor_result_shape():
 def test_fighters_sorted_for_stable_output():
     summary, _, _ = _decide([_mk("B"), _mk("A")])
     assert [f["fighter_id"] for f in summary["fighters"]] == ["A", "B"]
+
+
+def test_battle_plan_disjoint_phases_not_incomplete():
+    builder = _mk(
+        "builder",
+        phase="build",
+        required=["auth.py"],
+        tests={"passed": 1, "total": 1},
+    )
+    builder["role"] = "builder"
+    breaker = _mk(
+        "breaker",
+        phase="break",
+        required=["exploit.py"],
+        tests={"passed": 1, "total": 1},
+    )
+    breaker["role"] = "breaker"
+    cfg = {"battle_plan": True}
+    summary, decision, scores = _decide([builder, breaker], cfg=cfg)
+    assert "break" not in summary["fighters"][0]["phases"] or (
+        next(f for f in summary["fighters"] if f["fighter_id"] == "builder")["phases"].keys()
+        == {"build"}
+    )
+    bld = next(f for f in summary["fighters"] if f["fighter_id"] == "builder")
+    brk = next(f for f in summary["fighters"] if f["fighter_id"] == "breaker")
+    assert set(bld["phases"]) == {"build"}
+    assert set(brk["phases"]) == {"break"}
+    assert decision["reason"] != "incomplete_evidence"
+    assert decision["winner"] == "breaker"
+    assert decision["verified_solution"] is True
+    assert "breaker" in decision["verified_fighters"]
+    assert scores is not None
+    assert scores["breaker"] > scores["builder"]
+
+
+def test_battle_plan_only_builder_verified_wins():
+    builder = _mk("builder", phase="build", required=["auth.py"])
+    builder["role"] = "builder"
+    breaker = _mk(
+        "breaker",
+        phase="break",
+        outcome="TEST_FAIL",
+        passed=False,
+        required=["exploit.py"],
+    )
+    breaker["role"] = "breaker"
+    _, decision, _ = _decide([builder, breaker], cfg={"battle_plan": True})
+    assert decision["reason"] == "deterministic"
+    assert decision["winner"] == "builder"
+    assert decision["verified_fighters"] == ["builder"]
