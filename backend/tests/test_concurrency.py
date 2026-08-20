@@ -1,8 +1,6 @@
-from appwrite.query import Query
-
 from agent_arena import db
 from agent_arena.battles import MAX_ACTIVE_BATTLES, active_battle_count
-from tests.conftest import make_user_id, requires_appwrite
+from tests.conftest import make_user_id, playable_format_id, requires_appwrite
 
 
 @requires_appwrite
@@ -30,8 +28,7 @@ def test_active_count_and_cap_rejection(client):
 
     try:
         assert active_battle_count(databases, database_id, user_id) == MAX_ACTIVE_BATTLES
-        formats = databases.list_documents(database_id, "formats", queries=[Query.limit(1)])
-        format_id = formats.documents[0].id
+        format_id = playable_format_id()
         resp = client.post("/battles", json={
             "format_id": format_id,
             "model_ids": ["host:openrouter-free", "host:openrouter-free"],

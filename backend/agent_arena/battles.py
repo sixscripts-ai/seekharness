@@ -10,6 +10,7 @@ from . import db, event_bus, mock_runner, sandbox_launcher
 from .auth import get_current_user, require_owner
 from .providers import is_host_model
 from .schemas import BattleCreate
+from .seed_formats import is_playable_format
 
 router = APIRouter(prefix="/battles", tags=["battles"])
 
@@ -71,6 +72,8 @@ def create_battle(
     except AppwriteException as exc:
         raise HTTPException(status_code=404, detail="Unknown format") from exc
     cfg = json.loads(format_doc.data["config"])
+    if not is_playable_format(cfg):
+        raise HTTPException(status_code=400, detail="Format is not available")
     playable = _playable_roles(cfg)
     if len(body.model_ids) != len(playable):
         raise HTTPException(

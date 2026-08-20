@@ -1,30 +1,60 @@
 from agent_arena.seed_formats import (
+    CATALOG_FORMAT_DEFINITIONS,
     ENGINE_TEMPLATES,
     FORMAT_DEFINITIONS,
+    ALL_FORMATS,
     build_format,
+    is_playable_format,
 )
 
 
-def test_exactly_twenty_six_formats():
-    assert len(FORMAT_DEFINITIONS) == 26
+def test_exactly_seven_playable_formats():
+    assert len(FORMAT_DEFINITIONS) == 7
+    assert len(ALL_FORMATS) == 7
 
 
-def test_all_engines_covered():
-    engines = {eng for _, eng, _ in FORMAT_DEFINITIONS}
+def test_playable_names():
+    names = {name for name, _, _ in FORMAT_DEFINITIONS}
+    assert names == {
+        "Auth system vs breaker",
+        "Tool-using coding race",
+        "Debugging race",
+        "Code review duel",
+        "RE solve race",
+        "Pwn exploit race",
+        "Injection agent vs hardened agent",
+    }
+
+
+def test_catalog_kept_as_backlog():
+    catalog = {name for name, _, _ in CATALOG_FORMAT_DEFINITIONS}
+    playable = {name for name, _, _ in FORMAT_DEFINITIONS}
+    assert "WAF builder vs bypasser" in catalog
+    assert "Two-agent duel" in catalog
+    assert catalog.isdisjoint(playable)
+
+
+def test_all_engines_still_defined():
+    engines = {eng for _, eng, _ in FORMAT_DEFINITIONS + CATALOG_FORMAT_DEFINITIONS}
     assert engines == set(ENGINE_TEMPLATES)
 
 
-def test_flag_ship_names_present():
-    names = {name for name, _, _ in FORMAT_DEFINITIONS}
-    assert "WAF builder vs bypasser" in names
-    assert "Two-agent duel" in names
+def test_every_seeded_format_is_playable():
+    for cfg in ALL_FORMATS:
+        assert is_playable_format(cfg), cfg["name"]
 
 
-def test_user_selected_names_present():
-    names = {name for name, _, _ in FORMAT_DEFINITIONS}
-    assert "Pwn exploit race" in names
-    assert "Same-defense adaptive attacks" in names
-    assert "Tool-using coding race" in names
+def test_is_playable_format_gates():
+    assert is_playable_format({"engine": "agent_tool_race"})
+    assert is_playable_format({"engine": "same_target_race", "universal": True})
+    assert is_playable_format({"engine": "build_and_break", "battle_plan": True})
+    assert not is_playable_format({"engine": "build_and_break"})
+    assert not is_playable_format(
+        {"engine": "agent_tool_race", "hidden": True}
+    )
+    assert not is_playable_format(
+        {"engine": "agent_tool_race", "playable": False}
+    )
 
 
 def test_build_format_shape():

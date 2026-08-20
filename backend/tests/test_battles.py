@@ -4,10 +4,8 @@ import time
 from types import ModuleType
 
 import pytest
-from appwrite.query import Query
 
-from agent_arena import db
-from tests.conftest import make_user_id, requires_appwrite
+from tests.conftest import make_user_id, playable_format_id, requires_appwrite
 
 
 @pytest.fixture(autouse=True)
@@ -35,12 +33,7 @@ def _logout():
 
 
 def _real_format_id() -> str:
-    databases = db.get_databases()
-    res = databases.list_documents(
-        db.get_database_id(), "formats", queries=[Query.limit(1)]
-    )
-    assert res.documents, "formats collection is empty; seed it first (Task 6)"
-    return res.documents[0].id
+    return playable_format_id()
 
 
 @requires_appwrite

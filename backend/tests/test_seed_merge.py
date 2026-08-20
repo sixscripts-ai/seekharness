@@ -42,6 +42,8 @@ class FakeDatabases:
 
     def list_documents(self, database_id, collection_id, queries=None):
         name = self._name_from_queries(queries or [])
+        if name is None:
+            return _Res(list(self._store.values()))
         doc = self._store.get(name)
         return _Res([doc] if doc else [])
 
@@ -154,3 +156,39 @@ def test_creates_missing_format(monkeypatch, one_format):
     created = json.loads(fake.creates[0]["config"])
     assert created["name"] == "Debugging race"
     assert created["universal"] is True
+
+
+def test_hides_catalog_leftovers(monkeypatch, one_format):
+    monkeypatch.delenv("ARENA_SEED_FORCE", raising=False)
+    stub_cfg = {
+        "name": "WAF builder vs bypasser",
+        "engine": "build_and_break",
+        "target_code": "# TASK: Implement solution.py for this format's mission.",
+    }
+    fake = FakeDatabases(
+        {
+            "Debugging race": {
+                "name": "Debugging race",
+                "engine": "same_target_race",
+                "config": json.dumps(one_format),
+            },
+            "WAF builder vs bypasser": {
+                "name": "WAF builder vs bypasser",
+                "engine": "build_and_break",
+                "config": json.dumps(stub_cfg),
+            },
+        }
+    )
+    _install(monkeypatch, fake)
+
+    sf.seed_formats()
+
+    hidden_updates = [
+        data
+        for doc_id, data in fake.updates
+        if json.loads(data["config"]).get("name") == "WAF builder vs bypasser"
+    ]
+    assert hidden_updates
+    written = json.loads(hidden_updates[-1]["config"])
+    assert written["hidden"] is True
+    assert written["playable"] is False

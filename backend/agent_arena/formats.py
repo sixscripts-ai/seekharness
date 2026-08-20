@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header
 
 from . import db
 from .auth import get_current_user
+from .seed_formats import is_playable_format
 
 router = APIRouter(prefix="/formats", tags=["formats"])
 
@@ -26,6 +27,8 @@ def list_formats(_user_id: Optional[str] = Depends(get_optional_user)):
     out = []
     for doc in res.documents:
         cfg = json.loads(doc.data["config"])
+        if not is_playable_format(cfg):
+            continue
         out.append({
             "id": doc.id,
             "name": cfg["name"],

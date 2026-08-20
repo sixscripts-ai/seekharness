@@ -102,14 +102,47 @@ RUBRICS = {
 
 FORMAT_DEFINITIONS = [
     (
-        "WAF builder vs bypasser",
-        "build_and_break",
-        "Builder crafts a WAF rule set; breaker attempts to bypass.",
-    ),
-    (
         "Auth system vs breaker",
         "build_and_break",
         "Builder builds an auth system; breaker tries to break in.",
+    ),
+    (
+        "Tool-using coding race",
+        "agent_tool_race",
+        "Fix shared TARGET via toolbelt competition using mounted .agents/skills.",
+    ),
+    (
+        "Debugging race",
+        "same_target_race",
+        "Both debug the same broken program; first correct fix wins.",
+    ),
+    (
+        "Code review duel",
+        "same_target_race",
+        "Both review the same vulnerable code for bugs first.",
+    ),
+    (
+        "RE solve race",
+        "same_target_race",
+        "Both reverse a binary; first correct solution wins.",
+    ),
+    (
+        "Pwn exploit race",
+        "same_target_race",
+        "Both race to exploit the same target binary.",
+    ),
+    (
+        "Injection agent vs hardened agent",
+        "agent_vs_agent",
+        "Injection agent vs hardened agent.",
+    ),
+]
+
+CATALOG_FORMAT_DEFINITIONS = [
+    (
+        "WAF builder vs bypasser",
+        "build_and_break",
+        "Builder crafts a WAF rule set; breaker attempts to bypass.",
     ),
     (
         "Code sandbox vs escapee",
@@ -125,21 +158,6 @@ FORMAT_DEFINITIONS = [
         "Payload generator vs detection",
         "script_vs_defense",
         "Attacker generates payloads; defender builds detection rules.",
-    ),
-    (
-        "Code review duel",
-        "same_target_race",
-        "Both review the same vulnerable code for bugs first.",
-    ),
-    (
-        "Debugging race",
-        "same_target_race",
-        "Both debug the same broken program; first correct fix wins.",
-    ),
-    (
-        "RE solve race",
-        "same_target_race",
-        "Both reverse a binary; first correct solution wins.",
     ),
     (
         "Prompt injection vs hygiene",
@@ -160,11 +178,6 @@ FORMAT_DEFINITIONS = [
         "Two-agent duel",
         "agent_vs_agent",
         "Two autonomous agents duel with full tool use.",
-    ),
-    (
-        "Pwn exploit race",
-        "same_target_race",
-        "Both race to exploit the same target binary.",
     ),
     (
         "Credential hunt",
@@ -209,19 +222,9 @@ FORMAT_DEFINITIONS = [
         "Autonomous attacker vs autonomous guardrails.",
     ),
     (
-        "Injection agent vs hardened agent",
-        "agent_vs_agent",
-        "Injection agent vs hardened agent.",
-    ),
-    (
         "Same-defense adaptive attacks",
         "high_complexity",
         "Same defense, adaptively re-attacked across phases.",
-    ),
-    (
-        "Tool-using coding race",
-        "agent_tool_race",
-        "Fix shared TARGET via toolbelt competition using mounted .agents/skills.",
     ),
 ]
 
@@ -943,6 +946,15 @@ ALL_FORMATS = [
 ]
 
 
+def is_playable_format(cfg: dict | None) -> bool:
+    cfg = cfg or {}
+    if cfg.get("hidden") is True or cfg.get("playable") is False:
+        return False
+    if cfg.get("battle_plan") or cfg.get("universal"):
+        return True
+    return cfg.get("engine") == "agent_tool_race"
+
+
 def _deep_merge_missing(base: dict, overlay: dict) -> dict:
     """Return `overlay` with any keys missing from it filled in from `base`.
 
@@ -1013,4 +1025,39 @@ def seed_formats() -> int:
             }
             databases.create_document(database_id, "formats", "unique()", payload)
         count += 1
+    _hide_catalog_formats(databases, database_id)
     return count
+
+
+def _hide_catalog_formats(databases, database_id: str) -> None:
+    playable_names = {cfg["name"] for cfg in ALL_FORMATS}
+    res = databases.list_documents(
+        database_id,
+        "formats",
+        queries=[Query.limit(100)],
+    )
+    for doc in res.documents:
+        try:
+            live_cfg = json.loads(doc.data.get("config") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            live_cfg = {}
+        name = live_cfg.get("name") or doc.data.get("name")
+        if name in playable_names:
+            continue
+        if live_cfg.get("hidden") is True and live_cfg.get("playable") is False:
+            continue
+        hidden = dict(live_cfg)
+        hidden["hidden"] = True
+        hidden["playable"] = False
+        if "name" not in hidden:
+            hidden["name"] = name
+        databases.update_document(
+            database_id,
+            "formats",
+            doc.id,
+            {
+                "name": hidden.get("name") or name,
+                "engine": doc.data.get("engine") or hidden.get("engine") or "",
+                "config": json.dumps(hidden),
+            },
+        )
