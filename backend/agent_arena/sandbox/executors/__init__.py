@@ -29,7 +29,7 @@ def get_executor(engine_or_config):
     if cls is None:
         slug = cfg.get("id") or cfg.get("slug") or ""
         cls = FORMAT_EXECUTORS.get(slug)
-    if cls is None and cfg.get("universal"):
+    if cls is None and (cfg.get("battle_plan") or cfg.get("universal")):
         cls = AdvancedExecutor
     if cls is None:
         engine = cfg.get("engine", "scripted")

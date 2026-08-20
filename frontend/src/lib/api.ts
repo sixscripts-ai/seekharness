@@ -218,10 +218,11 @@ export function playableRoleCount(format: FormatOut): number {
 
 /**
  * A format runs the real in-sandbox toolbelt (AdvancedExecutor) when its engine
- * is `agent_tool_race` or its config opts in with `universal: true`. These are
- * the only formats that stream tool activity (action_log) to the Tools tab.
+ * is `agent_tool_race`, or its config opts in with `universal` / `battle_plan`.
+ * These formats stream tool activity (action_log) to the Tools tab.
  */
 export function isToolUsingFormat(format: FormatOut): boolean {
   if (format.engine === "agent_tool_race") return true;
-  return Boolean(formatConfig(format).universal);
+  const cfg = formatConfig(format);
+  return Boolean(cfg.universal || cfg.battle_plan);
 }

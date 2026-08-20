@@ -355,6 +355,137 @@ FORMAT_EXTRA = {
             "expected": ["THEORY.md"],
         },
     },
+    "Auth system vs breaker": {
+        "battle_plan": True,
+        "target_code": (
+            "# TASK: Implement auth.py with register, login, and verify.\n"
+            "# register(username, password) stores a user; reject empty username or password.\n"
+            "# login(username, password) returns a token on success, None on failure.\n"
+            "# verify(token) returns the username or None.\n"
+            "# Empty passwords must never authenticate. Do not add a backdoor.\n"
+        ),
+        "test_code": (
+            "import auth\n"
+            "\n"
+            "def main() -> None:\n"
+            "    auth.register('alice', 'secret1')\n"
+            "    tok = auth.login('alice', 'secret1')\n"
+            "    assert tok\n"
+            "    assert auth.verify(tok) == 'alice'\n"
+            "    assert auth.login('alice', 'wrong') is None\n"
+            "    assert auth.login('alice', '') is None\n"
+            "    print('TEST_PASS')\n"
+            "\n"
+            "if __name__ == '__main__':\n"
+            "    main()\n"
+        ),
+        "role_test_code": {
+            "builder": (
+                "import auth\n"
+                "\n"
+                "def main() -> None:\n"
+                "    auth.register('alice', 'secret1')\n"
+                "    tok = auth.login('alice', 'secret1')\n"
+                "    assert tok\n"
+                "    assert auth.verify(tok) == 'alice'\n"
+                "    assert auth.login('alice', 'wrong') is None\n"
+                "    assert auth.login('alice', '') is None\n"
+                "    print('TEST_PASS')\n"
+                "\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"
+            ),
+            "breaker": (
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n"
+                "\n"
+                "def main() -> None:\n"
+                "    assert Path('auth.py').is_file()\n"
+                "    assert Path('exploit.py').is_file()\n"
+                "    proc = subprocess.run(\n"
+                "        [sys.executable, 'exploit.py'],\n"
+                "        capture_output=True, text=True, timeout=20,\n"
+                "    )\n"
+                "    out = (proc.stdout or '') + (proc.stderr or '')\n"
+                "    assert 'AUTH_BROKEN' in out\n"
+                "    print('TEST_PASS')\n"
+                "\n"
+                "if __name__ == '__main__':\n"
+                "    main()\n"
+            ),
+        },
+        "role_missions": {
+            "builder": (
+                "You are the builder. Write auth.py implementing register/login/verify "
+                "as specified in TARGET.md. Empty passwords must never authenticate. "
+                "Write THEORY.md. Run TOOL test. Do not add backdoors."
+            ),
+            "breaker": (
+                "You are the breaker. Frozen auth.py is already in the workspace — "
+                "do not replace it with a stub. Write exploit.py that prints AUTH_BROKEN "
+                "after obtaining a valid admin session without knowing the admin password. "
+                "Write THEORY.md. Run TOOL test."
+            ),
+        },
+        "phase_plans": [
+            {
+                "phase_id": "build",
+                "phase_type": "build",
+                "actor": "builder",
+                "required_outputs": ["auth.py"],
+                "handoff_from": [],
+                "handoff_artifacts": [],
+                "protected_artifacts": [],
+            },
+            {
+                "phase_id": "break",
+                "phase_type": "break",
+                "actor": "breaker",
+                "required_outputs": ["exploit.py"],
+                "handoff_from": ["build"],
+                "handoff_artifacts": ["auth.py"],
+                "protected_artifacts": ["auth.py"],
+            },
+        ],
+        "max_tool_turns": 6,
+        "max_tool_steps": 14,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 1,
+        "competitive": True,
+        "objectives": [
+            "Builder: implement a working auth.py that rejects empty/wrong passwords.",
+            "Breaker: exploit the frozen auth.py snapshot and print AUTH_BROKEN.",
+        ],
+        "recommended_skills": [
+            "secure-code-execution",
+            "python-kata-fixer",
+        ],
+        "environment": {"languages": ["python3"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 6,
+            "max_tool_steps": 14,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": [
+                "DONE",
+                "TEST_PASS",
+                "TEST_FAIL",
+                "STEP_BUDGET_EXCEEDED",
+            ],
+        },
+        "artifacts": {
+            "required": ["auth.py"],
+            "expected": ["exploit.py", "THEORY.md"],
+        },
+    },
     # Universal toolbelt flips. AdvancedExecutor now takes fighter roles from
     # format phases (player_a/player_b, agent_a/agent_b, ...).
     "Debugging race": {

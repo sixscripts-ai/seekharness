@@ -24,6 +24,12 @@ from pathlib import Path
 from typing import Any
 
 from .base import Executor
+from .battle_plan import (
+    parse_battle_plan,
+    restore_protected,
+    snapshot_handoff,
+    write_allowed_file,
+)
 from .procs import ProcessManager
 from .preview import (
     StaticPreviewServer,
@@ -1114,6 +1120,9 @@ class AdvancedExecutor(Executor):
         lock: threading.Lock | None = None,
         tool_errors: int = 0,
         parse_errors: int = 0,
+        canonical_test_code: str | None = None,
+        required_artifacts: list[str] | None = None,
+        phase_type: str | None = None,
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -1124,7 +1133,8 @@ class AdvancedExecutor(Executor):
         # restore the canonical harness, so a fighter can never fake TEST_PASS
         # by editing its own tests. Tampering is recorded as policy evidence.
         canonical_test_code = str(
-            ((format_config or {}).get("role_test_code") or {}).get(role)
+            canonical_test_code
+            or ((format_config or {}).get("role_test_code") or {}).get(role)
             or (format_config or {}).get("test_code")
             or DEFAULT_TEST_CODE
         )
@@ -1160,9 +1170,10 @@ class AdvancedExecutor(Executor):
             format_config.get("outcome_markers", []),
             default=outcome,
         )
-        required_artifacts = list(
-            ((format_config or {}).get("artifacts") or {}).get("required") or []
-        )
+        if required_artifacts is None:
+            required_artifacts = list(
+                ((format_config or {}).get("artifacts") or {}).get("required") or []
+            )
         artifact_checks = {
             "present": [r for r in required_artifacts if r in files],
             "missing": [r for r in required_artifacts if r not in files],
@@ -1176,6 +1187,7 @@ class AdvancedExecutor(Executor):
             "model_id": model_id,
             "role": role,
             "phase": phase,
+            "phase_type": phase_type or phase,
             "outcome": outcome,
             "passed": passed,
             "steps": sess.steps,
@@ -1320,13 +1332,15 @@ class AdvancedExecutor(Executor):
             exec_id=None,
             reason="",
             response_hash="",
+            phase_id="",
         ):
+            action_phase = phase_id or phase_name
             with io_lock:
                 seq["n"] += 1
                 payload = {
                     "battle_id": battle_id,
                     "fighter_id": model_id,
-                    "phase_id": phase_name,
+                    "phase_id": action_phase,
                     "turn_id": int(turn_id),
                     "event_sequence": int(seq["n"]),
                     "tool_step": int(tool_step),
@@ -1344,26 +1358,27 @@ class AdvancedExecutor(Executor):
                     payload["response_hash"] = response_hash
                 client.round(
                     battle_id,
-                    phase_name,
+                    action_phase,
                     model_id,
                     json.dumps(payload),
                     event_type="action_log",
                     sequence=seq["n"],
                 )
 
-        def record_artifact(model_id, artifact, role):
+        def record_artifact(model_id, artifact, role, phase_id=""):
+            art_phase = phase_id or phase_name
             with io_lock:
                 seq["n"] += 1
                 client.round(
                     battle_id,
-                    phase_name,
+                    art_phase,
                     model_id,
                     artifact,
                     sequence=seq["n"],
                 )
                 history.append(
                     {
-                        "phase": phase_name,
+                        "phase": art_phase,
                         "model_id": model_id,
                         "artifact": artifact,
                         "role": role,
@@ -1398,17 +1413,54 @@ class AdvancedExecutor(Executor):
                 if halted_status is None:
                     halted_status = reason
 
-        def role_recorded(model_id):
+        def role_recorded(model_id, token=None):
             with io_lock:
+                if token is not None:
+                    return any(
+                        (r.get("phase"), r.get("role")) == token for r in results
+                    )
                 return any(r["model_id"] == model_id for r in results)
 
-        def visible_for(role):
+        def visible_for(role, phase_id=""):
             with io_lock:
                 if round_visibility == "isolated":
-                    return [a for a in history if a.get("role") == role]
+                    return [
+                        a
+                        for a in history
+                        if a.get("role") == role
+                        and (not phase_id or a.get("phase") == phase_id)
+                    ]
                 return list(history)
 
-        def run_fighter(role_idx, role):
+        def run_fighter(
+            role_idx,
+            role,
+            *,
+            fighter_phase=None,
+            fighter_phase_type=None,
+            fighter_test_code=None,
+            starter_files=None,
+            protected_files=None,
+            required_outputs=None,
+            record_token=None,
+            _emit_action=emit_action,
+            _record_artifact=record_artifact,
+        ):
+            local_phase = fighter_phase or phase_name
+            local_phase_type = fighter_phase_type or local_phase
+
+            def emit_action(*args, **kwargs):
+                kwargs.setdefault("phase_id", local_phase)
+                return _emit_action(*args, **kwargs)
+
+            def record_artifact(*args, **kwargs):
+                kwargs.setdefault("phase_id", local_phase)
+                return _record_artifact(*args, **kwargs)
+
+            def record_artifact(*args, **kwargs):
+                kwargs.setdefault("phase_id", local_phase)
+                return _record_artifact(*args, **kwargs)
+
             halted = halted_now()
             if halted:
                 mark_halted(halted)
@@ -1418,16 +1470,20 @@ class AdvancedExecutor(Executor):
                 return
 
             work = root / f"work_{role}"
+            if work.exists() and record_token is not None:
+                shutil.rmtree(work, ignore_errors=True)
             work.mkdir(exist_ok=True)
             mount_skills(work, pool)
             (work / "TARGET.md").write_text(target_code, encoding="utf-8")
             tests_dir = work / "tests"
             tests_dir.mkdir(exist_ok=True)
-            test_code = role_test_code.get(role) or default_test_code
+            test_code = fighter_test_code or role_test_code.get(role) or default_test_code
             (tests_dir / "test_target.py").write_text(test_code, encoding="utf-8")
             mission = str(role_missions.get(role) or "").strip()
             if role in seed_solution_roles:
                 (work / "solution.py").write_text(target_code, encoding="utf-8")
+            for rel, payload in (starter_files or {}).items():
+                write_allowed_file(work, rel, payload)
             (work / "README.md").write_text(
                 f"# Task for {role}\n"
                 + (
@@ -1475,7 +1531,7 @@ class AdvancedExecutor(Executor):
                     )
 
             emit(
-                phase_name,
+                local_phase,
                 model_id,
                 f"phase_start:{role} workdir {work.name}"
                 + (f" preview {preview_url}" if preview_url else ""),
@@ -1488,6 +1544,7 @@ class AdvancedExecutor(Executor):
             metrics = {"tool_errors": 0, "parse_errors": 0, "tool_calls": 0}
 
             def finalize(**extra):
+                restore_protected(work, protected_files or {})
                 self._finalize_role(
                     client=client,
                     battle_id=battle_id,
@@ -1502,10 +1559,13 @@ class AdvancedExecutor(Executor):
                     results=results,
                     seq=seq,
                     last_test=last_test or None,
-                    phase=phase_name,
+                    phase=local_phase,
+                    phase_type=local_phase_type,
                     lock=io_lock,
                     tool_errors=metrics["tool_errors"],
                     parse_errors=metrics["parse_errors"],
+                    canonical_test_code=test_code,
+                    required_artifacts=required_outputs,
                     **extra,
                 )
 
@@ -1515,7 +1575,7 @@ class AdvancedExecutor(Executor):
                     if halted:
                         mark_halted(halted)
                         break
-                    visible_history = visible_for(role)
+                    visible_history = visible_for(role, local_phase)
                     prior = "\n".join(
                         [
                             f"[{a['phase']}/{a['model_id']}]: {a['artifact'][:500]}"
@@ -1565,7 +1625,7 @@ class AdvancedExecutor(Executor):
                             battle_id,
                             model_id,
                             messages,
-                            phase=phase_name,
+                            phase=local_phase,
                             max_tokens=race_tokens,
                         )
                     except Exception as exc:
@@ -1678,10 +1738,10 @@ class AdvancedExecutor(Executor):
                                 finalize()
                                 break
 
-                    if role_recorded(model_id):
+                    if role_recorded(model_id, record_token):
                         break
 
-                if not role_recorded(model_id):
+                if not role_recorded(model_id, record_token):
                     finalize()
             finally:
                 if preview_server is not None:
@@ -1692,25 +1752,68 @@ class AdvancedExecutor(Executor):
 
         with tempfile.TemporaryDirectory(prefix="arena-adv-") as tmp:
             root = Path(tmp)
-            jobs = [
-                (idx, role)
-                for idx, role in enumerate(fighters)
-                if role_to_model.get(role)
-            ]
-            if jobs:
-                with ThreadPoolExecutor(max_workers=len(jobs)) as pool_exec:
-                    futs = [
-                        pool_exec.submit(run_fighter, idx, role)
-                        for idx, role in jobs
-                    ]
-                    errors = []
-                    for fut in futs:
-                        try:
-                            fut.result()
-                        except Exception as exc:
-                            errors.append(exc)
-                    if errors and not results:
-                        raise errors[0]
+            plan = parse_battle_plan(format_config)
+            if plan is not None:
+                snapshots: dict = {}
+                for idx, phase in enumerate(plan.phases):
+                    halted = halted_now()
+                    if halted:
+                        mark_halted(halted)
+                        break
+                    starter: dict[str, bytes] = {}
+                    for rel, text in (phase.starter_files or {}).items():
+                        starter[rel] = text.encode("utf-8")
+                    for src_id in phase.handoff_from:
+                        snap = snapshots.get(src_id) or {}
+                        files = snap.get("files") or {}
+                        refs = phase.handoff_artifacts or list(files)
+                        for ref in refs:
+                            data = files.get(ref)
+                            if isinstance(data, (bytes, bytearray)):
+                                starter[ref] = bytes(data)
+                    protected = {
+                        rel: starter[rel]
+                        for rel in phase.protected_artifacts
+                        if rel in starter
+                    }
+                    try:
+                        run_fighter(
+                            idx,
+                            phase.actor,
+                            fighter_phase=phase.phase_id,
+                            fighter_phase_type=phase.phase_type,
+                            fighter_test_code=phase.test_code,
+                            starter_files=starter,
+                            protected_files=protected,
+                            required_outputs=phase.required_outputs,
+                            record_token=(phase.phase_id, phase.actor),
+                        )
+                    except Exception:
+                        if not results:
+                            raise
+                    work = root / f"work_{phase.actor}"
+                    snap_refs = phase.required_outputs or phase.handoff_artifacts
+                    snapshots[phase.phase_id] = snapshot_handoff(work, snap_refs)
+            else:
+                jobs = [
+                    (idx, role)
+                    for idx, role in enumerate(fighters)
+                    if role_to_model.get(role)
+                ]
+                if jobs:
+                    with ThreadPoolExecutor(max_workers=len(jobs)) as pool_exec:
+                        futs = [
+                            pool_exec.submit(run_fighter, idx, role)
+                            for idx, role in jobs
+                        ]
+                        errors = []
+                        for fut in futs:
+                            try:
+                                fut.result()
+                            except Exception as exc:
+                                errors.append(exc)
+                        if errors and not results:
+                            raise errors[0]
             late = halted_now()
             if late:
                 mark_halted(late)
@@ -1746,7 +1849,7 @@ class AdvancedExecutor(Executor):
         for r in results:
             history.append(
                 {
-                    "phase": phase_name,
+                    "phase": r.get("phase") or phase_name,
                     "model_id": r["model_id"],
                     "artifact": f"RESULT {r['outcome']} chosen {r['chosen_skills']} passed={r['passed']} steps={r['steps']} theory={(r.get('theory', '')[:200])}",
                     "role": r["role"],
