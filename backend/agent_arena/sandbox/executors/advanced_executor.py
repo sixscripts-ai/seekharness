@@ -1795,17 +1795,8 @@ class AdvancedExecutor(Executor):
                         "preview_url": "",
                     }
                     with io_lock:
-                        line = self.emit_result(
+                        self.emit_result(
                             client, battle_id, phase.phase_id, result
-                        )
-                        seq["n"] += 1
-                        client.round(
-                            battle_id,
-                            phase.phase_id,
-                            model_id,
-                            line,
-                            event_type="result",
-                            sequence=seq["n"],
                         )
                         results.append(result)
 

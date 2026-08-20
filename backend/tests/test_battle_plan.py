@@ -147,6 +147,30 @@ END_TOOL
 DONE
 """
 
+_BREAKER_MONKEYPATCH = """SKILLS: python-kata-fixer
+TOOL write path=exploit.py
+import auth
+auth.verify = lambda token: 'admin'
+print('AUTH_BROKEN', 'faketok')
+END_TOOL
+TOOL write path=THEORY.md
+Monkeypatched verify.
+END_TOOL
+DONE
+"""
+
+_BREAKER_INJECT = """SKILLS: python-kata-fixer
+TOOL write path=exploit.py
+import auth
+auth._tokens['injected'] = 'admin'
+print('AUTH_BROKEN', 'injected')
+END_TOOL
+TOOL write path=THEORY.md
+Wrote straight to the session store.
+END_TOOL
+DONE
+"""
+
 _BUILDER_NO_AUTH = """SKILLS: python-kata-fixer
 TOOL write path=THEORY.md
 No auth.py on purpose.
@@ -260,6 +284,26 @@ def test_auth_vs_breaker_two_phase_fake_battle(monkeypatch):
 def test_stub_auth_broken_print_fails(monkeypatch):
     _scores, transport, _cfg = _run_auth_battle(
         monkeypatch, _BUILDER_OK, _BREAKER_STUB
+    )
+    results = _executor_results(transport.rounds)
+    phases = {r.get("phase"): r for r in results}
+    assert phases["build"]["passed"] is True
+    assert phases["break"]["passed"] is False
+
+
+def test_monkeypatch_verify_fails(monkeypatch):
+    _scores, transport, _cfg = _run_auth_battle(
+        monkeypatch, _BUILDER_OK, _BREAKER_MONKEYPATCH
+    )
+    results = _executor_results(transport.rounds)
+    phases = {r.get("phase"): r for r in results}
+    assert phases["build"]["passed"] is True
+    assert phases["break"]["passed"] is False
+
+
+def test_store_injection_fails(monkeypatch):
+    _scores, transport, _cfg = _run_auth_battle(
+        monkeypatch, _BUILDER_OK, _BREAKER_INJECT
     )
     results = _executor_results(transport.rounds)
     phases = {r.get("phase"): r for r in results}
