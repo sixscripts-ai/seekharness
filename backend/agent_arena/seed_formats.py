@@ -136,6 +136,11 @@ FORMAT_DEFINITIONS = [
         "agent_vs_agent",
         "Injection agent vs hardened agent.",
     ),
+    (
+        "Custom prompt battle",
+        "agent_tool_race",
+        "Chat a brief, freeze it, then isolated fighters compete. Quick is judge-only; Verified runs Python tests.",
+    ),
 ]
 
 CATALOG_FORMAT_DEFINITIONS = [
@@ -888,6 +893,44 @@ FORMAT_EXTRA = {
         },
         "artifacts": {"required": ["solution.py"], "expected": ["THEORY.md"]},
     },
+    "Custom prompt battle": {
+        "custom": True,
+        "require_draft": True,
+        "ranked": False,
+        "evaluation_mode": "quick",
+        "judge_only": True,
+        "universal": True,
+        "target_code": (
+            "# Custom battles launch only from an approved draft.\n"
+            "# Do not run this format through POST /battles.\n"
+        ),
+        "test_code": "",
+        "max_tool_turns": 8,
+        "max_tool_steps": 20,
+        "tool_timeout": None,
+        "exec_timeout_seconds": 240,
+        "race_max_tokens": 4096,
+        "outcome_markers": ["DONE", "JUDGE_ONLY", "STEP_BUDGET_EXCEEDED"],
+        "pick_per_battle": 3,
+        "competitive": True,
+        "objectives": [
+            "Follow the frozen brief in TARGET.md.",
+            "Write the required artifacts. Do not invent a different task.",
+        ],
+        "environment": {"languages": ["any"], "preview": False, "network": False},
+        "limits": {
+            "max_tool_turns": 8,
+            "max_tool_steps": 20,
+            "tool_timeout": None,
+            "exec_timeout_seconds": 240,
+            "race_max_tokens": 4096,
+        },
+        "scoring": {
+            "weights": {"tests": 0.0, "skills": 0.2, "theory": 0.2},
+            "outcome_markers": ["DONE", "JUDGE_ONLY", "STEP_BUDGET_EXCEEDED"],
+        },
+        "artifacts": {"required": ["solution.py"], "expected": ["THEORY.md"]},
+    },
 }
 
 
@@ -950,9 +993,18 @@ def is_playable_format(cfg: dict | None) -> bool:
     cfg = cfg or {}
     if cfg.get("hidden") is True or cfg.get("playable") is False:
         return False
+    if cfg.get("custom") or cfg.get("require_draft"):
+        return True
     if cfg.get("battle_plan") or cfg.get("universal"):
         return True
     return cfg.get("engine") == "agent_tool_race"
+
+
+def is_direct_launchable_format(cfg: dict | None) -> bool:
+    cfg = cfg or {}
+    if cfg.get("custom") or cfg.get("require_draft"):
+        return False
+    return is_playable_format(cfg)
 
 
 def _deep_merge_missing(base: dict, overlay: dict) -> dict:

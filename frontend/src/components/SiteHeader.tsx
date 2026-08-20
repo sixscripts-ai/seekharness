@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 const LINKS = [
   { href: "/", label: "Arena" },
   { href: "/battles/new", label: "New Battle" },
+  { href: "/battles/custom", label: "Custom" },
   { href: "/providers", label: "Keys" },
   { href: "/leaderboard", label: "Leaderboard" },
   { href: "/history", label: "History" },
@@ -15,7 +16,7 @@ export default function SiteHeader() {
   const [open, setOpen] = useState(false);
   const nav = useNavigate();
   const loc = useLocation();
-  const battle = loc.pathname === "/battles/new" || loc.pathname.startsWith("/battles/");
+  const battle = loc.pathname === "/battles/new" || loc.pathname === "/battles/custom" || loc.pathname.startsWith("/battles/");
 
   useEffect(() => { init(); }, [init]);
 

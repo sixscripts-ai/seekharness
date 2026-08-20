@@ -80,6 +80,19 @@ export const api = {
     }),
   artifacts: (token: string, id: string) =>
     request<ArtifactOut[]>(`/battles/${id}/artifacts`, { token }),
+  createBattleDraft: (token: string, body: BattleDraftCreate) =>
+    request<BattleDraftOut>("/battle-drafts", { method: "POST", body, token }),
+  getBattleDraft: (token: string, id: string) =>
+    request<BattleDraftOut>(`/battle-drafts/${id}`, { token }),
+  postDraftMessage: (token: string, id: string, body: { content: string; architect_provider_id?: string | null }) =>
+    request<BattleDraftOut>(`/battle-drafts/${id}/messages`, { method: "POST", body, token }),
+  patchDraftSpec: (token: string, id: string, body: Partial<BattleSpec>) =>
+    request<BattleDraftOut>(`/battle-drafts/${id}/spec`, { method: "PATCH", body, token }),
+  launchDraft: (token: string, id: string, body: BattleDraftLaunch) =>
+    request<{ id: string; status: string; draft_id: string; spec_hash: string }>(
+      `/battle-drafts/${id}/launch`,
+      { method: "POST", body, token },
+    ),
   leaderboard: (token: string | null, format = "overall") => {
     const params = new URLSearchParams({ format });
     return request<LeaderboardRow[]>(`/leaderboard?${params}`, { token });
@@ -96,10 +109,6 @@ export type FormatOut = {
   config?: any;
 };
 
-export function isHostProviderId(id: string): boolean {
-  return id.startsWith("host:");
-}
-
 export type ProviderOut = {
   id: string;
   name: string;
@@ -108,6 +117,17 @@ export type ProviderOut = {
   auth_style: string;
   model_name: string;
 };
+
+export function isHostProviderId(id: string): boolean {
+  return id.startsWith("host:");
+}
+
+export function splitProviders(providers: ProviderOut[]) {
+  return {
+    host: providers.filter((p) => isHostProviderId(p.id)),
+    yours: providers.filter((p) => !isHostProviderId(p.id)),
+  };
+}
 
 export type ProviderCreate = {
   name: string;
@@ -142,6 +162,58 @@ export type BattleOut = {
   difficulty?: string | null;
   sandbox_id?: string;
   preview_urls?: Record<string, string>;
+  draft_id?: string | null;
+  battle_config?: {
+    custom?: boolean;
+    evaluation_mode?: string;
+    judge_only?: boolean;
+    description?: string;
+    spec_hash?: string;
+  } | null;
+  spec_hash?: string | null;
+  custom_title?: string | null;
+  ranked?: boolean | null;
+};
+
+export type BattleSpec = {
+  title?: string;
+  brief?: string;
+  deliverables?: string[];
+  constraints?: string[];
+  required_artifacts?: string[];
+  judge_rubric?: string;
+  starter_files?: Record<string, string>;
+  test_code?: string | null;
+  languages?: string[];
+  mode?: "quick" | "verified";
+};
+
+export type BattleDraftCreate = {
+  mode: "quick" | "verified";
+  architect_provider_id?: string | null;
+};
+
+export type BattleDraftOut = {
+  id: string;
+  user_id: string;
+  mode: "quick" | "verified";
+  transcript: { role: string; content: string; ts?: number }[];
+  spec: BattleSpec;
+  revision: number;
+  status: string;
+  launched_battle_id?: string | null;
+  architect_error?: string | null;
+  spec_hash?: string | null;
+  created_at?: number;
+  updated_at?: number;
+};
+
+export type BattleDraftLaunch = {
+  revision: number;
+  model_ids: string[];
+  timeout_seconds: number;
+  save: boolean;
+  judge_provider_id?: string | null;
 };
 
 export type ArtifactOut = { phase: string; model_id: string; artifact: string };
@@ -224,5 +296,10 @@ export function playableRoleCount(format: FormatOut): number {
 export function isToolUsingFormat(format: FormatOut): boolean {
   if (format.engine === "agent_tool_race") return true;
   const cfg = formatConfig(format);
-  return Boolean(cfg.universal || cfg.battle_plan);
+  return Boolean(cfg.universal || cfg.battle_plan || cfg.custom);
+}
+
+export function isCustomFormat(format: FormatOut): boolean {
+  const cfg = formatConfig(format);
+  return Boolean(cfg.custom || cfg.require_draft || format.name === "Custom prompt battle");
 }

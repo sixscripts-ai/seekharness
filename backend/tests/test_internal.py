@@ -238,7 +238,7 @@ def test_finalize_judge_path_without_results_stays_compatible(client, internal_k
     bid = f"slice-a1b-{uuid.uuid4().hex[:10]}"
     try:
         formats = client.get("/formats").json()
-        fmt = formats[0]
+        fmt = next(f for f in formats if not (f.get("config") or {}).get("custom"))
         databases.create_document(database_id, "battles", bid, {
             "user_id": user_id, "format_id": fmt["id"], "model_ids": ["m-a", "m-b"],
             "arena_size": 2, "status": "running", "timeout_seconds": 600,

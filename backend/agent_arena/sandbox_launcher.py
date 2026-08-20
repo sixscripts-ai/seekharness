@@ -33,14 +33,17 @@ def _load_battle(battle_id: str):
     databases = db.get_databases()
     database_id = db.get_database_id()
     battle = databases.get_document(database_id, "battles", battle_id)
-    format_doc = databases.get_document(
-        database_id, "formats", battle.data["format_id"]
-    )
-    cfg = json.loads(format_doc.data["config"])
-    difficulty = battle.data.get("difficulty")
-    if difficulty:
-        cfg = dict(cfg)
-        cfg["difficulty"] = difficulty
+    format_cfg: dict = {}
+    try:
+        format_doc = databases.get_document(
+            database_id, "formats", battle.data["format_id"]
+        )
+        format_cfg = json.loads(format_doc.data["config"])
+    except Exception:
+        format_cfg = {}
+    from .custom_battles import resolve_battle_config
+
+    cfg = resolve_battle_config(battle.data, format_cfg)
     return databases, database_id, battle, cfg
 
 
@@ -57,7 +60,13 @@ def _set_status(databases, database_id: str, battle_id: str, status: str) -> Non
 
 def run_in_process(battle_id: str) -> None:
     """Hermetic/local path: runner in this process using HttpTransport to self or Fake."""
-    databases, database_id, battle, cfg = _load_battle(battle_id)
+    from .custom_battles import FrozenConfigError
+
+    try:
+        databases, database_id, battle, cfg = _load_battle(battle_id)
+    except FrozenConfigError as exc:
+        _fail_with_reason(battle_id, str(exc))
+        return
     key = settings().get("INTERNAL_API_KEY") or ""
     base = os.environ.get("INTERNAL_BASE_URL") or "http://127.0.0.1:8000"
     # When no server, use direct in-memory bridge via local functions
@@ -215,13 +224,17 @@ def _finalize_scores(databases, database_id, battle_id, battle, scores) -> None:
             },
         )
     try:
-        leaderboard.apply_result(
-            databases,
-            database_id,
-            battle.data["format_id"],
-            list(battle.data["model_ids"]),
-            scores,
-        )
+        from .custom_battles import is_ranked_battle, resolve_battle_config
+
+        cfg = resolve_battle_config(battle.data, {})
+        if is_ranked_battle(battle.data, cfg):
+            leaderboard.apply_result(
+                databases,
+                database_id,
+                battle.data["format_id"],
+                list(battle.data["model_ids"]),
+                scores,
+            )
     except Exception:
         pass
 
@@ -275,23 +288,30 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
             "ARENA_SKILLS_ROOT": "/opt/arena-skills",
         }
     )
+    preview_on = bool((cfg.get("environment") or {}).get("preview")) and len(
+        battle.data.get("model_ids") or []
+    ) == 2
+    create_kwargs = {
+        "image": image,
+        "secrets": [secret],
+        "timeout": int(os.environ.get("SANDBOX_TIMEOUT", "900")),
+        "app": app,
+    }
+    if preview_on:
+        create_kwargs["encrypted_ports"] = [8080, 8081]
     sb = modal.Sandbox.create(
         "python",
         "-c",
         (f"from agent_arena.sandbox.entrypoint import main; main({battle_id!r})"),
-        image=image,
-        secrets=[secret],
-        timeout=int(os.environ.get("SANDBOX_TIMEOUT", "900")),
-        encrypted_ports=[8080, 8081],
-        app=app,
+        **create_kwargs,
     )
     sandbox_id = (
         getattr(sb, "object_id", None) or getattr(sb, "sandbox_id", None) or str(sb)
     )
     if not sandbox_id:
         raise RuntimeError("Modal sandbox created without an id")
-    # Preview tunnels: 8080 -> player_a (model_ids[0]), 8081 -> player_b (model_ids[1])
-    _persist_preview_urls(battle_id, list(battle.data["model_ids"]), sb)
+    if preview_on:
+        _persist_preview_urls(battle_id, list(battle.data["model_ids"]), sb)
     return sandbox_id
 
 

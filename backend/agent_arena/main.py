@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from . import battles, formats, internal_router, leaderboard_router, providers, stats
+from . import battle_drafts, battles, formats, internal_router, leaderboard_router, providers, stats
 from .evidence import EVIDENCE_SCHEMA_VERSION, SCORING_VERSION
 
 app = FastAPI(title="Agent Arena", version="0.1.0")
@@ -35,6 +35,7 @@ app.add_middleware(
 
 app.include_router(formats.router)
 app.include_router(providers.router)
+app.include_router(battle_drafts.router)
 app.include_router(battles.router)
 app.include_router(leaderboard_router.router)
 app.include_router(internal_router.router)

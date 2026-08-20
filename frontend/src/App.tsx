@@ -5,6 +5,7 @@ import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
 import Providers from "@/pages/Providers";
 import NewBattle from "@/pages/NewBattle";
+import CustomBattle from "@/pages/CustomBattle";
 import LiveBattle from "@/pages/LiveBattle";
 import Leaderboard from "@/pages/Leaderboard";
 import History from "@/pages/History";
@@ -12,14 +13,15 @@ import { useEffect } from "react";
 import { subscribeSystemTheme } from "@/lib/theme";
 
 function isBattlePath(pathname: string): boolean {
-  return pathname === "/battles/new" || pathname.startsWith("/battles/");
+  return pathname === "/battles/new" || pathname === "/battles/custom" || pathname.startsWith("/battles/");
 }
 
-// The live battle view streams non-deterministic model/harness output (SSE),
-// so we exclude it from Meticulous visual diffs via the `meticulous-ignore`
-// class. The setup form at /battles/new is stable and stays covered.
 function isLiveBattlePath(pathname: string): boolean {
-  return pathname.startsWith("/battles/") && pathname !== "/battles/new";
+  return (
+    pathname.startsWith("/battles/") &&
+    pathname !== "/battles/new" &&
+    pathname !== "/battles/custom"
+  );
 }
 
 function AppShell() {
@@ -49,6 +51,7 @@ function AppShell() {
           <Route path="/signup" element={<Signup />} />
           <Route path="/providers" element={<Providers />} />
           <Route path="/battles/new" element={<NewBattle />} />
+          <Route path="/battles/custom" element={<CustomBattle />} />
           <Route path="/battles/:id" element={<LiveBattle />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
           <Route path="/history" element={<History />} />

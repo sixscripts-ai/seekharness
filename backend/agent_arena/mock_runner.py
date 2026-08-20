@@ -67,7 +67,10 @@ def run_battle(battle_id: str) -> None:
     try:
         databases.update_document(database_id, "battles", battle_id, {"status": "running"})
         format_doc = databases.get_document(database_id, "formats", battle.data["format_id"])
-        phases = json.loads(format_doc.data["config"])["phases"]
+        from .custom_battles import is_ranked_battle, resolve_battle_config
+
+        cfg = resolve_battle_config(battle.data, json.loads(format_doc.data["config"]))
+        phases = cfg["phases"]
         artifacts: list[dict] = []
         for phase in phases:
             event_bus.publish(battle_id, {"type": "phase_start", "data": {"phase": phase["name"]}})
@@ -94,7 +97,10 @@ def run_battle(battle_id: str) -> None:
         if battle.data.get("saved"):
             _persist_scores(databases, database_id, battle_id, scores)
         from . import leaderboard
-        leaderboard.apply_result(databases, database_id, battle.data["format_id"], battle.data["model_ids"], scores)
+        from .custom_battles import is_ranked_battle
+
+        if is_ranked_battle(battle.data, cfg):
+            leaderboard.apply_result(databases, database_id, battle.data["format_id"], battle.data["model_ids"], scores)
         databases.update_document(database_id, "battles", battle_id, {"status": "completed"})
         event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": "completed"}})
     except Exception:

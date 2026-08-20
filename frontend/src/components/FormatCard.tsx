@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Wrench } from "lucide-react";
-import { isToolUsingFormat, type FormatOut } from "@/lib/api";
+import { isCustomFormat, isToolUsingFormat, type FormatOut } from "@/lib/api";
 
 const ENGINE_COLORS: Record<string, string> = {
   build_and_break: "bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300",
@@ -45,10 +45,10 @@ export default function FormatCard({ format, user, large }: { format: FormatOut;
         </div>
       </div>
       <Link
-        to={user ? `/battles/new?format=${format.id}` : "/login"}
+        to={user ? (isCustomFormat(format) ? "/battles/custom" : `/battles/new?format=${format.id}`) : "/login"}
         className="btn btn-ghost mt-4 w-full hover:border-accent hover:text-accent"
       >
-        {user ? "Fight →" : "Log in to fight →"}
+        {user ? (isCustomFormat(format) ? "Architect →" : "Fight →") : "Log in to fight →"}
       </Link>
     </div>
   );

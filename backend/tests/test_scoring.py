@@ -303,3 +303,29 @@ def test_battle_plan_only_builder_verified_wins():
     assert decision["reason"] == "deterministic"
     assert decision["winner"] == "builder"
     assert decision["verified_fighters"] == ["builder"]
+
+
+def test_quick_judge_only_never_claims_verification():
+    a = _mk("A", outcome="JUDGE_ONLY", passed=True, judge_quality=9.0)
+    a["passed"] = None
+    b = _mk("B", outcome="JUDGE_ONLY", passed=True, judge_quality=4.0)
+    b["passed"] = None
+    cfg = {"judge_only": True, "evaluation_mode": "quick"}
+    summary, decision, scores = _decide(
+        [a, b], cfg=cfg, judge={"A": 9.0, "B": 4.0}
+    )
+    assert summary["fighters"][0]["phases"]["race"]["correctness"]["total"] is None
+    assert decision["verified_solution"] is False
+    assert decision["verified_fighters"] == []
+    assert decision["winner"] == "A"
+    assert scores["A"] > scores["B"]
+
+
+def test_verified_custom_ranks_test_pass_first():
+    a = _mk("A", tests={"passed": 1, "total": 1}, judge_quality=2.0)
+    b = _mk("B", outcome="TEST_FAIL", passed=False, tests={"passed": 0, "total": 1}, judge_quality=9.8)
+    cfg = {"evaluation_mode": "verified", "custom": True}
+    _, decision, scores = _decide([a, b], cfg=cfg, judge={"A": 2.0, "B": 9.8})
+    assert decision["winner"] == "A"
+    assert decision["verified_solution"] is True
+    assert scores["A"] > scores["B"]

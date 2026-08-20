@@ -1030,3 +1030,129 @@ def test_fighters_run_in_parallel(monkeypatch):
     assert overlap.is_set()
     assert elapsed < 1.5
     os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+_CUSTOM_QUICK = {
+    "name": "Greeting",
+    "engine": "agent_tool_race",
+    "custom": True,
+    "evaluation_mode": "quick",
+    "judge_only": True,
+    "roles": ["fighter_1", "fighter_2", "judge"],
+    "phases": [{"name": "race", "participants": ["fighter_1", "fighter_2"]}],
+    "target_code": "# Write hello in solution.py\n",
+    "test_code": "",
+    "spec_hash": "abc123",
+    "artifacts": {"required": ["solution.py"]},
+    "outcome_markers": ["DONE", "JUDGE_ONLY", "STEP_BUDGET_EXCEEDED"],
+    "max_tool_turns": 2,
+    "max_tool_steps": 20,
+    "pick_per_battle": 1,
+}
+
+_CUSTOM_VERIFIED_TEST = (
+    "from solution import add\n"
+    "def main():\n"
+    "    assert add(1, 2) == 3\n"
+    "    print('TEST_PASS')\n"
+    "if __name__ == '__main__':\n"
+    "    main()\n"
+)
+
+
+def test_quick_custom_never_runs_default_harness(monkeypatch):
+    import os
+
+    reply = (
+        "TOOL write path=solution.py\n"
+        "print('hello')\n"
+        "END_TOOL\n"
+        "TOOL write path=THEORY.md\n"
+        "done\n"
+        "END_TOOL\n"
+        "DONE\n"
+    )
+    scores, transport = _run_fake_race(
+        monkeypatch,
+        reply,
+        format_overlay=_CUSTOM_QUICK,
+        role_to_model={"fighter_1": "a", "fighter_2": "b"},
+    )
+    assert scores
+    results = _executor_results(transport.rounds)
+    assert results
+    assert all(r.get("outcome") == "JUDGE_ONLY" for r in results)
+    assert all(r.get("passed") is None for r in results)
+    blob = "\n".join(r.get("artifact", "") for r in transport.rounds)
+    assert "is_palindrome" not in blob
+    assert all(r.get("spec_hash") == "abc123" for r in results)
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_verified_custom_restores_generated_canonical_tests(monkeypatch):
+    import os
+
+    tamper = (
+        "TOOL write path=tests/test_target.py\nprint('TEST_PASS')\nEND_TOOL\n"
+        "TOOL test\n"
+    )
+    overlay = {
+        "name": "Add",
+        "engine": "agent_tool_race",
+        "custom": True,
+        "evaluation_mode": "verified",
+        "judge_only": False,
+        "roles": ["fighter_1", "fighter_2", "judge"],
+        "phases": [{"name": "race", "participants": ["fighter_1", "fighter_2"]}],
+        "target_code": "# implement add\n",
+        "test_code": _CUSTOM_VERIFIED_TEST,
+        "spec_hash": "def456",
+        "artifacts": {"required": ["solution.py"]},
+        "outcome_markers": ["DONE", "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED"],
+        "starter_files": {"solution.py": "def add(a, b):\n    return 0\n"},
+        "max_tool_turns": 2,
+        "max_tool_steps": 20,
+        "pick_per_battle": 1,
+    }
+    scores, transport = _run_fake_race(
+        monkeypatch,
+        tamper,
+        format_overlay=overlay,
+        role_to_model={"fighter_1": "a", "fighter_2": "b"},
+    )
+    assert scores
+    results = _executor_results(transport.rounds)
+    assert results
+    r = results[0]
+    assert r.get("passed") is False
+    assert r.get("outcome") == "TEST_FAIL"
+    assert (r.get("policy") or {}).get("status") == "invalid"
+    blob = "\n".join(x.get("artifact", "") for x in transport.rounds)
+    assert "is_palindrome" not in blob
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_dynamic_fighter_roles_are_isolated(monkeypatch):
+    import os
+
+    reply = (
+        "TOOL write path=solution.py\n"
+        "print('hello')\n"
+        "END_TOOL\n"
+        "DONE\n"
+    )
+    scores, transport = _run_fake_race(
+        monkeypatch,
+        reply,
+        format_overlay=_CUSTOM_QUICK,
+        role_to_model={"fighter_1": "a", "fighter_2": "b"},
+    )
+    assert scores
+    starts = [
+        r.get("artifact", "")
+        for r in transport.rounds
+        if "phase_start:" in (r.get("artifact") or "")
+    ]
+    assert any("work_fighter_1" in s for s in starts)
+    assert any("work_fighter_2" in s for s in starts)
+    os.environ.pop("ARENA_IN_SANDBOX", None)

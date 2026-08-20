@@ -1,34 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { api, isHostProviderId, playableRoleCount, type FormatOut, type ProviderOut } from "@/lib/api";
+import { api, isCustomFormat, isHostProviderId, playableRoleCount, splitProviders, type FormatOut, type ProviderOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-
-function ProviderSelect({
-  value,
-  onChange,
-  host,
-  yours,
-}: {
-  value: string;
-  onChange: (id: string) => void;
-  host: ProviderOut[];
-  yours: ProviderOut[];
-}) {
-  return (
-    <select className="select h-11 font-mono text-[12px]" value={value} onChange={(e) => onChange(e.target.value)}>
-      <optgroup label="Host — always available">
-        {host.map((p) => (
-          <option key={p.id} value={p.id}>{p.name} · {p.model_name}</option>
-        ))}
-      </optgroup>
-      <optgroup label="Your keys">
-        {yours.map((p) => (
-          <option key={p.id} value={p.id}>{p.name} · {p.model_name}</option>
-        ))}
-      </optgroup>
-    </select>
-  );
-}
+import ProviderSelect from "@/components/ProviderSelect";
 
 export default function NewBattle() {
   const { user, jwt, refreshJwt } = useAuth();
@@ -46,17 +20,18 @@ export default function NewBattle() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const host = useMemo(() => providers.filter((p) => isHostProviderId(p.id)), [providers]);
-  const yours = useMemo(() => providers.filter((p) => !isHostProviderId(p.id)), [providers]);
+  const host = useMemo(() => splitProviders(providers).host, [providers]);
+  const yours = useMemo(() => splitProviders(providers).yours, [providers]);
 
   useEffect(() => {
     if (!jwt) return;
     (async () => {
       const token = (await refreshJwt()) || jwt;
       const [f, p] = await Promise.all([api.formats(token), api.providers(token)]);
-      setFormats(f);
+      const launchable = f.filter((fmt) => !isCustomFormat(fmt));
+      setFormats(launchable);
       setProviders(p);
-      if (!formatId && f[0]) setFormatId(f[0].id);
+      if (!formatId && launchable[0]) setFormatId(launchable[0].id);
       const hostIds = p.filter((x) => isHostProviderId(x.id)).map((x) => x.id);
       const fb = hostIds[0] || p[0]?.id || "host:openrouter-free";
       const alt = hostIds[1] || hostIds[0] || fb;

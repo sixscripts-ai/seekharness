@@ -103,6 +103,12 @@ export default function Home() {
               Start battle →
             </Link>
             <Link
+              to={user ? "/battles/custom" : "/signup"}
+              className="btn btn-ghost h-11 px-6 text-[13px]"
+            >
+              Custom prompt
+            </Link>
+            <Link
               to="/leaderboard"
               className="btn btn-ghost h-11 px-6 text-[13px]"
             >

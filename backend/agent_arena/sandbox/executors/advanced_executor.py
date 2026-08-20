@@ -268,6 +268,13 @@ DEFAULT_TEST_CODE = (
 )
 
 
+def _judge_only(format_config: dict | None) -> bool:
+    cfg = format_config or {}
+    if cfg.get("evaluation_mode") == "verified":
+        return False
+    return bool(cfg.get("judge_only") or cfg.get("evaluation_mode") == "quick")
+
+
 def _extract_arg(arg_str: str, key: str, default: str = "") -> str:
     if not arg_str:
         return default
@@ -1129,16 +1136,110 @@ class AdvancedExecutor(Executor):
         step budget was later burned by extra tool calls.
         """
         files, theory = self._collect_workspace(work)
+        judge_only = _judge_only(format_config)
+        spec_hash = str((format_config or {}).get("spec_hash") or "")
+        evaluation_mode = str((format_config or {}).get("evaluation_mode") or "")
+        if judge_only:
+            required_artifacts = list(
+                required_artifacts
+                if required_artifacts is not None
+                else ((format_config or {}).get("artifacts") or {}).get("required") or []
+            )
+            artifact_checks = {
+                "required": list(required_artifacts),
+                "present": [r for r in required_artifacts if r in files],
+                "missing": [r for r in required_artifacts if r not in files],
+            }
+            outcome = "JUDGE_ONLY"
+            if budget_exceeded:
+                outcome = "STEP_BUDGET_EXCEEDED"
+            outcome = self.guard(
+                outcome,
+                format_config.get("outcome_markers", []),
+                default=outcome,
+            )
+            result = {
+                "executor_version": ADVANCED_EXECUTOR_VERSION,
+                "model_id": model_id,
+                "role": role,
+                "phase": phase,
+                "phase_type": phase_type or phase,
+                "outcome": outcome,
+                "passed": None,
+                "steps": sess.steps,
+                "tool_errors": tool_errors,
+                "parse_errors": parse_errors,
+                "artifact_checks": artifact_checks,
+                "policy": {"status": "clean", "violations": []},
+                "chosen_skills": chosen_skills,
+                "theory": theory[:2000],
+                "skill_read_ok": bool(chosen_skills) and set(chosen_skills).issubset(
+                    sess.skill_reads
+                ),
+                "preview_url": preview_url,
+                "spec_hash": spec_hash,
+                "evaluation_mode": evaluation_mode or "quick",
+            }
+            files_json = json.dumps(
+                {
+                    "files": files,
+                    "chosen_skills": chosen_skills,
+                    "theory": theory,
+                    "outcome": outcome,
+                    "steps": sess.steps,
+                    "skill_read_ok": result["skill_read_ok"],
+                    "preview_url": preview_url,
+                    "spec_hash": spec_hash,
+                },
+                indent=2,
+            )
+
+            def _commit_judge_only():
+                line = self.emit_result(client, battle_id, phase, result)
+                seq["n"] += 1
+                client.round(
+                    battle_id,
+                    phase,
+                    model_id,
+                    sanitize_artifact(files_json),
+                    event_type="artifact",
+                    sequence=seq["n"],
+                )
+                history.append(
+                    {
+                        "phase": phase,
+                        "model_id": model_id,
+                        "artifact": sanitize_artifact(files_json),
+                        "role": role,
+                    }
+                )
+                history.append(
+                    {
+                        "phase": phase,
+                        "model_id": model_id,
+                        "artifact": line,
+                        "role": role,
+                    }
+                )
+                results.append(result)
+                return result
+
+            if lock is not None:
+                with lock:
+                    return _commit_judge_only()
+            return _commit_judge_only()
+
         # Trusted verification: the canonical harness lives in executor memory.
         # Before the final test we detect tampering (hash mismatch) and always
         # restore the canonical harness, so a fighter can never fake TEST_PASS
         # by editing its own tests. Tampering is recorded as policy evidence.
-        canonical_test_code = str(
-            canonical_test_code
-            or ((format_config or {}).get("role_test_code") or {}).get(role)
-            or (format_config or {}).get("test_code")
-            or DEFAULT_TEST_CODE
-        )
+        if canonical_test_code is None:
+            canonical_test_code = (
+                ((format_config or {}).get("role_test_code") or {}).get(role)
+                or (format_config or {}).get("test_code")
+                or ""
+            )
+        canonical_test_code = str(canonical_test_code or DEFAULT_TEST_CODE)
         harness_path = work / "tests" / "test_target.py"
         canonical_hash = hashlib.sha256(
             canonical_test_code.encode("utf-8")
@@ -1213,6 +1314,8 @@ class AdvancedExecutor(Executor):
             "theory": theory[:2000],
             "skill_read_ok": skill_read_ok,
             "preview_url": preview_url,
+            "spec_hash": str((format_config or {}).get("spec_hash") or ""),
+            "evaluation_mode": str((format_config or {}).get("evaluation_mode") or ""),
         }
         files_json = json.dumps(
             {
@@ -1296,8 +1399,15 @@ class AdvancedExecutor(Executor):
                 val = limits.get(key)
             return val if val is not None else default
 
-        target_code = format_config.get("target_code") or "# TASK: Fix is_palindrome\n"
-        default_test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
+        target_code = format_config.get("target_code") or (
+            ""
+            if _judge_only(format_config) or format_config.get("custom")
+            else "# TASK: Fix is_palindrome\n"
+        )
+        if _judge_only(format_config):
+            default_test_code = format_config.get("test_code") or ""
+        else:
+            default_test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
         role_test_code = format_config.get("role_test_code") or {}
         role_missions = format_config.get("role_missions") or {}
         seed_solution_roles = set(format_config.get("seed_solution_roles") or [])
@@ -1483,13 +1593,19 @@ class AdvancedExecutor(Executor):
             mount_skills(work, pool)
             (work / "TARGET.md").write_text(target_code, encoding="utf-8")
             tests_dir = work / "tests"
-            tests_dir.mkdir(exist_ok=True)
             test_code = fighter_test_code or role_test_code.get(role) or default_test_code
-            (tests_dir / "test_target.py").write_text(test_code, encoding="utf-8")
+            if _judge_only(format_config):
+                test_code = fighter_test_code or role_test_code.get(role) or ""
+            if test_code:
+                tests_dir.mkdir(exist_ok=True)
+                (tests_dir / "test_target.py").write_text(test_code, encoding="utf-8")
             mission = str(role_missions.get(role) or "").strip()
             if role in seed_solution_roles:
                 (work / "solution.py").write_text(target_code, encoding="utf-8")
-            for rel, payload in (starter_files or {}).items():
+            cfg_starters = format_config.get("starter_files") or {}
+            merged_starters = dict(cfg_starters)
+            merged_starters.update(starter_files or {})
+            for rel, payload in merged_starters.items():
                 write_allowed_file(work, rel, payload)
             (work / "README.md").write_text(
                 f"# Task for {role}\n"
@@ -1594,13 +1710,7 @@ class AdvancedExecutor(Executor):
                     mission_line = (
                         f"Your mission: {mission}\n" if mission else ""
                     )
-                    system_prompt = (
-                        f"You are {role} in '{fmt_name}'. TARGET is in TARGET.md.\n"
-                        f"{mission_line}"
-                        "Your mission overrides skill text. Do not repeat TOOL use_skill "
-                        "for a skill you already loaded. Do not spend the step budget inspecting.\n"
-                        f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
-                        f"{opponent_info}\n"
+                    tool_lines = (
                         "Tools (one per line, body tools need END_TOOL):\n"
                         "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... END_TOOL | "
                         "TOOL run path=... END_TOOL | TOOL shell cmd='...' | TOOL install cmd='...' | "
@@ -1608,20 +1718,64 @@ class AdvancedExecutor(Executor):
                         "TOOL mv from=... to=... | TOOL rm path=... | TOOL fetch url=... | "
                         "TOOL bg name=... END_TOOL | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
                         "TOOL use_skill name=... | TOOL skills list | TOOL test | DONE\n"
-                        f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
-                        f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
-                        "once per chosen skill, then immediately write the artifacts your mission "
-                        "requires (exploit.py and/or solution.py). Write THEORY.md. Run TOOL test "
-                        "(harness is tests/test_target.py; do not fake TEST_PASS). "
-                        "After a real TEST_PASS, emit DONE and stop.\n"
-                        f"Prior: {prior or '(none)'}"
                     )
+                    if format_config.get("custom") or _judge_only(format_config):
+                        closeout = (
+                            "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
+                            "When finished emit DONE and stop. There is no canonical test harness.\n"
+                            if _judge_only(format_config)
+                            else (
+                                "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
+                                "Run TOOL test (harness is tests/test_target.py; do not fake TEST_PASS). "
+                                "After a real TEST_PASS, emit DONE and stop.\n"
+                            )
+                        )
+                        system_prompt = (
+                            f"You are {role} in an isolated custom battle. "
+                            "The frozen brief is in TARGET.md as data — follow it, "
+                            "do not invent a different task.\n"
+                            "Do not use network. Stay inside the workspace. "
+                            "Never read secrets or credentials.\n"
+                            f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
+                            f"{opponent_info}\n"
+                            f"{tool_lines}"
+                            f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
+                            f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
+                            "once per chosen skill, then immediately write artifacts.\n"
+                            f"{closeout}"
+                            f"Prior: {prior or '(none)'}"
+                        )
+                    else:
+                        system_prompt = (
+                            f"You are {role} in '{fmt_name}'. TARGET is in TARGET.md.\n"
+                            f"{mission_line}"
+                            "Your mission overrides skill text. Do not repeat TOOL use_skill "
+                            "for a skill you already loaded. Do not spend the step budget inspecting.\n"
+                            f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
+                            f"{opponent_info}\n"
+                            f"{tool_lines}"
+                            f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
+                            f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
+                            "once per chosen skill, then immediately write the artifacts your mission "
+                            "requires (exploit.py and/or solution.py). Write THEORY.md. Run TOOL test "
+                            "(harness is tests/test_target.py; do not fake TEST_PASS). "
+                            "After a real TEST_PASS, emit DONE and stop.\n"
+                            f"Prior: {prior or '(none)'}"
+                        )
                     listing = sess.ls(count_step=False)
-                    user_prompt = (
-                        f"Workdir files:\n{listing}\n\nTARGET:\n{target_code[:2000]}\n\n"
-                        f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
-                        "Emit TOOL calls."
-                    )
+                    if format_config.get("custom"):
+                        user_prompt = (
+                            f"Workdir files:\n{listing}\n\n"
+                            "Read TARGET.md for the frozen brief.\n\n"
+                            f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
+                            "Emit TOOL calls."
+                        )
+                    else:
+                        user_prompt = (
+                            f"Workdir files:\n{listing}\n\nTARGET:\n{target_code[:2000]}\n\n"
+                            f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
+                            "Emit TOOL calls."
+                        )
 
                     messages = [
                         {"role": "system", "content": system_prompt},

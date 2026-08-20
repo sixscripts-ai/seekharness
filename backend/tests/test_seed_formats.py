@@ -4,13 +4,14 @@ from agent_arena.seed_formats import (
     FORMAT_DEFINITIONS,
     ALL_FORMATS,
     build_format,
+    is_direct_launchable_format,
     is_playable_format,
 )
 
 
-def test_exactly_seven_playable_formats():
-    assert len(FORMAT_DEFINITIONS) == 7
-    assert len(ALL_FORMATS) == 7
+def test_exactly_eight_playable_formats():
+    assert len(FORMAT_DEFINITIONS) == 8
+    assert len(ALL_FORMATS) == 8
 
 
 def test_playable_names():
@@ -23,6 +24,7 @@ def test_playable_names():
         "RE solve race",
         "Pwn exploit race",
         "Injection agent vs hardened agent",
+        "Custom prompt battle",
     }
 
 
@@ -48,6 +50,8 @@ def test_is_playable_format_gates():
     assert is_playable_format({"engine": "agent_tool_race"})
     assert is_playable_format({"engine": "same_target_race", "universal": True})
     assert is_playable_format({"engine": "build_and_break", "battle_plan": True})
+    assert is_playable_format({"custom": True, "require_draft": True})
+    assert not is_direct_launchable_format({"custom": True, "require_draft": True})
     assert not is_playable_format({"engine": "build_and_break"})
     assert not is_playable_format(
         {"engine": "agent_tool_race", "hidden": True}

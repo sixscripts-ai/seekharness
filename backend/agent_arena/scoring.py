@@ -226,6 +226,8 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
             tie = True
 
     verified = [f["fighter_id"] for f in fighters if _fighter_verified(f)]
+    if cfg.get("judge_only") or cfg.get("evaluation_mode") == "quick":
+        verified = []
     return {
         "winner": winner,
         "tie": tie,

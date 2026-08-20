@@ -37,3 +37,33 @@ class BattleCreate(BaseModel):
     save: bool = False
     judge_provider_id: str | None = None
     difficulty: Literal["novice", "general", "advanced", "expert"] | None = None
+
+
+class BattleDraftCreate(BaseModel):
+    mode: Literal["quick", "verified"]
+    architect_provider_id: str | None = None
+
+
+class BattleDraftMessage(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
+    architect_provider_id: str | None = None
+
+
+class BattleDraftSpecPatch(BaseModel):
+    title: str | None = Field(default=None, max_length=120)
+    brief: str | None = None
+    deliverables: list[str] | None = None
+    constraints: list[str] | None = None
+    required_artifacts: list[str] | None = None
+    judge_rubric: str | None = None
+    starter_files: dict[str, str] | None = None
+    test_code: str | None = None
+    languages: list[str] | None = None
+
+
+class BattleDraftLaunch(BaseModel):
+    revision: int = Field(ge=0)
+    model_ids: list[str] = Field(min_length=2, max_length=6)
+    timeout_seconds: int = Field(default=600, ge=30, le=3600)
+    save: bool = False
+    judge_provider_id: str | None = None

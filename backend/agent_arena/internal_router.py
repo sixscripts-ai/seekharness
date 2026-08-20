@@ -314,14 +314,20 @@ def internal_finalize(
             results = []
     if status in ("completed", "failed"):
         try:
+            fmt_cfg: dict = {}
             if results:
-                fmt_cfg: dict = {}
                 try:
                     fmt_doc = databases.get_document(
                         database_id, "formats", battle.data["format_id"]
                     )
                     fmt_cfg = json.loads(fmt_doc.data.get("config") or "{}")
                 except Exception:
+                    fmt_cfg = {}
+                from .custom_battles import FrozenConfigError, resolve_battle_config
+
+                try:
+                    fmt_cfg = resolve_battle_config(battle.data, fmt_cfg)
+                except FrozenConfigError:
                     fmt_cfg = {}
                 from . import evidence as evidence_mod
                 from . import scoring as scoring_mod
@@ -362,21 +368,27 @@ def internal_finalize(
                     source=score_source,
                 ):
                     from . import leaderboard
+                    from .custom_battles import is_ranked_battle
 
-                    leaderboard.apply_result(
-                        databases,
-                        database_id,
-                        battle.data["format_id"],
-                        list(battle.data.get("model_ids", [])),
-                        effective_scores,
-                    )
+                    if is_ranked_battle(battle.data, fmt_cfg):
+                        leaderboard.apply_result(
+                            databases,
+                            database_id,
+                            battle.data["format_id"],
+                            list(battle.data.get("model_ids", [])),
+                            effective_scores,
+                        )
         except Exception:
             pass
     # Self-learning on backend (sandbox has no Appwrite credentials)
     try:
-        _apply_self_learning(
-            databases, database_id, battle.data, body.battle_id, results
-        )
+        from .custom_battles import is_ranked_battle, resolve_battle_config
+
+        cfg = resolve_battle_config(battle.data, {})
+        if is_ranked_battle(battle.data, cfg):
+            _apply_self_learning(
+                databases, database_id, battle.data, body.battle_id, results
+            )
     except Exception:
         pass
     databases.update_document(

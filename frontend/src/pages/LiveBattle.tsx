@@ -365,8 +365,32 @@ export default function LiveBattle() {
               </span>
             </div>
             <h1 className="mt-2 truncate font-display text-[36px] leading-none tracking-[-0.04em] md:text-[48px]">
-              {battle?.format_id || "Battle"}
+              {battle?.custom_title || battle?.format_id || "Battle"}
             </h1>
+            {(() => {
+              const cfg = battle?.battle_config;
+              const mode = cfg?.evaluation_mode || (cfg?.judge_only ? "quick" : "");
+              const badge = mode === "verified" ? "Verified" : mode === "quick" || cfg?.custom ? "Judge-only" : "";
+              const brief = typeof cfg?.description === "string" ? cfg.description : "";
+              return (
+                <div className="mt-2 space-y-2">
+                  {badge && (
+                    <span className="inline-flex border border-border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
+                      {badge}
+                      {battle?.ranked === false ? " · unranked" : ""}
+                    </span>
+                  )}
+                  {brief && (
+                    <p className="max-w-[72ch] text-[13px] leading-5 text-muted">{brief}</p>
+                  )}
+                  {battle?.spec_hash && (
+                    <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
+                      spec {String(battle.spec_hash).slice(0, 16)}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div className="mt-3 flex flex-wrap items-center gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
               <button
                 type="button"

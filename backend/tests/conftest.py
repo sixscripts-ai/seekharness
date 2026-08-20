@@ -27,7 +27,7 @@ def playable_format_id() -> str:
     from appwrite.query import Query
 
     from agent_arena import db
-    from agent_arena.seed_formats import is_playable_format
+    from agent_arena.seed_formats import is_direct_launchable_format
 
     res = db.get_databases().list_documents(
         db.get_database_id(), "formats", queries=[Query.limit(100)]
@@ -37,7 +37,7 @@ def playable_format_id() -> str:
             cfg = json.loads(doc.data.get("config") or "{}")
         except (json.JSONDecodeError, TypeError):
             continue
-        if is_playable_format(cfg):
+        if is_direct_launchable_format(cfg):
             return doc.id
     raise AssertionError("no playable format seeded")
 

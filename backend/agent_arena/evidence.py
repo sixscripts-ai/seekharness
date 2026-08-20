@@ -37,7 +37,7 @@ def _as_float(value, default: float | None = None):
 def phase_status(outcome: str | None) -> str:
     """Map an executor outcome marker to a lifecycle status."""
     out = (outcome or "").upper()
-    if out in ("TEST_PASS", "TEST_FAIL"):
+    if out in ("TEST_PASS", "TEST_FAIL", "JUDGE_ONLY"):
         return "completed"
     if "BUDGET" in out or "TIMEOUT" in out:
         return "timeout"
@@ -57,7 +57,16 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
 
     tests = result.get("tests")
     passed_value = result.get("passed")
-    if isinstance(tests, dict) and "total" in tests:
+    judge_only = (
+        outcome == "JUDGE_ONLY"
+        or bool(cfg.get("judge_only"))
+        or cfg.get("evaluation_mode") == "quick"
+    )
+    if judge_only:
+        total = None
+        passed = None
+        failed = None
+    elif isinstance(tests, dict) and "total" in tests:
         total = max(_as_int(tests.get("total")), 0)
         passed = min(max(_as_int(tests.get("passed")), 0), total)
         failed = total - passed

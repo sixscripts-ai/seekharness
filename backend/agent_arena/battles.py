@@ -74,6 +74,11 @@ def create_battle(
     cfg = json.loads(format_doc.data["config"])
     if not is_playable_format(cfg):
         raise HTTPException(status_code=400, detail="Format is not available")
+    if cfg.get("custom") or cfg.get("require_draft"):
+        raise HTTPException(
+            status_code=400,
+            detail="Custom prompt battles launch from an approved draft",
+        )
     playable = _playable_roles(cfg)
     if len(body.model_ids) != len(playable):
         raise HTTPException(
@@ -142,6 +147,12 @@ def get_battle(battle_id: str, user_id: str = Depends(get_current_user)):
             data["preview_urls"] = {}
     elif not isinstance(raw_previews, dict):
         data["preview_urls"] = {}
+    raw_cfg = data.get("battle_config")
+    if isinstance(raw_cfg, str) and raw_cfg.strip():
+        try:
+            data["battle_config"] = json.loads(raw_cfg)
+        except Exception:
+            data["battle_config"] = {}
     return {**data, "id": battle.id}
 
 
