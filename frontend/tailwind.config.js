@@ -50,10 +50,10 @@ export default {
         },
       },
       fontFamily: {
-        display: ["Sora", "Instrument Serif", "Newsreader", "serif"],
-        arena: ["Sora", "Geist", "system-ui", "sans-serif"],
-        sans: ["Geist", "Geist Sans", "system-ui", "sans-serif"],
-        mono: ["Geist Mono", "JetBrains Mono", "monospace"],
+        display: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        arena: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       borderRadius: {
         none: "0px",

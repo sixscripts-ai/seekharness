@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=Sora:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -86,7 +86,7 @@
   body {
     background: var(--bg);
     color: var(--fg);
-    font-family: "Geist", system-ui, sans-serif;
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
     min-height: 100vh;
     overflow-x: hidden;
     font-synthesis: none;
@@ -122,13 +122,13 @@
 
 /* ===== Utility classes ===== */
 .mono {
-  font-family: "Geist Mono", "JetBrains Mono", monospace;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
 .display {
-  font-family: "Instrument Serif", "Newsreader", serif;
-  letter-spacing: -0.03em;
-  font-weight: 400;
+  font-family: "Inter", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+  font-weight: 700;
 }
 
 @keyframes blink {
@@ -299,19 +299,19 @@ html.theme-void {
 }
 
 html.theme-void body {
-  font-family: "Geist", system-ui, sans-serif;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
   background: #070707;
   color: #fff;
 }
 
 html.theme-void .font-display,
 html.theme-void .font-arena {
-  font-family: "Geist", system-ui, sans-serif;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
 }
 
 html.theme-void .mono,
 html.theme-void .font-mono {
-  font-family: "Geist Mono", ui-monospace, monospace;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
 }
 
 html.theme-void .btn,
