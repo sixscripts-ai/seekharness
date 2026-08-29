@@ -15,7 +15,31 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .engine import engine
 
-SessionLocal = sessionmaker(bind=engine(), expire_on_commit=False, autoflush=False)
+class _LazySessionMaker:
+    """Lazy sessionmaker wrapper that delays engine initialization until first session access.
+
+    This prevents module import from failing during CI test collection or tool discovery
+    when DATABASE_URL is not yet populated.
+    """
+
+    def __init__(self):
+        self._maker: sessionmaker[Session] | None = None
+
+    def _get_maker(self) -> sessionmaker[Session]:
+        if self._maker is None:
+            self._maker = sessionmaker(
+                bind=engine(), expire_on_commit=False, autoflush=False
+            )
+        return self._maker
+
+    def __call__(self, **kwargs) -> Session:
+        return self._get_maker()(**kwargs)
+
+    def configure(self, **kwargs):
+        return self._get_maker().configure(**kwargs)
+
+
+SessionLocal = _LazySessionMaker()
 
 
 @contextmanager
