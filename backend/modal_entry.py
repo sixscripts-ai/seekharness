@@ -22,13 +22,27 @@ if _TARGETS_DIR.is_dir():
 app = modal.App("agent-arena-backend", image=image)
 
 
+_CURRENT_SHA = os.environ.get("ARENA_BUILD_SHA") or "unknown"
+if _CURRENT_SHA == "unknown":
+    try:
+        import subprocess
+        _CURRENT_SHA = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(_BASE_DIR)
+        ).decode().strip()
+    except Exception:
+        pass
+
+
 @app.function(
-    secrets=[modal.Secret.from_name("agent-arena-dotenv")],
+    secrets=[
+        modal.Secret.from_name("agent-arena-dotenv"),
+        modal.Secret.from_dict({"ARENA_BUILD_SHA": _CURRENT_SHA}),
+    ],
     min_containers=1,
     env={
         "ARENA_SKILLS_ROOT": "/opt/arena-skills",
         "ARENA_TARGETS_DIR": "/opt/arena-targets",
-        "ARENA_BUILD_SHA": os.environ.get("ARENA_BUILD_SHA") or "unknown",
+        "ARENA_BUILD_SHA": _CURRENT_SHA,
     },
 )
 @modal.concurrent(max_inputs=100)
