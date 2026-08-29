@@ -49,6 +49,13 @@ export default function CustomBattle() {
 
   const [mode, setMode] =
     useState<Mode>(initialMode);
+
+  useEffect(() => {
+    const requested = searchParams.get("mode");
+    if (requested === "verified" || requested === "quick") {
+      setMode(requested);
+    }
+  }, [searchParams]);
   const [draft, setDraft] = useState<BattleDraftOut | null>(null);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
   const [message, setMessage] = useState("");

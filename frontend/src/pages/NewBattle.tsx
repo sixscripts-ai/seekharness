@@ -22,23 +22,6 @@ const DIFFICULTIES: Difficulty[] = [
   "expert",
 ];
 
-function formatProviderName(
-  id: string,
-  providers: ProviderOut[],
-): string {
-  if (!id) return "Not selected";
-
-  const provider = providers.find((item) => item.id === id);
-
-  if (!provider) {
-    return id
-      .replace("host:", "")
-      .replace(/-/g, " ");
-  }
-
-  return provider.model_name || provider.name || id;
-}
-
 function titleCase(value: string) {
   return value
     .replace(/_/g, " ")
@@ -46,18 +29,76 @@ function titleCase(value: string) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function providerLabel(
+  id: string,
+  providers: ProviderOut[],
+) {
+  if (!id) return "Not selected";
+
+  const provider = providers.find(
+    (item) => item.id === id,
+  );
+
+  if (!provider) {
+    return id
+      .replace(/^host:/, "")
+      .replace(/-/g, " ");
+  }
+
+  return (
+    provider.model_name ||
+    provider.name ||
+    id
+  );
+}
+
+function formatDescription(
+  format: FormatOut,
+) {
+  if (format.description) {
+    return format.description;
+  }
+
+  if (format.engine === "agent_tool_race") {
+    return "Agents execute with the full arena toolbelt.";
+  }
+
+  return "Run this arena format with predefined roles and execution rules.";
+}
+
 export default function NewBattle() {
-  const { user, jwt, refreshJwt } = useAuth();
+  const { user, jwt, refreshJwt } =
+    useAuth();
+
   const nav = useNavigate();
   const [params] = useSearchParams();
 
-  const [formats, setFormats] = useState<FormatOut[]>([]);
-  const [providers, setProviders] = useState<ProviderOut[]>([]);
+  const requestedFormat =
+    params.get("format") || "";
 
-  const [formatId, setFormatId] = useState(params.get("format") || "");
-  const [selected, setSelected] = useState<string[]>([]);
-  const [judgeId, setJudgeId] = useState("");
-  const [timeoutSec, setTimeoutSec] = useState(600);
+  const requestedModels = [
+    params.get("modelA"),
+    params.get("modelB"),
+  ].filter(Boolean) as string[];
+
+  const [formats, setFormats] = useState<
+    FormatOut[]
+  >([]);
+
+  const [providers, setProviders] =
+    useState<ProviderOut[]>([]);
+
+  const [formatId, setFormatId] =
+    useState(requestedFormat);
+
+  const [selected, setSelected] =
+    useState<string[]>(requestedModels);
+
+  const [judgeId, setJudgeId] =
+    useState("");
+
+  const [timeoutSec, setTimeoutSec] =
+    useState(600);
 
   const [visibility, setVisibility] =
     useState<Visibility>("isolated");
@@ -67,16 +108,15 @@ export default function NewBattle() {
 
   const [save, setSave] = useState(false);
 
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<
+    string | null
+  >(null);
 
-  const host = useMemo(
-    () => splitProviders(providers).host,
-    [providers],
-  );
+  const [busy, setBusy] =
+    useState(false);
 
-  const yours = useMemo(
-    () => splitProviders(providers).yours,
+  const { host, yours } = useMemo(
+    () => splitProviders(providers),
     [providers],
   );
 
@@ -84,46 +124,115 @@ export default function NewBattle() {
     if (!jwt) return;
 
     (async () => {
-      const token = (await refreshJwt()) || jwt;
+      try {
+        const token =
+          (await refreshJwt()) || jwt;
 
-      const [f, p] = await Promise.all([
-        api.formats(token),
-        api.providers(token),
-      ]);
+        const [
+          formatRows,
+          providerRows,
+        ] = await Promise.all([
+          api.formats(token),
+          api.providers(token),
+        ]);
 
-      const launchable = f.filter(
-        (fmt) => !isCustomFormat(fmt),
-      );
+        const launchable =
+          formatRows.filter(
+            (item) =>
+              !isCustomFormat(item),
+          );
 
-      setFormats(launchable);
-      setProviders(p);
+        setFormats(launchable);
+        setProviders(providerRows);
 
-      if (!formatId && launchable[0]) {
-        setFormatId(launchable[0].id);
-      }
+        const requestedIsValid =
+          launchable.some(
+            (item) =>
+              item.id ===
+              requestedFormat,
+          );
 
-      const hostIds = p
-        .filter((item) => isHostProviderId(item.id))
-        .map((item) => item.id);
+        if (
+          !requestedIsValid &&
+          launchable[0]
+        ) {
+          setFormatId(
+            launchable[0].id,
+          );
+        }
 
-      const fallback =
-        hostIds[0] ||
-        p[0]?.id ||
-        "host:openrouter-free";
+        const hostIds =
+          providerRows
+            .filter((item) =>
+              isHostProviderId(
+                item.id,
+              ),
+            )
+            .map(
+              (item) => item.id,
+            );
 
-      const alternate =
-        hostIds[1] ||
-        hostIds[0] ||
-        fallback;
+        const fallback =
+          hostIds[0] ||
+          providerRows[0]?.id ||
+          "host:openrouter-free";
 
-      if (selected.length === 0) {
-        setSelected([fallback, alternate]);
+        const alternate =
+          hostIds[1] ||
+          hostIds[0] ||
+          fallback;
+
+        const allowed = new Set(
+          providerRows.map(
+            (item) => item.id,
+          ),
+        );
+
+        setSelected(
+          (previous) => {
+            const source =
+              previous.length
+                ? previous
+                : requestedModels;
+
+            if (!source.length) {
+              return [
+                fallback,
+                alternate,
+              ];
+            }
+
+            return source.map(
+              (id, index) => {
+                if (
+                  allowed.has(id) ||
+                  isHostProviderId(
+                    id,
+                  )
+                ) {
+                  return id;
+                }
+
+                return index === 1
+                  ? alternate
+                  : fallback;
+              },
+            );
+          },
+        );
+      } catch (error) {
+        setErr(
+          error instanceof Error
+            ? error.message
+            : "Could not load arena configuration",
+        );
       }
     })();
   }, [jwt]);
 
   const format = formats.find(
-    (item) => item.id === formatId,
+    (item) =>
+      item.id === formatId,
   );
 
   const need = format
@@ -132,54 +241,77 @@ export default function NewBattle() {
 
   const roles = useMemo(() => {
     if (!format) {
-      return ["builder", "breaker"];
+      return [
+        "builder",
+        "breaker",
+      ];
     }
 
-    const formatRoles = (
-      format as { roles?: string[] }
-    ).roles;
-
-    if (Array.isArray(formatRoles)) {
-      return formatRoles.filter(
-        (role) => role !== "judge",
+    if (
+      Array.isArray(format.roles) &&
+      format.roles.length
+    ) {
+      return format.roles.filter(
+        (role) =>
+          role !== "judge",
       );
     }
 
-    return ["a", "b"];
+    return [
+      "fighter a",
+      "fighter b",
+    ];
   }, [format]);
 
   useEffect(() => {
-    setSelected((previous) => {
-      const next = previous.slice(0, need);
+    setSelected(
+      (previous) => {
+        const next =
+          previous.slice(0, need);
 
-      const fallback =
-        host[0]?.id ||
-        providers[0]?.id ||
-        "host:openrouter-free";
+        const fallback =
+          host[0]?.id ||
+          providers[0]?.id ||
+          "host:openrouter-free";
 
-      const alternate =
-        host[1]?.id ||
-        host[0]?.id ||
-        fallback;
+        const alternate =
+          host[1]?.id ||
+          host[0]?.id ||
+          fallback;
 
-      while (next.length < need) {
-        next.push(
-          next.length === 1
-            ? alternate
-            : fallback,
+        const allowed = new Set(
+          providers.map(
+            (provider) =>
+              provider.id,
+          ),
         );
-      }
 
-      const allowed = new Set(
-        providers.map((provider) => provider.id),
-      );
+        while (
+          next.length < need
+        ) {
+          next.push(
+            next.length === 1
+              ? alternate
+              : fallback,
+          );
+        }
 
-      return next.map((id) =>
-        allowed.has(id) || isHostProviderId(id)
-          ? id
-          : fallback,
-      );
-    });
+        return next.map(
+          (id, index) => {
+            if (
+              allowed.has(id) ||
+              isHostProviderId(id)
+            ) {
+              return id;
+            }
+
+            return index === 1
+              ? alternate
+              : fallback;
+          },
+        );
+      },
+    );
   }, [need, providers, host]);
 
   async function onSubmit(
@@ -188,23 +320,50 @@ export default function NewBattle() {
     event.preventDefault();
 
     const token =
-      (await refreshJwt()) || jwt;
+      (await refreshJwt()) ||
+      jwt;
 
     if (!token) return;
 
     const allowed = new Set(
-      providers.map((provider) => provider.id),
+      providers.map(
+        (provider) =>
+          provider.id,
+      ),
     );
 
-    const invalid = selected.some(
-      (id) =>
-        !allowed.has(id) &&
-        !isHostProviderId(id),
-    );
+    const invalid =
+      selected.some(
+        (id) =>
+          !allowed.has(id) &&
+          !isHostProviderId(id),
+      );
 
     if (invalid) {
       setErr(
-        "Invalid provider — choose any host model or one of your configured providers.",
+        "Invalid provider. Choose a platform model or one of your configured providers.",
+      );
+      return;
+    }
+
+    if (
+      selected.length !== need ||
+      selected.some(
+        (id) => !id,
+      )
+    ) {
+      setErr(
+        `Assign all ${need} fighter slots before deployment.`,
+      );
+      return;
+    }
+
+    if (
+      new Set(selected).size !==
+      selected.length
+    ) {
+      setErr(
+        "Each fighter slot must use a unique model.",
       );
       return;
     }
@@ -213,27 +372,43 @@ export default function NewBattle() {
     setErr(null);
 
     try {
-      const battle = await api.createBattle(
-        token,
-        {
-          format_id: formatId,
-          model_ids: selected,
-          arena_size: selected.length,
-          timeout_seconds: timeoutSec,
-          round_visibility: visibility,
-          difficulty,
-          save,
-          judge_provider_id:
-            judgeId || null,
-        },
-      );
+      const battle =
+        await api.createBattle(
+          token,
+          {
+            format_id:
+              formatId,
+
+            model_ids:
+              selected,
+
+            arena_size:
+              selected.length,
+
+            timeout_seconds:
+              timeoutSec,
+
+            round_visibility:
+              visibility,
+
+            difficulty,
+            save,
+
+            judge_provider_id:
+              judgeId || null,
+          },
+        );
 
       try {
-        const key = "arena_battle_ids";
+        const key =
+          "arena_battle_ids";
 
-        const previous = JSON.parse(
-          localStorage.getItem(key) || "[]",
-        ) as string[];
+        const previous =
+          JSON.parse(
+            localStorage.getItem(
+              key,
+            ) || "[]",
+          ) as string[];
 
         localStorage.setItem(
           key,
@@ -245,10 +420,13 @@ export default function NewBattle() {
           ),
         );
       } catch {
-        // Local history is optional.
+        // Local battle history
+        // is optional.
       }
 
-      nav(`/battles/${battle.id}`);
+      nav(
+        `/battles/${battle.id}`,
+      );
     } catch (error) {
       setErr(
         error instanceof Error
@@ -269,8 +447,9 @@ export default function NewBattle() {
           </div>
 
           <p className="text-[14px] text-muted">
-            Log in to configure fighters and
-            deploy an arena battle.
+            Log in to configure
+            fighters and deploy an
+            arena battle.
           </p>
 
           <Link
@@ -284,600 +463,636 @@ export default function NewBattle() {
     );
   }
 
-  const dual = need === 2;
+  const assigned =
+    selected.filter(
+      Boolean,
+    ).length;
 
-  const timeoutMinutes =
-    timeoutSec >= 60
-      ? `${Math.round(timeoutSec / 60)} min`
-      : `${timeoutSec} sec`;
-
-  const readyFighters = selected.filter(Boolean).length;
+  const uniqueFighters =
+    new Set(
+      selected.filter(Boolean),
+    ).size ===
+    selected.filter(Boolean)
+      .length;
 
   const ready =
     Boolean(formatId) &&
-    readyFighters === need &&
+    assigned === need &&
+    uniqueFighters &&
     !busy;
+
+  const timeoutMinutes =
+    timeoutSec >= 60
+      ? `${Math.round(
+          timeoutSec / 60,
+        )} min`
+      : `${timeoutSec} sec`;
+
+  const dual = need === 2;
 
   return (
     <form
       onSubmit={onSubmit}
       className="min-h-[calc(100vh-56px)] bg-background text-foreground"
     >
-      {/* HEADER */}
       <header className="border-b border-border">
         <div className="mx-auto flex max-w-[1360px] flex-col gap-4 px-6 py-6 md:flex-row md:items-end md:justify-between">
           <div>
             <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
-              Battle control room
+              New battle
             </div>
 
             <h1 className="mt-2 font-display text-[38px] font-semibold leading-none tracking-[-0.04em] md:text-[52px]">
-              Deploy a battle
+              Battle Control Room
             </h1>
 
-            <p className="mt-3 max-w-[60ch] text-[13px] leading-5 text-muted">
-              Select the execution format,
-              assign fighters, define the
-              sandbox contract, and launch.
+            <p className="mt-3 max-w-[62ch] text-[13px] leading-5 text-muted">
+              Define the arena,
+              assign the fighters,
+              set the execution
+              contract, and deploy.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
-            <span
-              className={`h-1.5 w-1.5 ${
-                ready
-                  ? "bg-[var(--success)]"
-                  : "bg-[var(--warn)]"
-              }`}
-            />
+          <div className="border border-border bg-surface px-4 py-3">
+            <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-muted">
+              Launch readiness
+            </div>
 
-            {ready
-              ? "Ready to deploy"
-              : "Configuration required"}
+            <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em]">
+              <span
+                className={`h-1.5 w-1.5 ${
+                  ready
+                    ? "bg-[var(--success)]"
+                    : "bg-[var(--warn)]"
+                }`}
+              />
+
+              <span
+                className={
+                  ready
+                    ? "text-[var(--success)]"
+                    : "text-muted"
+                }
+              >
+                {ready
+                  ? "Ready to deploy"
+                  : "Configuration required"}
+              </span>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* BATTLE MODE */}
-      <section className="border-b border-border">
-        <div className="mx-auto max-w-[1360px] px-6 py-6">
-          <div className="mb-3 flex items-center justify-between">
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-              Battle mode
-            </div>
+      {/* 1. BATTLE MODE */}
+      <div className="mx-auto max-w-[1360px] px-6 py-6">
+        <SectionHeader
+          index="1"
+          title="Battle mode"
+          description="Choose how you want to define this battle."
+        />
 
-            <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
-              Choose how the arena is defined
-            </div>
-          </div>
+        <div className="mt-4 grid gap-px bg-border md:grid-cols-3">
+          <ModeCard
+            active
+            eyebrow="Preset"
+            title="Preset battle"
+            description="Use a tested arena format with predefined roles and execution rules."
+            footer="Recommended"
+          />
 
-          <div className="grid gap-px bg-border md:grid-cols-3">
-            {/* PRESET */}
-            <button
-              type="button"
-              className="group relative min-h-[154px] bg-surface p-5 text-left transition-colors hover:bg-surface2"
-            >
-              <div className="absolute inset-x-0 top-0 h-px bg-accent" />
+          <ModeCard
+            eyebrow="Quick custom"
+            title="Judge-defined challenge"
+            description="Describe your own challenge, freeze the brief, and evaluate it with a host judge."
+            footer="Judge evaluation"
+            onClick={() =>
+              nav(
+                "/battles/custom?mode=quick",
+              )
+            }
+          />
 
-              <div className="flex items-start justify-between">
-                <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-accent">
-                  01 / Preset
-                </div>
-
-                <span className="border border-accent px-2 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-accent">
-                  Active
-                </span>
-              </div>
-
-              <h2 className="mt-6 text-[17px] font-semibold tracking-[-0.02em]">
-                Preset battle
-              </h2>
-
-              <p className="mt-2 max-w-[38ch] text-[12px] leading-5 text-muted">
-                Launch a tested arena format
-                with predefined roles and
-                execution rules.
-              </p>
-            </button>
-
-            {/* QUICK CUSTOM */}
-            <button
-              type="button"
-              onClick={() =>
-                nav("/battles/custom?mode=quick")
-              }
-              className="group relative min-h-[154px] bg-surface p-5 text-left transition-colors hover:bg-surface2"
-            >
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
-                02 / Quick
-              </div>
-
-              <h2 className="mt-6 text-[17px] font-semibold tracking-[-0.02em] group-hover:text-accent">
-                Quick custom
-              </h2>
-
-              <p className="mt-2 max-w-[38ch] text-[12px] leading-5 text-muted">
-                Define your own brief and
-                evaluate the result with a
-                host judge.
-              </p>
-
-              <div className="mt-4 font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
-                Judge evaluation →
-              </div>
-            </button>
-
-            {/* VERIFIED CUSTOM */}
-            <button
-              type="button"
-              onClick={() =>
-                nav(
-                  "/battles/custom?mode=verified",
-                )
-              }
-              className="group relative min-h-[154px] bg-surface p-5 text-left transition-colors hover:bg-surface2"
-            >
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-muted">
-                03 / Verified
-              </div>
-
-              <h2 className="mt-6 text-[17px] font-semibold tracking-[-0.02em] group-hover:text-accent">
-                Verified custom
-              </h2>
-
-              <p className="mt-2 max-w-[38ch] text-[12px] leading-5 text-muted">
-                Define a custom challenge with
-                executable Python acceptance
-                tests.
-              </p>
-
-              <div className="mt-4 font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
-                Tests + judge →
-              </div>
-            </button>
-          </div>
+          <ModeCard
+            eyebrow="Verified custom"
+            title="Executable challenge"
+            description="Create a custom challenge with a frozen specification and executable acceptance tests."
+            footer="Tests + judge"
+            onClick={() =>
+              nav(
+                "/battles/custom?mode=verified",
+              )
+            }
+          />
         </div>
-      </section>
+      </div>
 
-      {/* MAIN COMMAND CENTER */}
-      <div className="mx-auto grid max-w-[1360px] grid-cols-12">
-        <main className="col-span-12 border-border lg:col-span-8 lg:border-r">
-          {/* FORMAT */}
-          <section className="border-b border-border px-6 py-6">
-            <div className="flex flex-col justify-between gap-2 md:flex-row md:items-end">
-              <div>
-                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-                  01 / Select arena format
-                </div>
+      {/* 2. EXECUTION FORMAT */}
+      <div className="border-y border-border">
+        <div className="mx-auto max-w-[1360px] px-6 py-6">
+          <SectionHeader
+            index="2"
+            title="Execution format"
+            description="Select the arena format and role sequence."
+            trailing={
+              format
+                ? `${need} fighter${
+                    need === 1
+                      ? ""
+                      : "s"
+                  }`
+                : undefined
+            }
+          />
 
-                <h2 className="mt-2 text-[20px] font-semibold tracking-[-0.025em]">
-                  Execution format
-                </h2>
-              </div>
-
-              {format && (
-                <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
-                  {format.engine} · {need} fighter
-                  {need !== 1 ? "s" : ""}
-                </div>
-              )}
-            </div>
-
-            <div className="mt-5 grid gap-px bg-border md:grid-cols-2 xl:grid-cols-3">
-              {formats.map((item) => {
+          <div className="mt-4 flex gap-px overflow-x-auto bg-border pb-px">
+            {formats.map(
+              (item) => {
                 const active =
-                  item.id === formatId;
+                  item.id ===
+                  formatId;
 
-                const fighterCount =
-                  playableRoleCount(item);
+                const count =
+                  playableRoleCount(
+                    item,
+                  );
+
+                const itemRoles =
+                  item.roles?.filter(
+                    (role) =>
+                      role !==
+                      "judge",
+                  ) || [];
 
                 return (
                   <button
                     key={item.id}
                     type="button"
                     onClick={() =>
-                      setFormatId(item.id)
+                      setFormatId(
+                        item.id,
+                      )
                     }
-                    className={`relative min-h-[128px] p-4 text-left transition-colors ${
+                    className={`relative min-h-[146px] min-w-[240px] flex-1 p-4 text-left transition-colors ${
                       active
                         ? "bg-[var(--accent-soft)]"
                         : "bg-surface hover:bg-surface2"
                     }`}
                   >
                     {active && (
-                      <div className="absolute inset-x-0 top-0 h-px bg-accent" />
+                      <span className="absolute inset-x-0 top-0 h-px bg-accent" />
                     )}
 
-                    <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start justify-between gap-3">
                       <span
-                        className={`font-mono text-[9px] uppercase tracking-[0.12em] ${
+                        className={`font-mono text-[9px] uppercase tracking-[0.14em] ${
                           active
                             ? "text-accent"
                             : "text-muted"
                         }`}
                       >
-                        {item.engine}
+                        {
+                          item.engine
+                        }
                       </span>
 
                       <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
-                        {fighterCount} slots
+                        {count} slots
                       </span>
                     </div>
 
-                    <div className="mt-5 text-[14px] font-medium">
+                    <div className="mt-6 text-[14px] font-semibold tracking-[-0.02em]">
                       {item.name}
                     </div>
 
-                    {item.description && (
-                      <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-muted">
-                        {item.description}
-                      </p>
-                    )}
+                    <p className="mt-2 line-clamp-2 text-[11px] leading-4 text-muted">
+                      {formatDescription(
+                        item,
+                      )}
+                    </p>
+
+                    <div className="mt-4 font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
+                      {itemRoles.length
+                        ? itemRoles.join(
+                            " → ",
+                          )
+                        : "arena format"}
+                    </div>
                   </button>
                 );
-              })}
-            </div>
-          </section>
+              },
+            )}
+          </div>
+        </div>
+      </div>
 
-          {/* FIGHTERS */}
-          <section className="border-b border-border">
-            <div className="px-6 pt-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-                02 / Assign fighters
-              </div>
+      {/* 3. ASSIGN FIGHTERS */}
+      <div className="mx-auto max-w-[1360px] px-6 py-6">
+        <SectionHeader
+          index="3"
+          title="Assign fighters"
+          description="Select one model for each role in the frozen format."
+        />
 
-              <h2 className="mt-2 text-[20px] font-semibold tracking-[-0.025em]">
-                Arena lineup
-              </h2>
-            </div>
+        <div
+          className={`mt-4 grid border border-border ${
+            dual
+              ? "grid-cols-1 md:grid-cols-[1fr_90px_1fr]"
+              : "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
+          }`}
+        >
+          {selected.map(
+            (
+              modelId,
+              index,
+            ) => {
+              const role =
+                roles[index] ||
+                `fighter ${
+                  index + 1
+                }`;
 
-            <div
-              className={`mt-5 grid border-t border-border ${
-                dual
-                  ? "grid-cols-1 md:grid-cols-[1fr_92px_1fr]"
-                  : "grid-cols-1 md:grid-cols-2 xl:grid-cols-3"
-              }`}
-            >
-              {selected.map((modelId, index) => {
-                const role =
-                  roles[index] ||
-                  `fighter ${index + 1}`;
-
-                return (
-                  <div
-                    key={index}
-                    className={[
-                      "relative min-h-[210px] border-border px-6 py-6",
-                      dual && index === 0
-                        ? "md:order-1"
-                        : "",
-                      dual && index === 1
+              return (
+                <div
+                  key={`${role}-${index}`}
+                  className={`min-h-[190px] bg-surface p-5 ${
+                    dual &&
+                    index === 0
+                      ? "md:order-1"
+                      : dual &&
+                          index ===
+                            1
                         ? "md:order-3"
-                        : "",
-                      !dual
-                        ? "border-b md:border-r"
-                        : "border-b md:border-b-0",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-accent">
-                        Fighter {index + 1}
-                      </div>
-
-                      <div className="font-mono text-[9px] uppercase tracking-[0.13em] text-muted">
-                        {titleCase(role)}
-                      </div>
-                    </div>
-
-                    <div className="mt-6 text-[24px] font-semibold tracking-[-0.035em]">
-                      {formatProviderName(
-                        modelId,
-                        providers,
+                        : ""
+                  } ${
+                    dual
+                      ? ""
+                      : "border-b border-border md:border-b-0 md:border-r md:last:border-r-0"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent">
+                      {titleCase(
+                        role,
                       )}
-                    </div>
+                    </span>
 
-                    <div className="mt-2 font-mono text-[10px] text-muted">
-                      role://
-                      {role.toLowerCase()}
-                    </div>
-
-                    <div className="mt-6">
-                      <ProviderSelect
-                        value={modelId}
-                        host={host}
-                        yours={yours}
-                        onChange={(id) => {
-                          const next = [
-                            ...selected,
-                          ];
-
-                          next[index] = id;
-
-                          setSelected(next);
-                        }}
-                      />
-                    </div>
+                    <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
+                      Fighter{" "}
+                      {index + 1}
+                    </span>
                   </div>
-                );
-              })}
 
-              {dual && (
-                <div className="hidden items-center justify-center border-x border-border bg-background md:order-2 md:flex">
-                  <div>
-                    <div className="font-display text-[28px] font-semibold tracking-[-0.05em] text-accent">
-                      VS
-                    </div>
+                  <div className="mt-6 min-h-[34px] text-[22px] font-semibold tracking-[-0.035em]">
+                    {providerLabel(
+                      modelId,
+                      providers,
+                    )}
+                  </div>
 
-                    <div className="mt-2 h-8 w-px bg-border mx-auto" />
+                  <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
+                    role://
+                    {role
+                      .toLowerCase()
+                      .replace(/ /g, "-")}
+                  </div>
+
+                  <div className="mt-5">
+                    <ProviderSelect
+                      value={
+                        modelId
+                      }
+                      host={host}
+                      yours={yours}
+                      onChange={(
+                        id,
+                      ) => {
+                        setSelected(
+                          (
+                            previous,
+                          ) =>
+                            previous.map(
+                              (
+                                value,
+                                slot,
+                              ) =>
+                                slot ===
+                                index
+                                  ? id
+                                  : value,
+                            ),
+                        );
+                      }}
+                    />
                   </div>
                 </div>
-              )}
-            </div>
-          </section>
+              );
+            },
+          )}
 
-          {/* PIPELINE */}
-          <section className="border-b border-border px-6 py-6">
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
+          {dual && (
+            <div className="hidden items-center justify-center border-x border-border bg-background md:order-2 md:flex">
+              <div className="text-center">
+                <div className="font-display text-[30px] font-semibold tracking-[-0.06em] text-accent">
+                  VS
+                </div>
+
+                <div className="mx-auto mt-3 h-8 w-px bg-border" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* EXECUTION PATH */}
+        {format && (
+          <div className="border-x border-b border-border bg-background px-5 py-4">
+            <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-muted">
               Execution path
             </div>
 
-            <div className="mt-4 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.12em]">
-              {roles.map((role, index) => (
-                <div
-                  key={role}
-                  className="flex items-center gap-2"
-                >
-                  <span className="border border-borderStrong px-3 py-2 text-foreground">
-                    {titleCase(role)}
-                  </span>
+            <div className="mt-3 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.1em]">
+              {roles.map(
+                (
+                  role,
+                  index,
+                ) => (
+                  <div
+                    key={`${role}-${index}`}
+                    className="flex items-center gap-2"
+                  >
+                    <span className="border border-borderStrong px-3 py-2 text-foreground">
+                      {titleCase(
+                        role,
+                      )}
+                    </span>
 
-                  {index <
-                    roles.length - 1 && (
-                    <>
-                      <span className="text-muted">
-                        →
-                      </span>
+                    {index <
+                      roles.length -
+                        1 && (
+                      <>
+                        <span className="text-muted">
+                          →
+                        </span>
 
-                      <span className="border border-border px-3 py-2 text-muted">
-                        Handoff
-                      </span>
+                        <span className="border border-border px-3 py-2 text-muted">
+                          handoff
+                        </span>
 
-                      <span className="text-muted">
-                        →
-                      </span>
-                    </>
-                  )}
-                </div>
-              ))}
+                        <span className="text-muted">
+                          →
+                        </span>
+                      </>
+                    )}
+                  </div>
+                ),
+              )}
 
               <span className="text-muted">
                 →
               </span>
 
               <span className="border border-accent px-3 py-2 text-accent">
-                Evidence
+                evidence
               </span>
 
               <span className="text-muted">
                 →
               </span>
 
-              <span className="border border-borderStrong px-3 py-2">
-                Judge
+              <span className="border border-borderStrong px-3 py-2 text-foreground">
+                judge
               </span>
             </div>
-          </section>
+          </div>
+        )}
+      </div>
 
-          {/* EXECUTION CONTRACT */}
-          <section className="px-6 py-6">
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-              03 / Execution contract
-            </div>
+      {/* 4. EXECUTION CONTRACT */}
+      <div className="border-y border-border">
+        <div className="mx-auto max-w-[1360px] px-6 py-6">
+          <SectionHeader
+            index="4"
+            title="Execution contract"
+            description="Set the runtime rules that govern the battle."
+          />
 
-            <h2 className="mt-2 text-[20px] font-semibold tracking-[-0.025em]">
-              Runtime controls
-            </h2>
+          <div className="mt-4 grid gap-px bg-border md:grid-cols-2 xl:grid-cols-4">
+            {/* JUDGE */}
+            <ControlCell label="Judge">
+              <select
+                className="select mt-3 font-mono text-[11px]"
+                value={judgeId}
+                onChange={(event) =>
+                  setJudgeId(
+                    event.target
+                      .value,
+                  )
+                }
+              >
+                <option value="">
+                  Kimi-K3 · default
+                  host judge
+                </option>
 
-            <div className="mt-5 grid gap-px bg-border md:grid-cols-2">
-              {/* JUDGE */}
-              <div className="bg-surface p-5">
-                <label className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                  Judge
-                </label>
-
-                <select
-                  className="select mt-3 font-mono text-[11px]"
-                  value={judgeId}
-                  onChange={(event) =>
-                    setJudgeId(
-                      event.target.value,
-                    )
-                  }
-                >
-                  <option value="">
-                    Default host judge (Kimi-K3)
-                  </option>
-
-                  {host.map((provider) => (
+                {host.map(
+                  (provider) => (
                     <option
-                      key={provider.id}
-                      value={provider.id}
+                      key={
+                        provider.id
+                      }
+                      value={
+                        provider.id
+                      }
                     >
-                      {provider.name} ·{" "}
-                      {provider.model_name}
+                      {
+                        provider.name
+                      }{" "}
+                      ·{" "}
+                      {
+                        provider.model_name
+                      }
                     </option>
-                  ))}
+                  ),
+                )}
 
-                  {yours.map((provider) => (
+                {yours.map(
+                  (provider) => (
                     <option
-                      key={provider.id}
-                      value={provider.id}
+                      key={
+                        provider.id
+                      }
+                      value={
+                        provider.id
+                      }
                     >
-                      {provider.name} ·{" "}
-                      {provider.model_name}
+                      {
+                        provider.name
+                      }{" "}
+                      ·{" "}
+                      {
+                        provider.model_name
+                      }
                     </option>
-                  ))}
-                </select>
-              </div>
+                  ),
+                )}
+              </select>
 
-              {/* TIMEOUT */}
-              <div className="bg-surface p-5">
-                <div className="flex items-center justify-between">
-                  <label className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                    Maximum runtime
-                  </label>
+              <p className="mt-2 font-mono text-[9px] text-muted">
+                Host judge is used
+                when no override is
+                selected.
+              </p>
+            </ControlCell>
 
-                  <span className="font-mono text-[10px] text-accent">
-                    {timeoutMinutes}
-                  </span>
-                </div>
-
-                <input
-                  type="range"
-                  min={60}
-                  max={3600}
-                  step={60}
-                  value={timeoutSec}
-                  onChange={(event) =>
-                    setTimeoutSec(
-                      Number(
-                        event.target.value,
-                      ),
-                    )
-                  }
-                  className="mt-6 w-full accent-accent"
-                />
-
-                <div className="mt-2 flex justify-between font-mono text-[9px] text-muted">
-                  <span>1 min</span>
-                  <span>60 min</span>
-                </div>
-              </div>
-
-              {/* DIFFICULTY */}
-              <div className="bg-surface p-5">
-                <label className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                  Difficulty
-                </label>
-
-                <div className="mt-3 grid grid-cols-4 border border-border">
-                  {DIFFICULTIES.map(
-                    (level) => (
-                      <button
-                        key={level}
-                        type="button"
-                        onClick={() =>
-                          setDifficulty(level)
-                        }
-                        className={`border-r border-border px-2 py-3 font-mono text-[9px] uppercase tracking-[0.08em] last:border-r-0 ${
-                          difficulty === level
-                            ? "bg-accent text-white"
-                            : "bg-background text-muted hover:text-foreground"
-                        }`}
-                      >
-                        {level}
-                      </button>
+            {/* TIMEOUT */}
+            <ControlCell
+              label="Timeout"
+              value={timeoutMinutes}
+            >
+              <input
+                type="range"
+                min={60}
+                max={3600}
+                step={60}
+                value={timeoutSec}
+                onChange={(event) =>
+                  setTimeoutSec(
+                    Number(
+                      event.target
+                        .value,
                     ),
-                  )}
-                </div>
+                  )
+                }
+                className="mt-5 w-full accent-accent"
+              />
+
+              <div className="mt-2 flex justify-between font-mono text-[8px] uppercase tracking-[0.08em] text-muted">
+                <span>1 min</span>
+                <span>60 min</span>
               </div>
+            </ControlCell>
 
-              {/* ACCESS */}
-              <div className="bg-surface p-5">
-                <div className="flex items-center justify-between">
-                  <label className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                    Workspace access
-                  </label>
-
-                  {visibility ===
-                    "isolated" && (
-                    <span className="font-mono text-[8px] uppercase tracking-[0.12em] text-[var(--success)]">
-                      Recommended
-                    </span>
-                  )}
-                </div>
-
-                <div className="mt-3 grid grid-cols-2 border border-border">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setVisibility(
-                        "isolated",
-                      )
-                    }
-                    className={`px-3 py-3 text-left ${
-                      visibility ===
-                      "isolated"
-                        ? "bg-[var(--accent-soft)]"
-                        : "bg-background"
-                    }`}
-                  >
-                    <div
-                      className={`font-mono text-[9px] uppercase tracking-[0.12em] ${
-                        visibility ===
-                        "isolated"
-                          ? "text-accent"
-                          : "text-foreground"
+            {/* DIFFICULTY */}
+            <ControlCell
+              label="Difficulty"
+              value={titleCase(
+                difficulty,
+              )}
+            >
+              <div className="mt-3 grid grid-cols-2 border border-border">
+                {DIFFICULTIES.map(
+                  (level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      onClick={() =>
+                        setDifficulty(
+                          level,
+                        )
+                      }
+                      className={`border-r border-b border-border px-2 py-2.5 font-mono text-[8px] uppercase tracking-[0.08em] odd:border-r last:border-b-0 [\&:nth-child(3)]:border-b-0 ${
+                        difficulty ===
+                        level
+                          ? "bg-accent text-white"
+                          : "bg-background text-muted hover:text-foreground"
                       }`}
                     >
-                      Isolated
-                    </div>
-
-                    <div className="mt-1 text-[10px] leading-4 text-muted">
-                      Separate agent
-                      workspaces.
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setVisibility("open")
-                    }
-                    className={`border-l border-border px-3 py-3 text-left ${
-                      visibility === "open"
-                        ? "bg-[var(--accent-soft)]"
-                        : "bg-background"
-                    }`}
-                  >
-                    <div
-                      className={`font-mono text-[9px] uppercase tracking-[0.12em] ${
-                        visibility ===
-                        "open"
-                          ? "text-accent"
-                          : "text-foreground"
-                      }`}
-                    >
-                      Open arena
-                    </div>
-
-                    <div className="mt-1 text-[10px] leading-4 text-muted">
-                      Shared visibility.
-                    </div>
-                  </button>
-                </div>
+                      {level}
+                    </button>
+                  ),
+                )}
               </div>
-            </div>
+            </ControlCell>
 
-            {/* ARTIFACT SAVE */}
+            {/* WORKSPACE ACCESS */}
+            <ControlCell
+              label="Workspace access"
+              value={
+                visibility ===
+                "isolated"
+                  ? "Isolated"
+                  : "Open arena"
+              }
+            >
+              <div className="mt-3 grid grid-cols-2 border border-border">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVisibility(
+                      "isolated",
+                    )
+                  }
+                  className={`border-r border-border px-3 py-3 text-left ${
+                    visibility ===
+                    "isolated"
+                      ? "bg-[var(--accent-soft)] text-accent"
+                      : "bg-background text-foreground"
+                  }`}
+                >
+                  <div className="font-mono text-[8px] uppercase tracking-[0.1em]">
+                    Isolated
+                  </div>
+
+                  <div className="mt-1 text-[9px] leading-4 text-muted">
+                    Separate
+                    workspaces
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVisibility(
+                      "open",
+                    )
+                  }
+                  className={`px-3 py-3 text-left ${
+                    visibility ===
+                    "open"
+                      ? "bg-[var(--accent-soft)] text-accent"
+                      : "bg-background text-foreground"
+                  }`}
+                >
+                  <div className="font-mono text-[8px] uppercase tracking-[0.1em]">
+                    Open
+                  </div>
+
+                  <div className="mt-1 text-[9px] leading-4 text-muted">
+                    Shared
+                    visibility
+                  </div>
+                </button>
+              </div>
+            </ControlCell>
+          </div>
+
+          {/* ARTIFACTS + SUMMARY */}
+          <div className="mt-px grid gap-px bg-border md:grid-cols-[1fr_1.4fr]">
             <button
               type="button"
-              onClick={() => setSave(!save)}
-              className="mt-px flex w-full items-center justify-between border border-border bg-surface p-5 text-left hover:bg-surface2"
+              onClick={() =>
+                setSave(
+                  (value) =>
+                    !value,
+                )
+              }
+              className="flex items-center justify-between bg-surface p-5 text-left hover:bg-surface2"
             >
               <div>
                 <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-foreground">
-                  Preserve battle artifacts
+                  Preserve battle
+                  artifacts
                 </div>
 
-                <p className="mt-1 text-[11px] text-muted">
-                  Retain battle output and
-                  generated artifacts after
+                <p className="mt-1 text-[10px] leading-4 text-muted">
+                  Keep generated
+                  outputs and battle
+                  artifacts after
                   execution.
                 </p>
               </div>
 
-              <div
+              <span
                 className={`relative h-5 w-9 border ${
                   save
                     ? "border-accent bg-accent"
@@ -891,210 +1106,308 @@ export default function NewBattle() {
                       : "left-[3px]"
                   }`}
                 />
-              </div>
+              </span>
             </button>
-          </section>
-        </main>
 
-        {/* RIGHT RAIL: OPTION 1 ELEVATED FROST DOSSIER */}
-        <aside className="col-span-12 lg:col-span-4">
-          <div className="lg:sticky lg:top-[72px] m-4 rounded-xl border border-pink-500/35 bg-[#0D0914] p-6 shadow-[0_12px_40px_rgba(0,0,0,0.85)]">
-            <div className="flex items-center justify-between border-b border-pink-500/20 pb-4">
-              <div>
-                <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-pink-400 font-bold">
-                  BATTLE DOSSIER
-                </div>
-                <div className="mt-1 font-display text-[22px] font-extrabold tracking-tight text-white">
-                  Launch Readiness
-                </div>
+            <div className="bg-surface p-5">
+              <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
+                Contract summary
               </div>
 
-              <div className="text-right">
-                <div className="font-display text-[32px] font-black leading-none text-pink-400">
-                  {readyFighters}/{need}
-                </div>
-                <div className="font-mono text-[8px] uppercase tracking-wider text-zinc-400">
-                  READY
-                </div>
-              </div>
-            </div>
+              <div className="mt-3 grid gap-2 font-mono text-[9px] text-foreground sm:grid-cols-2">
+                <SummaryPill
+                  ok
+                  text={
+                    visibility ===
+                    "isolated"
+                      ? "Isolated workspaces"
+                      : "Open arena visibility"
+                  }
+                />
 
-            {/* Progress Bar */}
-            <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-black/60 border border-white/5">
-              <div
-                className="h-full bg-pink-500 transition-all duration-300 shadow-[0_0_10px_#FF00A0]"
-                style={{
-                  width: `${
-                    need
-                      ? Math.min(
-                          100,
-                          (readyFighters / need) * 100,
+                <SummaryPill
+                  ok
+                  text={
+                    judgeId
+                      ? providerLabel(
+                          judgeId,
+                          providers,
                         )
-                      : 0
-                  }%`,
-                }}
-              />
-            </div>
+                      : "Kimi-K3 judge"
+                  }
+                />
 
-            {/* CONTRACT SPEC TABLE */}
-            <div className="mt-5 rounded-lg border border-pink-500/20 bg-black/40 p-3.5 font-mono text-[10px]">
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">FORMAT</span>
-                  <span className="font-bold text-white truncate max-w-[160px]">{format?.name || "—"}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">CONTESTANTS</span>
-                  <span className="font-bold text-white">{need} microVM Nodes</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">WORKSPACE</span>
-                  <span className="font-bold text-pink-400">{visibility === "isolated" ? "Isolated Rootfs" : "Open Access"}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">MAX RUNTIME</span>
-                  <span className="font-bold text-white">{timeoutMinutes}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">JUDGE</span>
-                  <span className="font-bold text-white">{judgeId ? formatProviderName(judgeId, providers) : "Host Kimi-K3"}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">ARTIFACTS</span>
-                  <span className="font-bold text-pink-400">{save ? "Preserved" : "Ephemeral"}</span>
-                </div>
+                <SummaryPill
+                  ok
+                  text={`${timeoutMinutes} maximum runtime`}
+                />
+
+                <SummaryPill
+                  ok
+                  text={
+                    save
+                      ? "Artifacts preserved"
+                      : "Artifacts ephemeral"
+                  }
+                />
               </div>
             </div>
-
-            {/* PREFLIGHT CHECKLIST */}
-            <div className="mt-5 space-y-2 font-mono text-[9px]">
-              <div className="flex items-center gap-2 text-zinc-300">
-                <span className={formatId ? "text-pink-400" : "text-zinc-600"}>✔</span>
-                <span className={formatId ? "text-zinc-200" : "text-zinc-500"}>Format verified & fixtures loaded</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-300">
-                <span className={readyFighters === need ? "text-pink-400" : "text-zinc-600"}>✔</span>
-                <span className={readyFighters === need ? "text-zinc-200" : "text-zinc-500"}>Contestant slots assigned ({readyFighters}/{need})</span>
-              </div>
-              <div className="flex items-center gap-2 text-zinc-300">
-                <span className="text-pink-400">✔</span>
-                <span className="text-zinc-200">Modal sandbox endpoints warm</span>
-              </div>
-            </div>
-
-            {/* INTEGRATED DEPLOY BUTTON */}
-            <button
-              type="submit"
-              disabled={!ready || Boolean(busy)}
-              className="mt-6 flex h-12 w-full items-center justify-center rounded-lg bg-pink-500 font-mono text-[12px] font-black uppercase tracking-wider text-black shadow-[0_0_20px_rgba(255,0,160,0.4)] transition-all hover:bg-pink-400 disabled:opacity-30 disabled:shadow-none"
-            >
-              {busy ? "INITIALIZING DUEL…" : "DEPLOY BATTLE →"}
-            </button>
           </div>
-        </aside>
+        </div>
       </div>
 
+      {/* ERROR */}
       {err && (
-        <div className="border-y border-danger">
+        <div className="border-b border-danger">
           <div className="mx-auto max-w-[1360px] px-6 py-3 font-mono text-[11px] text-danger">
             {err}
           </div>
         </div>
       )}
 
-      {/* DEPLOY BAR (MOBILE ONLY) */}
-      <footer className="sticky bottom-0 z-20 border-t border-border bg-background/95 backdrop-blur lg:hidden">
-        <div className="mx-auto flex max-w-[1360px] flex-col gap-4 px-6 py-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
-              Ready configuration
-            </div>
+      {/* STICKY DEPLOY BAR */}
+      <div className="sticky bottom-0 z-20 border-t border-border bg-background/95 backdrop-blur">
+        <div className="mx-auto grid max-w-[1360px] gap-4 px-6 py-4 lg:grid-cols-[1fr_420px] lg:items-center">
+          <div className="grid gap-3 sm:grid-cols-4">
+            <ReadinessItem
+              ok={Boolean(
+                formatId,
+              )}
+              label="Format"
+              value={
+                format?.name ||
+                "Select"
+              }
+            />
 
-            <div className="mt-1 text-[12px] text-foreground">
-              {format?.name ||
-                "Select a format"}{" "}
-              <span className="text-muted">
-                · {need} fighters ·{" "}
-                {timeoutMinutes}
-              </span>
-            </div>
+            <ReadinessItem
+              ok={
+                assigned ===
+                  need &&
+                uniqueFighters
+              }
+              label="Fighters"
+              value={`${assigned}/${need} ready`}
+            />
+
+            <ReadinessItem
+              ok={
+                visibility ===
+                "isolated"
+              }
+              warning={
+                visibility ===
+                "open"
+              }
+              label="Access"
+              value={visibility}
+            />
+
+            <ReadinessItem
+              ok
+              label="Runtime"
+              value={
+                timeoutMinutes
+              }
+            />
           </div>
 
           <button
             type="submit"
             disabled={!ready}
-            className="btn btn-primary h-12 min-w-[260px] px-8 text-[12px]"
+            className="btn btn-primary h-12 w-full px-8 text-[12px]"
           >
             {busy
               ? "Deploying…"
               : "Deploy battle →"}
           </button>
         </div>
-      </footer>
+      </div>
     </form>
   );
 }
 
-function SummaryRow({
-  label,
-  value,
-  accent = false,
+function SectionHeader({
+  index,
+  title,
+  description,
+  trailing,
 }: {
-  label: string;
-  value: string;
-  accent?: boolean;
+  index: string;
+  title: string;
+  description: string;
+  trailing?: string;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 border-b border-border py-3 last:border-b-0">
-      <span className="text-muted">
-        {label}
-      </span>
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex items-start gap-3">
+        <span className="grid h-5 w-5 shrink-0 place-items-center bg-accent font-mono text-[9px] font-bold text-white">
+          {index}
+        </span>
 
-      <span
-        className={`max-w-[60%] truncate text-right ${
-          accent
+        <div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground">
+            {title}
+          </div>
+
+          <p className="mt-1 text-[11px] text-muted">
+            {description}
+          </p>
+        </div>
+      </div>
+
+      {trailing && (
+        <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-accent">
+          {trailing}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ModeCard({
+  active = false,
+  eyebrow,
+  title,
+  description,
+  footer,
+  onClick,
+}: {
+  active?: boolean;
+  eyebrow: string;
+  title: string;
+  description: string;
+  footer: string;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative min-h-[170px] p-5 text-left transition-colors ${
+        active
+          ? "bg-[var(--accent-soft)]"
+          : "bg-surface hover:bg-surface2"
+      }`}
+    >
+      {active && (
+        <span className="absolute inset-x-0 top-0 h-px bg-accent" />
+      )}
+
+      <div
+        className={`font-mono text-[9px] uppercase tracking-[0.15em] ${
+          active
             ? "text-accent"
-            : "text-foreground"
+            : "text-muted"
         }`}
       >
-        {value}
+        {eyebrow}
+      </div>
+
+      <div className="mt-6 text-[16px] font-semibold tracking-[-0.02em]">
+        {title}
+      </div>
+
+      <p className="mt-2 max-w-[42ch] text-[11px] leading-5 text-muted">
+        {description}
+      </p>
+
+      <div
+        className={`mt-4 font-mono text-[9px] uppercase tracking-[0.1em] ${
+          active
+            ? "text-accent"
+            : "text-muted"
+        }`}
+      >
+        {footer}{" "}
+        {onClick ? "→" : ""}
+      </div>
+    </button>
+  );
+}
+
+function ControlCell({
+  label,
+  value,
+  children,
+}: {
+  label: string;
+  value?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-h-[154px] bg-surface p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
+          {label}
+        </div>
+
+        {value && (
+          <div className="font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
+            {value}
+          </div>
+        )}
+      </div>
+
+      {children}
+    </div>
+  );
+}
+
+function SummaryPill({
+  ok,
+  text,
+}: {
+  ok: boolean;
+  text: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 border border-border bg-background px-3 py-2">
+      <span
+        className={`h-1.5 w-1.5 ${
+          ok
+            ? "bg-[var(--success)]"
+            : "bg-muted"
+        }`}
+      />
+
+      <span className="truncate">
+        {text}
       </span>
     </div>
   );
 }
 
-function PreflightRow({
+function ReadinessItem({
   ok,
-  text,
   warning = false,
+  label,
+  value,
 }: {
   ok: boolean;
-  text: string;
   warning?: boolean;
+  label: string;
+  value: string;
 }) {
-  return (
-    <div className="flex items-center gap-3">
-      <span
-        className={`h-1.5 w-1.5 ${
-          warning
-            ? "bg-[var(--warn)]"
-            : ok
-              ? "bg-[var(--success)]"
-              : "bg-muted"
-        }`}
-      />
+  const dot = warning
+    ? "bg-[var(--warn)]"
+    : ok
+      ? "bg-[var(--success)]"
+      : "bg-muted";
 
-      <span
-        className={
-          warning
-            ? "text-[var(--warn)]"
-            : ok
-              ? "text-foreground"
-              : "text-muted"
-        }
-      >
-        {text}
-      </span>
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-2 font-mono text-[8px] uppercase tracking-[0.12em] text-muted">
+        <span
+          className={`h-1.5 w-1.5 ${dot}`}
+        />
+
+        {label}
+      </div>
+
+      <div className="mt-1 truncate font-mono text-[9px] text-foreground">
+        {value}
+      </div>
     </div>
   );
 }
