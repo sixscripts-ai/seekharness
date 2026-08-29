@@ -18,12 +18,12 @@
   --border: #E4E4E7;
   --border-strong: #D4D4D8;
 
-  --accent: #1FD5F9;
-  --accent-hover: #4DE0FB;
-  --accent-fg: #070707;
-  --accent-soft: rgba(31, 213, 249, 0.12);
-  --accent-2: #1FD5F9;
-  --link: #1FD5F9;
+  --accent: #FF00A0;
+  --accent-hover: #FF33B5;
+  --accent-fg: #FFFFFF;
+  --accent-soft: rgba(255, 0, 160, 0.12);
+  --accent-2: #A855F7;
+  --link: #FF00A0;
 
   --success: #16A34A;
   --success-strong: #15803D;
@@ -50,12 +50,12 @@
   --border: #1F1F22;
   --border-strong: #2A2A2E;
 
-  --accent: #1FD5F9;
-  --accent-hover: #4DE0FB;
-  --accent-fg: #070707;
-  --accent-soft: rgba(31, 213, 249, 0.12);
-  --accent-2: #1FD5F9;
-  --link: #1FD5F9;
+  --accent: #FF00A0;
+  --accent-hover: #FF33B5;
+  --accent-fg: #FFFFFF;
+  --accent-soft: rgba(255, 0, 160, 0.14);
+  --accent-2: #A855F7;
+  --link: #FF00A0;
 
   --success: #4ADE80;
   --success-strong: #86EFAC;
@@ -276,18 +276,18 @@ html.theme-void {
   --border: #2a2a2a;
   --border-strong: #3d3d3d;
 
-  --accent: #1fd5f9;
-  --accent-hover: #4de0fb;
-  --accent-fg: #070707;
-  --accent-soft: rgba(31, 213, 249, 0.12);
-  --accent-2: #1fd5f9;
-  --accent-2-fg: #070707;
-  --link: #1fd5f9;
+  --accent: #FF00A0;
+  --accent-hover: #FF33B5;
+  --accent-fg: #FFFFFF;
+  --accent-soft: rgba(255, 0, 160, 0.14);
+  --accent-2: #A855F7;
+  --accent-2-fg: #FFFFFF;
+  --link: #FF00A0;
 
-  --success: #1fd5f9;
-  --success-strong: #4de0fb;
-  --warn: #1fd5f9;
-  --danger: #ef4444;
+  --success: #22C55E;
+  --success-strong: #4ADE80;
+  --warn: #F59E0B;
+  --danger: #EF4444;
 
   --code-bg: #0a0a0a;
   --code-fg: #e8e8e8;
