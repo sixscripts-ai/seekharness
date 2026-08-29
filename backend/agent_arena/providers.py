@@ -22,7 +22,7 @@ MODAL_KIMI_MODEL = os.environ.get("JUDGE_MODAL_MODEL", "moonshotai/Kimi-K3")
 HOST_FREE_ID = "host:openrouter-free"
 
 # Multi-backend host catalog. Each entry declares how to resolve credentials.
-# Public list only includes entries whose credentials are present.
+# Public list only includes entries whose credentials are present and valid.
 HOST_PROVIDERS: list[dict] = [
     # --- Modal (Kimi) ---
     {
@@ -33,16 +33,6 @@ HOST_PROVIDERS: list[dict] = [
         "auth_style": "modal_proxy",
         "model_name": MODAL_KIMI_MODEL,
         "cred": "modal_judge",
-    },
-    # --- OpenCode Go (DeepSeek V4 Flash) ---
-    {
-        "id": "host:opencode-go",
-        "name": "OpenCode Go (DeepSeek V4 Flash)",
-        "base_url": "https://opencode.ai/zen/go/v1",
-        "masked_key": "sk-u98...",
-        "auth_style": "bearer",
-        "model_name": "deepseek-v4-flash",
-        "cred": "opencode_go",
     },
     # --- OpenRouter free tier (HOST_OPENROUTER_KEY) ---
     {
@@ -55,21 +45,12 @@ HOST_PROVIDERS: list[dict] = [
         "cred": "openrouter",
     },
     {
-        "id": "host:or-nemotron-super",
-        "name": "OpenRouter Free (Nemotron Super)",
+        "id": "host:or-nemotron-lightning",
+        "name": "OpenRouter Free (Nemotron 3.5 Lightning)",
         "base_url": OPENROUTER_BASE,
         "masked_key": "sk-or-...free",
         "auth_style": "bearer",
-        "model_name": "nvidia/nemotron-3-super-120b-a12b:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-nemotron-nano",
-        "name": "OpenRouter Free (Nemotron Nano)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "nvidia/nemotron-3-nano-30b-a3b:free",
+        "model_name": "nvidia/nemotron-3.5-lightning:free",
         "cred": "openrouter",
     },
     {
@@ -82,30 +63,30 @@ HOST_PROVIDERS: list[dict] = [
         "cred": "openrouter",
     },
     {
-        "id": "host:or-gemma-31b",
-        "name": "OpenRouter Free (Gemma 4 31B)",
+        "id": "host:or-laguna-xs",
+        "name": "OpenRouter Free (Laguna XS)",
         "base_url": OPENROUTER_BASE,
         "masked_key": "sk-or-...free",
         "auth_style": "bearer",
-        "model_name": "google/gemma-4-31b-it:free",
+        "model_name": "poolside/laguna-xs-2.1:free",
         "cred": "openrouter",
     },
     {
-        "id": "host:or-gpt-oss-20b",
-        "name": "OpenRouter Free (GPT-OSS 20B)",
+        "id": "host:or-minimax-m3",
+        "name": "OpenRouter Free (MiniMax M3)",
         "base_url": OPENROUTER_BASE,
         "masked_key": "sk-or-...free",
         "auth_style": "bearer",
-        "model_name": "openai/gpt-oss-20b:free",
+        "model_name": "minimax/minimax-m3:free",
         "cred": "openrouter",
     },
     {
-        "id": "host:or-ling-flash",
-        "name": "OpenRouter Free (Ling 3 Flash)",
+        "id": "host:or-minimax-m27",
+        "name": "OpenRouter Free (MiniMax M2.7)",
         "base_url": OPENROUTER_BASE,
         "masked_key": "sk-or-...free",
         "auth_style": "bearer",
-        "model_name": "inclusionai/ling-3.0-flash:free",
+        "model_name": "minimax/minimax-m2.7:free",
         "cred": "openrouter",
     },
     {
@@ -117,24 +98,62 @@ HOST_PROVIDERS: list[dict] = [
         "model_name": "openrouter/free",
         "cred": "openrouter",
     },
-    # --- Optional host backends (appear when env key is set) ---
+    # --- DeepSeek Direct ---
     {
-        "id": "host:merge-gateway",
-        "name": "Merge Gateway",
-        "base_url": "https://api-gateway.merge.dev/v1/openai",
-        "masked_key": "mg__…",
-        "auth_style": "bearer",
-        "model_name": "openai/gpt-4o-mini",
-        "cred": "merge",
-    },
-    {
-        "id": "host:tokenrouter",
-        "name": "TokenRouter",
-        "base_url": "https://api.tokenrouter.com/v1",
+        "id": "host:deepseek-chat",
+        "name": "DeepSeek (Chat)",
+        "base_url": "https://api.deepseek.com/v1",
         "masked_key": "sk-…",
         "auth_style": "bearer",
-        "model_name": "moonshotai/kimi-k3",
-        "cred": "tokenrouter",
+        "model_name": "deepseek-v4-flash",
+        "cred": "deepseek",
+    },
+    # --- Groq (Fast Inference) ---
+    {
+        "id": "host:groq-qwen",
+        "name": "Groq (Qwen 3.6 27B)",
+        "base_url": "https://api.groq.com/openai/v1",
+        "masked_key": "gsk_…",
+        "auth_style": "bearer",
+        "model_name": "qwen/qwen3.6-27b",
+        "cred": "groq",
+    },
+    {
+        "id": "host:groq-compound",
+        "name": "Groq (Compound)",
+        "base_url": "https://api.groq.com/openai/v1",
+        "masked_key": "gsk_…",
+        "auth_style": "bearer",
+        "model_name": "groq/compound",
+        "cred": "groq",
+    },
+    # --- Legacy model IDs preserved for historic battle records lookup ---
+    {
+        "id": "host:opencode-go",
+        "name": "OpenCode Go (DeepSeek V4 Flash)",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "masked_key": "sk-u98...",
+        "auth_style": "bearer",
+        "model_name": "deepseek-v4-flash",
+        "cred": "",
+    },
+    {
+        "id": "host:or-nemotron-super",
+        "name": "OpenRouter Free (Nemotron Super)",
+        "base_url": OPENROUTER_BASE,
+        "masked_key": "sk-or-...free",
+        "auth_style": "bearer",
+        "model_name": "nvidia/nemotron-3-super-120b-a12b:free",
+        "cred": "",
+    },
+    {
+        "id": "host:or-gemma-31b",
+        "name": "OpenRouter Free (Gemma 4 31B)",
+        "base_url": OPENROUTER_BASE,
+        "masked_key": "sk-or-...free",
+        "auth_style": "bearer",
+        "model_name": "google/gemma-4-31b-it:free",
+        "cred": "",
     },
     {
         "id": "host:groq-llama",
@@ -143,7 +162,25 @@ HOST_PROVIDERS: list[dict] = [
         "masked_key": "gsk_…",
         "auth_style": "bearer",
         "model_name": "llama-3.3-70b-versatile",
-        "cred": "groq",
+        "cred": "",
+    },
+    {
+        "id": "host:merge-gateway",
+        "name": "Merge Gateway",
+        "base_url": "https://api-gateway.merge.dev/v1/openai",
+        "masked_key": "mg__…",
+        "auth_style": "bearer",
+        "model_name": "openai/gpt-4o-mini",
+        "cred": "",
+    },
+    {
+        "id": "host:tokenrouter",
+        "name": "TokenRouter",
+        "base_url": "https://api.tokenrouter.com/v1",
+        "masked_key": "sk-…",
+        "auth_style": "bearer",
+        "model_name": "moonshotai/kimi-k3",
+        "cred": "",
     },
     {
         "id": "host:xai-grok",
@@ -153,15 +190,6 @@ HOST_PROVIDERS: list[dict] = [
         "auth_style": "bearer",
         "model_name": "grok-4-1-fast-non-reasoning",
         "cred": "xai",
-    },
-    {
-        "id": "host:deepseek-chat",
-        "name": "DeepSeek (Chat)",
-        "base_url": "https://api.deepseek.com/v1",
-        "masked_key": "sk-…",
-        "auth_style": "bearer",
-        "model_name": "deepseek-v4-flash",
-        "cred": "deepseek",
     },
     {
         "id": "host:openai-gpt4o-mini",
@@ -179,7 +207,7 @@ HOST_PROVIDERS: list[dict] = [
         "masked_key": "sk-…",
         "auth_style": "bearer",
         "model_name": "muse-spark-1.1",
-        "cred": "meta",
+        "cred": "",
     },
 ]
 
