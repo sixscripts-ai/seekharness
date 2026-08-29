@@ -165,12 +165,14 @@ def run_battle(battle_id: str) -> None:
             )
         service.battle_update(
             battle_id,
-            {"status": "completed", "completed_at": datetime.now(timezone.utc)},
+            {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()},
         )
         event_bus.publish(
             battle_id, {"type": "battle_status", "data": {"status": "completed"}}
         )
-    except Exception:
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
         try:
             service.battle_update(battle_id, {"status": "failed"})
         except Exception:

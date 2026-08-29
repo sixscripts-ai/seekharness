@@ -923,12 +923,6 @@ def round_create(
         "model_id": model_id,
         "artifact": artifact,
     }
-    if tool_trace is not None:
-        payload["tool_trace"] = json.dumps(tool_trace, default=str)
-    if verification_log is not None:
-        payload["verification_log"] = verification_log
-    if meta is not None:
-        payload["meta"] = json.dumps(meta, default=str)
     databases.create_document(database_id, "rounds", "unique()", payload)
 
 
