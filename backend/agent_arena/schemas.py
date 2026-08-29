@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,13 +30,45 @@ class ProviderHealth(BaseModel):
 
 class BattleCreate(BaseModel):
     format_id: str = Field(min_length=1)
-    model_ids: list[str] = Field(min_length=2, max_length=6)
-    arena_size: int = Field(default=2, ge=2, le=6)
+    model_ids: list[str] = Field(min_length=1, max_length=6)
+    arena_size: int = Field(default=2, ge=1, le=6)
     timeout_seconds: int = Field(default=600, ge=30, le=3600)
     round_visibility: str = Field(default="isolated", pattern="^(isolated|open)$")
     save: bool = False
     judge_provider_id: str | None = None
     difficulty: Literal["novice", "general", "advanced", "expert"] | None = None
+    target_id: str | None = None
+    target_version: str | None = None
+
+
+class TargetSummaryOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    category: str
+    difficulty: str
+    format: str
+    runtime: str
+    tags: list[str]
+    version: str
+    visible_test_count: int
+    hidden_test_count: int
+    handoff_required: bool
+    verification_type: str
+    network: bool
+    manifest_hash: str
+
+
+class TargetDetailOut(TargetSummaryOut):
+    # objectives is public; the remaining evaluator-internal fields are only
+    # populated for authenticated callers (see target_router.get_target).
+    objectives: list[str]
+    starter_files: list[str] | None = None
+    visible_tests: list[str] | None = None
+    protected_paths: list[str] | None = None
+    handoff_allowlist: list[str] | None = None
+    limits: dict[str, int] | None = None
+    safety: dict[str, Any] | None = None
 
 
 class BattleDraftCreate(BaseModel):

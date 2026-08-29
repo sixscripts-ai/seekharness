@@ -6,6 +6,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from . import db, event_bus
@@ -29,30 +30,47 @@ def _skills_dir() -> Path:
     return Path(__file__).resolve().parents[2] / ".agents" / "skills"
 
 
+def _targets_dir() -> Path:
+    env_dir = os.environ.get("ARENA_TARGETS_DIR")
+    if env_dir and Path(env_dir).is_dir():
+        return Path(env_dir)
+    mounted = Path("/opt/arena-targets")
+    if mounted.is_dir():
+        return mounted
+    return Path(__file__).resolve().parents[2] / "targets" / "library"
+
+
 def _load_battle(battle_id: str):
-    databases = db.get_databases()
-    database_id = db.get_database_id()
-    battle = databases.get_document(database_id, "battles", battle_id)
+    from .persistence import service
+
+    battle = service.battle_get("", battle_id)
+    if battle is None:
+        raise RuntimeError(f"Battle {battle_id} not found")
     format_cfg: dict = {}
     try:
-        format_doc = databases.get_document(
-            database_id, "formats", battle.data["format_id"]
-        )
-        format_cfg = json.loads(format_doc.data["config"])
+        fmt_record = service.format_get(str(battle.get("format_id") or ""))
+        format_cfg = (fmt_record or {}).get("config") or {}
     except Exception:
         format_cfg = {}
     from .custom_battles import resolve_battle_config
 
-    cfg = resolve_battle_config(battle.data, format_cfg)
-    return databases, database_id, battle, cfg
+    cfg = resolve_battle_config(battle, format_cfg)
+    return None, None, battle, cfg
 
 
 def _set_status(databases, database_id: str, battle_id: str, status: str) -> None:
+    from .persistence import service
+
     try:
         payload = {"status": status}
-        if status == "running":
+        if service.using_postgres():
+            if status == "running":
+                payload["started_at"] = datetime.now(timezone.utc)
+            if status in ("completed", "failed", "cancelled"):
+                payload["completed_at"] = datetime.now(timezone.utc)
+        elif status == "running":
             payload["started_at"] = time.time()
-        databases.update_document(database_id, "battles", battle_id, payload)
+        service.battle_update(battle_id, payload)
     except Exception:
         pass
     event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": status}})
@@ -79,8 +97,10 @@ def run_in_process(battle_id: str) -> None:
     client = InternalClient(HttpTransport(base, "", sandbox_token=sandbox_token))
 
     def status_check() -> str:
-        b = databases.get_document(database_id, "battles", battle_id)
-        return b.data["status"]
+        from .persistence import service
+
+        b = service.battle_get("", battle_id) or {}
+        return b.get("status", "unknown")
 
     def on_status(status: str) -> None:
         _set_status(databases, database_id, battle_id, status)
@@ -91,9 +111,9 @@ def run_in_process(battle_id: str) -> None:
         scores = run_battle_loop(
             battle_id=battle_id,
             format_config=cfg,
-            model_ids=list(battle.data["model_ids"]),
-            round_visibility=battle.data.get("round_visibility", "isolated"),
-            timeout_seconds=int(battle.data.get("timeout_seconds") or 600),
+            model_ids=list(battle.get("model_ids") or []),
+            round_visibility=battle.get("round_visibility", "isolated"),
+            timeout_seconds=int(battle.get("timeout_seconds") or 600),
             client=client,
             status_check=status_check,
             on_status=on_status,
@@ -119,7 +139,7 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
         if path == "/internal/model":
             try:
                 base, style, key, model = get_model_call_spec(
-                    body["model_id"], battle.data["user_id"]
+                    body["model_id"], battle.get("user_id")
                 )
                 content = llm_client.chat_completion(
                     base_url=base,
@@ -135,13 +155,13 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
         if path == "/internal/judge":
             try:
                 return judge_mod.judge_battle(
-                    model_ids=list(battle.data["model_ids"]),
+                    model_ids=list(battle.get("model_ids") or []),
                     artifacts=body.get("artifacts") or [],
                     rubric=body.get("rubric") or "score",
                     weights=body.get("weights"),
                 )
             except Exception:
-                mids = list(battle.data["model_ids"])
+                mids = list(battle.get("model_ids") or [])
                 scores = {m: 50.0 + i for i, m in enumerate(mids)}
                 return {
                     "scores": scores,
@@ -150,16 +170,10 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
                 }
         if path == "/internal/round":
             art = sanitize_artifact(body.get("artifact", ""))
-            databases.create_document(
-                database_id,
-                "rounds",
-                "unique()",
-                {
-                    "battle_id": battle_id,
-                    "phase": body.get("phase", ""),
-                    "model_id": body.get("model_id", ""),
-                    "artifact": art,
-                },
+            from .persistence import service
+
+            service.round_create(
+                battle_id, body.get("phase", ""), body.get("model_id", ""), art
             )
             event_bus.publish(
                 battle_id,
@@ -179,8 +193,10 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
     client = InternalClient(transport)
 
     def status_check() -> str:
-        b = databases.get_document(database_id, "battles", battle_id)
-        return b.data["status"]
+        from .persistence import service
+
+        b = service.battle_get("", battle_id) or {}
+        return b.get("status", "unknown")
 
     def on_status(status: str) -> None:
         _set_status(databases, database_id, battle_id, status)
@@ -190,16 +206,16 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
         scores = run_battle_loop(
             battle_id=battle_id,
             format_config=cfg,
-            model_ids=list(battle.data["model_ids"]),
-            round_visibility=battle.data.get("round_visibility", "isolated"),
-            timeout_seconds=int(battle.data.get("timeout_seconds") or 600),
+            model_ids=list(battle.get("model_ids") or []),
+            round_visibility=battle.get("round_visibility", "isolated"),
+            timeout_seconds=int(battle.get("timeout_seconds") or 600),
             client=client,
             status_check=status_check,
             on_status=on_status,
         )
         if scores:
             _finalize_scores(databases, database_id, battle_id, battle, scores)
-            if battle.data.get("status") != "completed":
+            if battle.get("status") != "completed":
                 _set_status(databases, database_id, battle_id, "completed")
     except Exception:
         _set_status(databases, database_id, battle_id, "failed")
@@ -208,31 +224,24 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
 def _finalize_scores(databases, database_id, battle_id, battle, scores) -> None:
     if not scores:
         return
-    from . import leaderboard
+    from .persistence import service
 
     for mid, value in scores.items():
-        databases.create_document(
-            database_id,
-            "scores",
-            "unique()",
-            {
-                "battle_id": battle_id,
-                "model_id": mid,
-                "score": float(value),
-                "judge_model": "host-judge",
-                "justification": "judged",
-            },
+        service.score_upsert(
+            battle_id,
+            mid,
+            float(value),
+            judge_model="host-judge",
+            justification="judged",
         )
     try:
         from .custom_battles import is_ranked_battle, resolve_battle_config
 
-        cfg = resolve_battle_config(battle.data, {})
-        if is_ranked_battle(battle.data, cfg):
-            leaderboard.apply_result(
-                databases,
-                database_id,
-                battle.data["format_id"],
-                list(battle.data["model_ids"]),
+        cfg = resolve_battle_config(battle, {})
+        if is_ranked_battle(battle, cfg):
+            service.leaderboard_apply_result(
+                battle.get("format_id", ""),
+                list(battle.get("model_ids") or []),
                 scores,
             )
     except Exception:
@@ -255,12 +264,13 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     sandbox_token = issue_battle_token(battle_id)
     bootstrap = {
         "format_config": cfg,
-        "model_ids": list(battle.data["model_ids"]),
-        "round_visibility": battle.data.get("round_visibility", "isolated"),
-        "timeout_seconds": int(battle.data.get("timeout_seconds") or 600),
+        "model_ids": list(battle.get("model_ids") or []),
+        "round_visibility": battle.get("round_visibility", "isolated"),
+        "timeout_seconds": int(battle.get("timeout_seconds") or 600),
     }
     app = modal.App.lookup("agent-arena-backend", create_if_missing=True)
     skills_dir = _skills_dir()
+    targets_dir = _targets_dir()
     image = (
         modal.Image.debian_slim(python_version="3.11")
         .apt_install(
@@ -280,16 +290,19 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     )
     if skills_dir.is_dir():
         image = image.add_local_dir(str(skills_dir), remote_path="/opt/arena-skills")
+    if targets_dir.is_dir():
+        image = image.add_local_dir(str(targets_dir), remote_path="/opt/arena-targets")
     secret = modal.Secret.from_dict(
         {
             "BATTLE_TOKEN": sandbox_token,
             "BACKEND_PUBLIC_URL": _backend_public_url(),
             "BATTLE_BOOTSTRAP_JSON": json.dumps(bootstrap),
             "ARENA_SKILLS_ROOT": "/opt/arena-skills",
+            "ARENA_TARGETS_DIR": "/opt/arena-targets",
         }
     )
     preview_on = bool((cfg.get("environment") or {}).get("preview")) and len(
-        battle.data.get("model_ids") or []
+        battle.get("model_ids") or []
     ) == 2
     create_kwargs = {
         "image": image,
@@ -311,7 +324,7 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     if not sandbox_id:
         raise RuntimeError("Modal sandbox created without an id")
     if preview_on:
-        _persist_preview_urls(battle_id, list(battle.data["model_ids"]), sb)
+        _persist_preview_urls(battle_id, list(battle.get("model_ids") or []), sb)
     return sandbox_id
 
 
@@ -340,14 +353,10 @@ def _persist_preview_urls(battle_id: str, model_ids: list[str], sb) -> None:
                 previews[model_by_port[port]] = url
         if not previews:
             return
-        databases = db.get_databases()
+        from .persistence import service
+
         try:
-            databases.update_document(
-                db.get_database_id(),
-                "battles",
-                battle_id,
-                {"preview_urls": json.dumps(previews)},
-            )
+            service.battle_update(battle_id, {"preview_urls": previews})
         except Exception:
             pass
         for model_id, url in previews.items():
@@ -363,15 +372,10 @@ def _persist_preview_urls(battle_id: str, model_ids: list[str], sb) -> None:
 
 
 def _fail_with_reason(battle_id: str, reason: str) -> None:
-    databases = db.get_databases()
-    database_id = db.get_database_id()
+    from .persistence import service
+
     try:
-        databases.update_document(
-            database_id,
-            "battles",
-            battle_id,
-            {"status": "failed", "failure_reason": reason},
-        )
+        service.battle_update(battle_id, {"status": "failed", "failure_reason": reason})
     except Exception:
         pass
     event_bus.publish(battle_id, {"type": "error", "data": {"message": reason}})
@@ -392,16 +396,12 @@ def start_battle(battle_id: str) -> None:
             _fail_with_reason(battle_id, reason)
             return
         try:
-            databases = db.get_databases()
-            databases.update_document(
-                db.get_database_id(),
-                "battles",
-                battle_id,
-                {"sandbox_id": sandbox_id},
-            )
+            from .persistence import service
+
+            service.battle_update(battle_id, {"sandbox_id": sandbox_id})
         except Exception:
             pass
-        _set_status(db.get_databases(), db.get_database_id(), battle_id, "running")
+        _set_status(None, None, battle_id, "running")
         return
     os.environ.setdefault("ARENA_INPROCESS_DIRECT", "1")
     if os.environ.get("ARENA_IN_SANDBOX") != "1":

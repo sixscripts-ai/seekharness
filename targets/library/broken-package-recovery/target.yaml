@@ -1,0 +1,39 @@
+schema_version: 1
+id: broken-package-recovery
+name: Broken Package Recovery
+category: software-engineering
+difficulty: novice
+format: solo
+runtime: node22
+description: Repair a small Node.js package with a broken test script and incorrect import path.
+tags:
+- node
+- npm
+- dependencies
+- debugging
+- tool-use
+objectives:
+- Make npm test succeed.
+- Preserve the public summarize(items) API.
+- Do not remove tests or hard-code test outputs.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  handoff_allowlist: []
+network: false
+verification:
+  visible_command: npm test
+  hidden_command: node --test tests/hidden/*.test.js
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 18
+  exec_timeout_seconds: 360
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

@@ -1,0 +1,42 @@
+schema_version: 1
+id: session-replay-defense
+name: Session Replay Defense
+category: cybersecurity
+difficulty: advanced
+format: builder_breaker
+runtime: python311
+description: Builder implements signed, expiring, one-time session tokens; Breaker attempts replay or tampering against the frozen implementation.
+tags:
+- python
+- hmac
+- sessions
+- replay
+- builder-breaker
+objectives:
+  builder:
+  - Implement issue() and verify() in tokens.py.
+  - A token must be valid exactly once and expire after its TTL.
+  breaker:
+  - Attempt replay, tampering, expiry-boundary, or nonce-collision attacks against the frozen tokens.py.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  handoff_allowlist:
+  - tokens.py
+network: false
+verification:
+  visible_command: PYTHONPATH=. pytest -q tests/visible
+  hidden_command: PYTHONPATH=. pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 24
+  exec_timeout_seconds: 600
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

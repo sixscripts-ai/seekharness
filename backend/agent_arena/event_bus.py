@@ -34,21 +34,15 @@ def _persist_worker() -> None:
     while True:
         battle_id, event = _persist_queue.get()
         try:
-            from . import db
+            from .persistence import service
 
-            databases = db.get_databases()
-            database_id = db.get_database_id()
             payload = {"type": event.get("type"), "data": _scrub(event.get("data"))}
-            databases.create_document(
-                database_id,
-                "battle_events",
-                "unique()",
-                {
-                    "battle_id": battle_id,
-                    "event_id": event["event_id"],
-                    "payload": json.dumps(payload),
-                    "created_at": float(event["created_at"]),
-                },
+            service.events_append(
+                battle_id,
+                payload["type"],
+                payload["data"],
+                event_id=event["event_id"],
+                created_at=float(event["created_at"]),
             )
         except Exception:
             pass

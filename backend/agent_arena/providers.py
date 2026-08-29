@@ -290,31 +290,16 @@ def create_provider(body: ProviderCreate, user_id: str = Depends(get_current_use
     base_url = validate_base_url(body.base_url)
     encrypted = crypto.encrypt_key(body.api_key, _fernet_key())
     masked = crypto.mask_key(body.api_key)
-    databases = db.get_databases()
-    database_id = db.get_database_id()
-    payload = {
-        "user_id": user_id,
-        "name": body.name,
-        "base_url": base_url,
-        "encrypted_key": encrypted,
-        "masked_key": masked,
-        "auth_style": body.auth_style,
-        "model_name": body.model_name,
-    }
+    from .persistence import service
+
     try:
-        existing = _find_existing(databases, database_id, user_id, body.name)
-        if existing:
-            doc = databases.update_document(
-                database_id, "providers", existing.id, payload
-            )
-        else:
-            doc = databases.create_document(
-                database_id, "providers", "unique()", payload
-            )
+        record = service.provider_upsert(
+            user_id, body.name, base_url, encrypted, masked, body.auth_style, body.model_name
+        )
     except AppwriteException as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return ProviderOut(
-        id=doc.id,
+        id=record["id"],
         name=body.name,
         base_url=body.base_url,
         masked_key=masked,
@@ -325,22 +310,19 @@ def create_provider(body: ProviderCreate, user_id: str = Depends(get_current_use
 
 @router.get("")
 def list_providers(user_id: str = Depends(get_current_user)):
-    databases = db.get_databases()
-    res = databases.list_documents(
-        db.get_database_id(),
-        "providers",
-        queries=[Query.equal("user_id", user_id), Query.limit(100)],
-    )
+    from .persistence import service
+
+    records = service.providers_list(user_id)
     items = [
         ProviderOut(
-            id=d.id,
-            name=d.data["name"],
-            base_url=d.data["base_url"],
-            masked_key=d.data["masked_key"],
-            auth_style=d.data["auth_style"],
-            model_name=d.data.get("model_name", ""),
+            id=r["id"],
+            name=r["name"],
+            base_url=r["base_url"],
+            masked_key=r["masked_key"],
+            auth_style=r["auth_style"],
+            model_name=r.get("model_name", ""),
         ).model_dump()
-        for d in res.documents
+        for r in records
     ]
     return configured_host_providers() + items
 
@@ -353,25 +335,20 @@ def delete_provider(provider_id: str, user_id: str = Depends(get_current_user)):
             status_code=400,
             detail="System host providers cannot be deleted from the server. You can hide them from the interface instead.",
         )
-    databases = db.get_databases()
-    database_id = db.get_database_id()
-    try:
-        doc = databases.get_document(database_id, "providers", provider_id)
-    except AppwriteException as exc:
-        raise HTTPException(status_code=404, detail="Provider not found") from exc
+    from .persistence import service
 
-    if doc.data.get("user_id") != user_id:
+    try:
+        deleted, name = service.provider_delete(user_id, provider_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Provider not found") from exc
+    except AppwriteException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(
             status_code=403,
             detail="Forbidden: You do not have permission to delete this provider",
         )
-
-    try:
-        databases.delete_document(database_id, "providers", provider_id)
-    except AppwriteException as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return {"ok": True, "id": provider_id, "name": doc.data.get("name")}
+    return {"ok": True, "id": provider_id, "name": name}
 
 
 def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str]:
@@ -390,20 +367,19 @@ def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str
             key,
             host["model_name"],
         )
-    databases = db.get_databases()
-    database_id = db.get_database_id()
-    try:
-        doc = databases.get_document(database_id, "providers", model_id)
-    except AppwriteException as exc:
-        raise HTTPException(status_code=404, detail="Unknown model_id") from exc
-    if doc.data.get("user_id") != user_id:
+    from .persistence import service
+
+    doc = service.provider_get(user_id, model_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Unknown model_id")
+    if doc.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not your provider")
-    api_key = _decrypt_with_any(doc.data["encrypted_key"])
+    api_key = _decrypt_with_any(doc["encrypted_key"])
     return (
-        doc.data["base_url"],
-        doc.data["auth_style"],
+        doc["base_url"],
+        doc["auth_style"],
         api_key,
-        doc.data.get("model_name") or "",
+        doc.get("model_name") or "",
     )
 
 
@@ -500,4 +476,3 @@ def provider_health(body: ProviderHealth, _user_id: str = Depends(get_current_us
             detail=f"Provider returned {resp.status_code}: {resp.text[:200]}",
         )
     return {"ok": True, "status_code": resp.status_code}
-

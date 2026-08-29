@@ -6,6 +6,7 @@ import hmac
 import json
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 from threading import Lock
 
 from appwrite.exception import AppwriteException
@@ -74,22 +75,32 @@ def _rate_limit(battle_id: str) -> None:
             raise HTTPException(status_code=429, detail="internal rate limit exceeded")
     # Durable cross-replica window via a counter document.
     try:
-        databases = db.get_databases()
-        database_id = db.get_database_id()
-        res = databases.list_documents(
-            database_id,
-            "battle_events",
-            queries=[
-                Query.equal("battle_id", battle_id),
-                Query.contains("payload", '"type":"internal_call"'),
-                Query.limit(_RATE_LIMIT + 1),
-            ],
-        )
-        # Count only calls within the last minute using payload timestamps is
-        # not reliable; approximate with doc count is acceptable given the
-        # token expiry already bounds total call volume. Keep it conservative.
-        if len(res.documents) >= _RATE_LIMIT:
-            raise HTTPException(status_code=429, detail="internal rate limit exceeded")
+        from .persistence import service
+
+        if service.using_postgres():
+            internal_calls = sum(
+                1 for e in service.events_load(battle_id)
+                if e.get("type") == "internal_call"
+            )
+            if internal_calls >= _RATE_LIMIT:
+                raise HTTPException(status_code=429, detail="internal rate limit exceeded")
+        else:
+            databases = db.get_databases()
+            database_id = db.get_database_id()
+            res = databases.list_documents(
+                database_id,
+                "battle_events",
+                queries=[
+                    Query.equal("battle_id", battle_id),
+                    Query.contains("payload", '"type":"internal_call"'),
+                    Query.limit(_RATE_LIMIT + 1),
+                ],
+            )
+            # Count only calls within the last minute using payload timestamps is
+            # not reliable; approximate with doc count is acceptable given the
+            # token expiry already bounds total call volume. Keep it conservative.
+            if len(res.documents) >= _RATE_LIMIT:
+                raise HTTPException(status_code=429, detail="internal rate limit exceeded")
     except HTTPException:
         raise
     except Exception:
@@ -99,12 +110,13 @@ def _rate_limit(battle_id: str) -> None:
         _rate_counts[battle_id] = window
 
 
-def _active_battle(databases, database_id: str, battle_id: str):
-    try:
-        battle = databases.get_document(database_id, "battles", battle_id)
-    except AppwriteException as exc:
-        raise HTTPException(status_code=404, detail="Battle not found") from exc
-    if battle.data.get("status") not in ("queued", "running"):
+def _active_battle(databases, database_id: str, battle_id: str) -> dict:
+    from .persistence import service
+
+    battle = service.battle_get("", battle_id)
+    if battle is None:
+        raise HTTPException(status_code=404, detail="Battle not found")
+    if battle.get("status") not in ("queued", "running"):
         raise HTTPException(status_code=409, detail="battle not active")
     return battle
 
@@ -167,29 +179,19 @@ class FinalizeBody(BaseModel):
     scores: dict[str, float] = Field(default_factory=dict)
 
 
-def _finalize_scores(
-    databases, database_id: str, battle_id: str, scores: dict, source: str = "judged"
-) -> bool:
-    """Persist score docs + Elo for a finished battle. Idempotent per battle."""
-    existing = databases.list_documents(
-        database_id,
-        "scores",
-        queries=[Query.equal("battle_id", battle_id), Query.limit(1)],
-    )
-    if existing.documents:
+def _finalize_scores(battle_id: str, scores: dict, source: str = "judged") -> bool:
+    """Persist score docs for a finished battle. Idempotent per battle."""
+    from .persistence import service
+
+    if service.scores_exist(battle_id):
         return False
     for mid, value in scores.items():
-        databases.create_document(
-            database_id,
-            "scores",
-            "unique()",
-            {
-                "battle_id": battle_id,
-                "model_id": mid,
-                "score": float(value),
-                "judge_model": "arena-deterministic" if source != "judged" else "host-judge",
-                "justification": source,
-            },
+        service.score_upsert(
+            battle_id,
+            mid,
+            float(value),
+            judge_model="arena-deterministic" if source != "judged" else "host-judge",
+            justification=source,
         )
     return True
 
@@ -198,19 +200,12 @@ def _parse_executor_results(databases, database_id: str, battle_id: str) -> list
     """Load EXECUTOR_RESULT payloads from durable battle_events."""
     out: list[dict] = []
     try:
-        res = databases.list_documents(
-            database_id,
-            "battle_events",
-            queries=[Query.equal("battle_id", battle_id), Query.limit(200)],
-        )
+        from .persistence import service
+
+        events = service.events_load(battle_id)
     except Exception:
         return out
-    for doc in res.documents:
-        payload = doc.data.get("payload") or ""
-        try:
-            event = json.loads(payload) if isinstance(payload, str) else payload
-        except Exception:
-            continue
+    for event in events:
         if not isinstance(event, dict) or event.get("type") != "result":
             continue
         artifact = str((event.get("data") or {}).get("artifact") or "")
@@ -227,14 +222,44 @@ def _parse_executor_results(databases, database_id: str, battle_id: str) -> list
     return out
 
 
+def _record_skill_outcome_pg(skill_name: str, outcome: str, tier: str = "general") -> None:
+    """Mirror skills_registry.record_outcome against the Postgres backend."""
+    from . import elo
+    from .persistence import service
+
+    difficulty_offset = {"novice": 0.0, "general": 0.0, "advanced": -100.0, "expert": -200.0}
+    cur = service.skill_get(skill_name) or {}
+    current_elo = float(cur.get("elo") or elo.INITIAL_RATING)
+    expected = elo.expected_score(
+        current_elo + difficulty_offset.get(tier, 0.0), elo.INITIAL_RATING
+    )
+    score = {"win": 1.0, "draw": 0.5, "loss": 0.0}[outcome]
+    wins = int(cur.get("wins") or 0) + (1 if outcome == "win" else 0)
+    losses = int(cur.get("losses") or 0) + (1 if outcome == "loss" else 0)
+    draws = int(cur.get("draws") or 0) + (1 if outcome == "draw" else 0)
+    uses = int(cur.get("uses") or 0) + 1
+    success_rate = round((wins + 0.5 * draws) / max(1, uses), 3)
+    new_elo = round(current_elo + elo.K_FACTOR * (score - expected), 2)
+    service.skill_upsert(
+        skill_name,
+        elo=new_elo,
+        wins=wins,
+        losses=losses,
+        draws=draws,
+        uses=uses,
+        success_rate=success_rate,
+        tier=tier,
+        last_used=time.time(),
+    )
+
+
 def _apply_self_learning(
     databases, database_id: str, battle: dict, battle_id: str, results: list[dict]
 ) -> None:
     """Persist skill Elo + memory from executor results (runs on backend, not sandbox)."""
     if not results:
         return
-    from .memory import maybe_remember
-    from .skills_registry import record_outcome
+    from .persistence import service
 
     sorted_res = sorted(
         results,
@@ -244,44 +269,67 @@ def _apply_self_learning(
     winner = sorted_res[0]
     format_name = ""
     try:
-        fmt = databases.get_document(
-            database_id, "formats", battle.get("format_id", "")
-        )
-        format_name = str(fmt.data.get("name") or "")
+        fmt_record = service.format_get(str(battle.get("format_id") or ""))
+        format_name = str((fmt_record or {}).get("name") or "")
     except Exception:
         format_name = str(battle.get("format_id") or "")
     try:
-        maybe_remember(
-            databases,
-            database_id,
-            insight=(
-                f"Battle {battle_id} format {format_name} "
-                f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
-                f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
-                f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
-                "Skills to beat opponent technique emerged."
-            ),
-            battle_id=battle_id,
-            model_id=str(winner.get("model_id") or ""),
-            format_name=format_name,
-            chosen_skills=list(winner.get("chosen_skills") or []),
-            theory=str(winner.get("theory") or ""),
-            outcome=str(winner.get("outcome") or ""),
-            user_id=str(battle.get("user_id") or "system"),
-        )
+        if service.using_postgres():
+            service.memory_create(
+                str(battle.get("user_id") or "system"),
+                (
+                    f"Battle {battle_id} format {format_name} "
+                    f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
+                    f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
+                    f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
+                    "Skills to beat opponent technique emerged."
+                ),
+                battle_id=battle_id,
+                model_id=str(winner.get("model_id") or ""),
+                format=format_name,
+                chosen_skills=list(winner.get("chosen_skills") or []),
+                theory=str(winner.get("theory") or ""),
+                outcome=str(winner.get("outcome") or ""),
+            )
+        else:
+            from .memory import maybe_remember
+
+            maybe_remember(
+                databases,
+                database_id,
+                insight=(
+                    f"Battle {battle_id} format {format_name} "
+                    f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
+                    f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
+                    f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
+                    "Skills to beat opponent technique emerged."
+                ),
+                battle_id=battle_id,
+                model_id=str(winner.get("model_id") or ""),
+                format_name=format_name,
+                chosen_skills=list(winner.get("chosen_skills") or []),
+                theory=str(winner.get("theory") or ""),
+                outcome=str(winner.get("outcome") or ""),
+                user_id=str(battle.get("user_id") or "system"),
+            )
     except Exception:
         pass
     for r in results:
         outcome = "win" if r is winner else "loss"
         for chosen in list(r.get("chosen_skills") or [])[:5]:
             try:
-                record_outcome(
-                    databases,
-                    database_id,
-                    str(chosen),
-                    outcome=outcome,
-                    tier="general",
-                )
+                if service.using_postgres():
+                    _record_skill_outcome_pg(str(chosen), outcome)
+                else:
+                    from .skills_registry import record_outcome
+
+                    record_outcome(
+                        databases,
+                        database_id,
+                        str(chosen),
+                        outcome=outcome,
+                        tier="general",
+                    )
             except Exception:
                 pass
 
@@ -295,13 +343,14 @@ def internal_finalize(
     """Sandbox reports final outcome: persist scores, update battle status, apply Elo."""
     _require_battle_token(body.battle_id, x_sandbox_token, x_internal_key)
     _rate_limit(body.battle_id)
+    from .persistence import service
+
     databases = db.get_databases()
     database_id = db.get_database_id()
-    try:
-        battle = databases.get_document(database_id, "battles", body.battle_id)
-    except AppwriteException as exc:
-        raise HTTPException(status_code=404, detail="Battle not found") from exc
-    if battle.data.get("status") not in ("queued", "running"):
+    battle = service.battle_get("", body.battle_id)
+    if battle is None:
+        raise HTTPException(status_code=404, detail="Battle not found")
+    if battle.get("status") not in ("queued", "running"):
         raise HTTPException(status_code=409, detail="battle not active")
     status = body.status if body.status in ("completed", "failed") else "completed"
     effective_scores = body.scores
@@ -317,16 +366,14 @@ def internal_finalize(
             fmt_cfg: dict = {}
             if results:
                 try:
-                    fmt_doc = databases.get_document(
-                        database_id, "formats", battle.data["format_id"]
-                    )
-                    fmt_cfg = json.loads(fmt_doc.data.get("config") or "{}")
+                    fmt_record = service.format_get(str(battle.get("format_id") or ""))
+                    fmt_cfg = (fmt_record or {}).get("config") or {}
                 except Exception:
                     fmt_cfg = {}
                 from .custom_battles import FrozenConfigError, resolve_battle_config
 
                 try:
-                    fmt_cfg = resolve_battle_config(battle.data, fmt_cfg)
+                    fmt_cfg = resolve_battle_config(battle, fmt_cfg)
                 except FrozenConfigError:
                     fmt_cfg = {}
                 from . import evidence as evidence_mod
@@ -337,7 +384,7 @@ def internal_finalize(
                     results,
                     fmt_cfg,
                     judge_scores=dict(body.scores or {}),
-                    format_id=str(battle.data.get("format_id") or ""),
+                    format_id=str(battle.get("format_id") or ""),
                 )
                 decision = scoring_mod.decide_winner(summary, fmt_cfg)
                 event_bus.publish(
@@ -346,7 +393,7 @@ def internal_finalize(
                 )
                 det_scores = scoring_mod.deterministic_scores(decision)
                 if det_scores:
-                    battle_mids = set(battle.data.get("model_ids", []))
+                    battle_mids = set(battle.get("model_ids", []))
                     result_mids = {str(r.get("model_id") or "") for r in results}
                     if status == "failed" and result_mids != battle_mids:
                         # Partial evidence on a failed battle: never fabricate
@@ -361,38 +408,34 @@ def internal_finalize(
                         status = "completed"
             if effective_scores:
                 if _finalize_scores(
-                    databases,
-                    database_id,
                     body.battle_id,
                     effective_scores,
                     source=score_source,
                 ):
-                    from . import leaderboard
                     from .custom_battles import is_ranked_battle
 
-                    if is_ranked_battle(battle.data, fmt_cfg):
-                        leaderboard.apply_result(
-                            databases,
-                            database_id,
-                            battle.data["format_id"],
-                            list(battle.data.get("model_ids", [])),
+                    if is_ranked_battle(battle, fmt_cfg):
+                        service.leaderboard_apply_result(
+                            battle["format_id"],
+                            list(battle.get("model_ids", [])),
                             effective_scores,
                         )
         except Exception:
             pass
-    # Self-learning on backend (sandbox has no Appwrite credentials)
+    # Self-learning on backend (sandbox has no datastore credentials)
     try:
         from .custom_battles import is_ranked_battle, resolve_battle_config
 
-        cfg = resolve_battle_config(battle.data, {})
-        if is_ranked_battle(battle.data, cfg):
+        cfg = resolve_battle_config(battle, {})
+        if is_ranked_battle(battle, cfg):
             _apply_self_learning(
-                databases, database_id, battle.data, body.battle_id, results
+                databases, database_id, battle, body.battle_id, results
             )
     except Exception:
         pass
-    databases.update_document(
-        database_id, "battles", body.battle_id, {"status": status}
+    service.battle_update(
+        body.battle_id,
+        {"status": status, "completed_at": datetime.now(timezone.utc)},
     )
     if status == "completed" and effective_scores:
         event_bus.publish(
@@ -419,9 +462,9 @@ def internal_model(
     databases = db.get_databases()
     database_id = db.get_database_id()
     battle = _active_battle(databases, database_id, body.battle_id)
-    if body.model_id not in battle.data.get("model_ids", []):
+    if body.model_id not in battle.get("model_ids", []):
         raise HTTPException(status_code=400, detail="model not in battle")
-    base, style, key, model = get_model_call_spec(body.model_id, battle.data["user_id"])
+    base, style, key, model = get_model_call_spec(body.model_id, battle["user_id"])
     try:
         content = llm_client.chat_completion(
             base_url=base,
@@ -451,12 +494,12 @@ def internal_judge(
     databases = db.get_databases()
     database_id = db.get_database_id()
     battle = _active_battle(databases, database_id, body.battle_id)
-    model_ids = list(battle.data.get("model_ids", []))
+    model_ids = list(battle.get("model_ids", []))
     call_spec = None
-    jpid = battle.data.get("judge_provider_id")
+    jpid = battle.get("judge_provider_id")
     if jpid:
         try:
-            call_spec = get_model_call_spec(jpid, battle.data["user_id"])
+            call_spec = get_model_call_spec(jpid, battle["user_id"])
         except HTTPException:
             call_spec = None  # fall back to host Kimi-K3
     result = judge.judge_battle(
@@ -482,22 +525,14 @@ def internal_round(
     database_id = db.get_database_id()
     battle = _active_battle(databases, database_id, body.battle_id)
     if (
-        body.model_id not in battle.data.get("model_ids", [])
+        body.model_id not in battle.get("model_ids", [])
         and body.model_id != "system"
     ):
         raise HTTPException(status_code=400, detail="model not in battle")
     artifact = sanitize_artifact(body.artifact)
-    databases.create_document(
-        database_id,
-        "rounds",
-        "unique()",
-        {
-            "battle_id": body.battle_id,
-            "phase": body.phase,
-            "model_id": body.model_id,
-            "artifact": artifact,
-        },
-    )
+    from .persistence import service
+
+    service.round_create(body.battle_id, body.phase, body.model_id, artifact)
     event_id = f"{body.battle_id}:{body.sequence if body.sequence is not None else int(time.time() * 1000)}"
     event = {
         "type": body.event_type,
@@ -521,13 +556,12 @@ def internal_status(
     x_internal_key: str | None = Header(default=None),
 ):
     _require_battle_token(body.battle_id, x_sandbox_token, x_internal_key)
-    databases = db.get_databases()
-    database_id = db.get_database_id()
-    try:
-        battle = databases.get_document(database_id, "battles", body.battle_id)
-    except AppwriteException as exc:
-        raise HTTPException(status_code=404, detail="Battle not found") from exc
-    return {"status": battle.data.get("status") or "unknown"}
+    from .persistence import service
+
+    battle = service.battle_get("", body.battle_id)
+    if battle is None:
+        raise HTTPException(status_code=404, detail="Battle not found")
+    return {"status": battle.get("status") or "unknown"}
 
 
 @router.post("/reap")

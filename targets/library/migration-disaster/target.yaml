@@ -1,0 +1,39 @@
+schema_version: 1
+id: migration-disaster
+name: Migration Disaster
+category: data-sql
+difficulty: advanced
+format: solo
+runtime: python311-sqlite
+description: Repair a SQLite migration sequence so legacy data survives and the final schema is correct and idempotent.
+tags:
+- python
+- sqlite
+- migrations
+- data-integrity
+- sql
+objectives:
+- Implement migrate(conn) for legacy schema version 1.
+- Preserve existing user rows and email values.
+- Make repeated migration calls safe.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  handoff_allowlist: []
+network: false
+verification:
+  visible_command: PYTHONPATH=. pytest -q tests/visible
+  hidden_command: PYTHONPATH=. pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 24
+  exec_timeout_seconds: 600
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

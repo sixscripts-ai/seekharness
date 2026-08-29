@@ -18,4 +18,6 @@ def get_optional_user(authorization: Optional[str] = Header(default=None)) -> Op
 
 @router.get("")
 def get_leaderboard(format: str = "overall", _user_id: Optional[str] = Depends(get_optional_user)):
-    return leaderboard.get_rankings(db.get_databases(), db.get_database_id(), format)
+    from .persistence import service
+
+    return service.leaderboard_rankings(format)

@@ -1,0 +1,30 @@
+schema_version: 1
+id: example-target
+name: Example Target
+category: software-engineering
+difficulty: general
+format: solo
+runtime: python311
+description: Short description.
+tags: [python]
+objectives:
+  - Do the task.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths: [tests/hidden/**, reference/**]
+  handoff_allowlist: []
+network: false
+verification:
+  visible_command: pytest -q tests/visible
+  hidden_command: pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 18
+  exec_timeout_seconds: 360
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

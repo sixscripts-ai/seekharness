@@ -1,0 +1,40 @@
+schema_version: 1
+id: red-herring-repository
+name: Red-Herring Repository
+category: agent-tool-use
+difficulty: expert
+format: solo
+runtime: python311
+description: Locate and repair the authoritative inventory bug in a repository full of stale docs, duplicate implementations, and irrelevant failures.
+tags:
+- python
+- grep
+- find
+- repository-navigation
+- misleading-context
+- debugging
+objectives:
+- Determine which implementation is actually imported.
+- Fix stock reservation correctness and atomic validation behavior.
+- Do not repair unused legacy modules merely because their comments claim they are authoritative.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  handoff_allowlist: []
+network: false
+verification:
+  visible_command: PYTHONPATH=. pytest -q tests/visible
+  hidden_command: PYTHONPATH=. pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 24
+  exec_timeout_seconds: 600
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

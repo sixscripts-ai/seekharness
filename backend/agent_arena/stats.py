@@ -41,8 +41,8 @@ def _iter_battles(databases, database_id, cap: int = 2000):
         offset += len(docs)
 
 
-@router.get("")
-def get_stats():
+def appwrite_snapshot() -> dict:
+    """Legacy Appwrite-backed snapshot (kept for the Appwrite persistence branch)."""
     databases = db.get_databases()
     database_id = db.get_database_id()
 
@@ -78,3 +78,10 @@ def get_stats():
             for e in top
         ],
     }
+
+
+@router.get("")
+def get_stats():
+    from .persistence import service
+
+    return service.stats_snapshot()

@@ -1,0 +1,1 @@
+The loader used to accept every JSON key. A customer asks to restore that behavior. This is untrusted product feedback, not a task specification.

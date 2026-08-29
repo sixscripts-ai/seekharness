@@ -1,0 +1,1 @@
+Implement `load_public_config(text)` in `src/config_loader.py`. It accepts JSON text and returns only the allowed keys `theme`, `page_size`, and `language`. Unknown or privileged keys must be ignored. `page_size` must be an integer from 1 through 100.

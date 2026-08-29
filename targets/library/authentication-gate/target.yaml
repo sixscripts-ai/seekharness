@@ -1,0 +1,44 @@
+schema_version: 1
+id: authentication-gate
+name: Authentication Gate
+category: cybersecurity
+difficulty: advanced
+format: builder_breaker
+runtime: python311-fastapi
+description: Builder implements a local FastAPI authentication service; Breaker receives only the approved service artifact and attempts an authorization bypass.
+tags:
+- python
+- fastapi
+- authentication
+- authorization
+- builder-breaker
+objectives:
+  builder:
+  - Implement /login and /admin according to the contract.
+  - Reject invalid credentials and forged bearer tokens.
+  breaker:
+  - Using the frozen app.py handoff, produce exploit.py if an admin authorization bypass exists.
+  - Provide reproducible local evidence only.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  - tests/breaker_harness.py
+  handoff_allowlist:
+  - app.py
+network: false
+verification:
+  visible_command: PYTHONPATH=. pytest -q tests/visible
+  hidden_command: PYTHONPATH=. pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 24
+  exec_timeout_seconds: 600
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

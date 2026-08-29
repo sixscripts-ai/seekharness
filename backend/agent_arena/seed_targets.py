@@ -37,12 +37,15 @@ SCHEMA_FIELDS = (
 
 
 def load_targets(root: Path | None = None) -> list[dict]:
-    """Load and validate all YAML targets. Raises ValueError on bad files."""
+    """Load and validate all legacy YAML targets. Raises ValueError on bad files."""
     if yaml is None:
         raise RuntimeError("PyYAML required to load targets (pip install pyyaml)")
     base = root or TARGETS_ROOT
     targets: list[dict] = []
     for path in sorted(base.rglob("*.yaml")):
+        # Skip Target Library v1 bundle packages
+        if "library" in path.parts:
+            continue
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError(f"{path}: target must be a YAML mapping")

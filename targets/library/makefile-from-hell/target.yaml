@@ -1,0 +1,40 @@
+schema_version: 1
+id: makefile-from-hell
+name: Makefile From Hell
+category: systems
+difficulty: advanced
+format: solo
+runtime: linux-gcc-make
+description: Repair a C project build so make, incremental dependency tracking, and the test target work correctly.
+tags:
+- c
+- gcc
+- make
+- linux
+- build-system
+- tool-use
+objectives:
+- Make `make` produce build/calc.
+- Make `make test` execute the project test.
+- Track header dependencies so changing include/mathx.h rebuilds affected objects.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  handoff_allowlist: []
+network: false
+verification:
+  visible_command: pytest -q tests/visible/test_build.py
+  hidden_command: pytest -q tests/hidden/test_build_hidden.py
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 24
+  exec_timeout_seconds: 600
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

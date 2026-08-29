@@ -99,6 +99,9 @@ def is_ranked_battle(battle_data: dict | None, cfg: dict | None = None) -> bool:
     cfg = cfg or {}
     if cfg.get("ranked") is False or is_custom_config(cfg):
         return False
+    # Verified library targets are ranked eligible
+    if data.get("target_id") or cfg.get("target_id"):
+        return True
     if data.get("draft_id") or data.get("spec_hash"):
         return False
     return True

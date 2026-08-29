@@ -42,4 +42,9 @@ def settings() -> dict:
         "JUDGE_MODAL_BASE": os.environ.get("JUDGE_MODAL_BASE", ""),
         "JUDGE_MODAL_MODEL": os.environ.get("JUDGE_MODAL_MODEL", ""),
         "HOST_OPENCODE_GO_KEY": os.environ.get("HOST_OPENCODE_GO_KEY", ""),
+        # Persistence backend selection (Phase 2 cutover). Defaults keep the
+        # legacy Appwrite behavior until explicitly switched.
+        "PERSISTENCE_BACKEND": os.environ.get("PERSISTENCE_BACKEND", "appwrite"),
+        "APPWRITE_READ_FALLBACK": os.environ.get("APPWRITE_READ_FALLBACK", "false"),
+        "APPWRITE_DUAL_WRITE": os.environ.get("APPWRITE_DUAL_WRITE", "false"),
     }

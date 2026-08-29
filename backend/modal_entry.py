@@ -5,6 +5,7 @@ import modal
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _SKILLS_DIR = _BASE_DIR / ".agents" / "skills"
+_TARGETS_DIR = _BASE_DIR / "targets" / "library"
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -13,6 +14,10 @@ image = (
 )
 if _SKILLS_DIR.is_dir():
     image = image.add_local_dir(str(_SKILLS_DIR), remote_path="/opt/arena-skills")
+if _TARGETS_DIR.is_dir():
+    # The immutable Target Library ships with the deployment image (repository-backed;
+    # never stored in the database).
+    image = image.add_local_dir(str(_TARGETS_DIR), remote_path="/opt/arena-targets")
 
 app = modal.App("agent-arena-backend", image=image)
 
@@ -22,6 +27,7 @@ app = modal.App("agent-arena-backend", image=image)
     min_containers=1,
     env={
         "ARENA_SKILLS_ROOT": "/opt/arena-skills",
+        "ARENA_TARGETS_DIR": "/opt/arena-targets",
         "ARENA_BUILD_SHA": os.environ.get("ARENA_BUILD_SHA") or "unknown",
     },
 )

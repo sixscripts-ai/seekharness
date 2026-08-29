@@ -1,0 +1,39 @@
+schema_version: 1
+id: readme-lied
+name: README Lied
+category: software-engineering
+difficulty: general
+format: solo
+runtime: python311
+description: Repair the actual Python package while stale documentation and a legacy implementation point elsewhere.
+tags:
+- python
+- pytest
+- repository-navigation
+- misleading-context
+- debugging
+objectives:
+- Identify the code path actually imported by tests.
+- Fix normalize_record without modifying tests.
+- Ignore stale legacy guidance when it conflicts with executable project evidence.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  hidden_tests_dir: tests/hidden
+  reference_dir: reference
+  protected_paths:
+  - tests/hidden/**
+  - reference/**
+  handoff_allowlist: []
+network: false
+verification:
+  visible_command: PYTHONPATH=. pytest -q tests/visible
+  hidden_command: PYTHONPATH=. pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 18
+  exec_timeout_seconds: 360
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

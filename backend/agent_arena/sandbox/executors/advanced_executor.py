@@ -54,119 +54,16 @@ MAX_SELECTED_SKILLS = 3
 ADVANCED_EXECUTOR_VERSION = 1
 
 
-def _fetch_url_blocked(url: str) -> str | None:
-    """Return a rejection reason if `url` must not be fetched, else None.
-
-    Mitigates SSRF from the model-driven toolbelt: only http/https to public
-    hosts are allowed. Loopback, private, link-local, and metadata endpoints
-    (e.g. cloud 169.254.169.254) are blocked so a fighter cannot pivot to the
-    internal network or credential endpoints.
-    """
-    import ipaddress
-    import socket
-    from urllib.parse import urlparse
-
-    try:
-        parsed = urlparse(url.strip())
-    except Exception:
-        return "unparseable URL"
-    scheme = (parsed.scheme or "").lower()
-    if scheme not in {"http", "https"}:
-        return f"scheme '{scheme or '(none)'}' not allowed (http/https only)"
-    host = parsed.hostname
-    if not host:
-        return "missing host"
-    if host.lower() in {"localhost", "metadata", "metadata.google.internal"}:
-        return "host not allowed"
-    try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if scheme == "https" else 80))
-    except Exception as exc:
-        return f"DNS resolution failed: {exc}"
-    for info in infos:
-        addr = info[4][0]
-        try:
-            ip = ipaddress.ip_address(addr.split("%")[0])
-        except ValueError:
-            continue
-        if (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        ):
-            return f"host resolves to non-public address {ip}"
-    return None
-
-
-_URL_IN_TEXT = re.compile(r"(?:[a-z][a-z0-9+.-]*)://[^\s\"'<>]+", re.I)
-_FETCH_BIN = re.compile(
-    r"(?:^|[\s;&|`(\n])(?:sudo\s+)?(?:[A-Za-z0-9._/-]+/)?(?:curl|wget)\b",
-    re.I,
+# Command-jail helpers live in the shared _command_guard module so the target
+# verifier and this executor enforce the exact same rules. The private names
+# are re-imported here for backward compatibility with existing callers/tests.
+from ._command_guard import (
+    _fetch_url_blocked,
+    _fetch_targets_in_command,
+    _looks_like_fetch_target,
+    _normalize_fetch_url,
+    command_block_reason,
 )
-_ABS_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])(/[^\s;|&<>`'\"\)]*)")
-_DOTDOT_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(/])\.\.(?:/|[\s;|&<>`'\"\)]|$)")
-_HOME_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])~(?:/|$)")
-_ENV_HOME_IN_CMD = re.compile(r"(?:\$HOME|\$\{HOME\})(?![A-Za-z0-9_])")
-
-
-def _looks_like_fetch_target(token: str) -> bool:
-    t = token.strip().strip("'\"")
-    if not t:
-        return False
-    if "://" in t:
-        return True
-    host = t.split("/")[0].split(":")[0].lower()
-    if host in {"localhost", "metadata", "metadata.google.internal"}:
-        return True
-    if re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?(?:/.*)?", t):
-        return True
-    if re.fullmatch(r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", host):
-        return True
-    return False
-
-
-def _normalize_fetch_url(token: str) -> str:
-    t = token.strip().strip("'\"")
-    if "://" in t:
-        return t
-    return "http://" + t
-
-
-def _fetch_targets_in_command(command: str) -> list[str]:
-    found: list[str] = []
-    for match in _URL_IN_TEXT.finditer(command):
-        found.append(match.group(0).rstrip(".,;)]}"))
-    if _FETCH_BIN.search(command):
-        for match in re.finditer(
-            r"(?:^|[\s;&|`(\n])(?:sudo\s+)?(?:[A-Za-z0-9._/-]+/)?(?:curl|wget)\b(.*)",
-            command,
-            re.I | re.S,
-        ):
-            tokens = match.group(1).replace("\n", " ").split()
-            idx = 0
-            while idx < len(tokens):
-                tok = tokens[idx]
-                if tok.startswith("--url="):
-                    found.append(tok.split("=", 1)[1])
-                    break
-                if tok == "--url" and idx + 1 < len(tokens):
-                    found.append(tokens[idx + 1])
-                    break
-                if tok.startswith("-"):
-                    idx += 1
-                    continue
-                if _looks_like_fetch_target(tok):
-                    found.append(tok)
-                break
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in found:
-        if raw and raw not in seen:
-            seen.add(raw)
-            out.append(raw)
-    return out
 
 
 def _strip_secret_env(env: dict) -> dict:
@@ -188,27 +85,7 @@ def _strip_secret_env(env: dict) -> dict:
 
 def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
     """Reject shell/install commands that escape the workdir jail or bypass fetch SSRF."""
-    if command is None or not str(command).strip():
-        return "empty command"
-    text = str(command)
-    if _DOTDOT_IN_CMD.search(text):
-        return "path escape '..' rejected"
-    if _HOME_PATH_IN_CMD.search(text):
-        return "home path '~' rejected"
-    if _ENV_HOME_IN_CMD.search(text):
-        return "home env expansion '$HOME' rejected"
-    abs_match = _ABS_PATH_IN_CMD.search(text)
-    if abs_match:
-        return f"absolute path rejected: {abs_match.group(1)}"
-    has_fetch_bin = bool(_FETCH_BIN.search(text))
-    targets = _fetch_targets_in_command(text)
-    if (has_fetch_bin or targets) and not allow_network:
-        return "network fetch blocked (format environment.network is false)"
-    for raw in targets:
-        reason = _fetch_url_blocked(_normalize_fetch_url(raw))
-        if reason:
-            return f"fetch blocked ({reason})"
-    return None
+    return command_block_reason(command, allow_network=allow_network)
 
 
 def select_skills(
@@ -583,6 +460,7 @@ class ToolSession:
         tool_timeout: int | None = None,
         output_cap: int | None = None,
         allow_network: bool = False,
+        test_cmd: str | None = None,
     ):
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -593,6 +471,7 @@ class ToolSession:
         self.skill_reads: set[str] = set()
         self.seq = 0
         self.allow_network = bool(allow_network)
+        self.test_cmd = str(test_cmd or "").strip() or None
         self.procs = ProcessManager(self.workdir)
 
     def _maybe_cap(self, data: str) -> str:
@@ -739,6 +618,19 @@ class ToolSession:
             return f"ERROR: {exc}"
 
     def test(self, path: str) -> str:
+        if self.test_cmd and (not path or path in {".", "tests/test_target.py", "test"}):
+            out = self._run_command(self.test_cmd)
+            self.steps += 1
+            rc_m = re.search(r"rc=(-?\d+)\s*$", out.strip())
+            rc = int(rc_m.group(1)) if rc_m else 1
+            passed = rc == 0 or "TEST_PASS" in out
+            fail = rc != 0 or "TEST_FAIL" in out
+            if passed and rc == 0:
+                return f"TEST_PASS {self.test_cmd}\n{out}"
+            if fail:
+                return f"TEST_FAIL {self.test_cmd}\n{out}"
+            return f"TEST_UNKNOWN {self.test_cmd}\n{out}"
+
         harness = self.workdir / "tests" / "test_target.py"
         run_path = path
         if harness.exists() and (
@@ -1078,6 +970,21 @@ def tool_phase_name(format_config: dict) -> str:
     return "race"
 
 
+def is_builder_breaker(format_config: dict | None) -> bool:
+    """True when the format is an asymmetric builder vs breaker target match.
+
+    compile_target_to_battle_config emits `format == "builder_breaker"` together
+    with a two-phase battle_plan (build -> break). These matches are verified
+    asymmetrically via verify_builder_breaker_submission rather than the
+    single-phase verify_target_submission path.
+    """
+    cfg = format_config or {}
+    if str(cfg.get("format")) == "builder_breaker":
+        return True
+    actors = {str(p.get("actor")) for p in cfg.get("battle_plan", {}).get("phases", [])}
+    return actors == {"builder", "breaker"}
+
+
 class AdvancedExecutor(Executor):
     @staticmethod
     def _collect_workspace(work: Path) -> tuple[dict[str, str], str]:
@@ -1270,7 +1177,71 @@ class AdvancedExecutor(Executor):
         skill_read_ok = bool(chosen_skills) and set(chosen_skills).issubset(
             sess.skill_reads
         )
-        if passed:
+        target_id = (format_config or {}).get("target_id")
+        target_evidence = None
+        target_verification_error = None
+
+        # Asymmetric builder/breaker targets are verified once at the end of
+        # run_battle via verify_builder_breaker_submission (builder files vs
+        # breaker files), not per-phase here.
+        if target_id and not is_builder_breaker(format_config):
+            from agent_arena.target_library import get_target_library
+            from agent_arena.target_verifier import verify_target_submission
+
+            bundle = get_target_library().get_target(target_id)
+            if bundle is None:
+                target_verification_error = f"Target '{target_id}' not found in target library"
+            else:
+                # Immutable hash validation: verify loaded bundle matches frozen battle spec
+                frozen_manifest = (format_config or {}).get("manifest_hash")
+                frozen_hidden = (format_config or {}).get("hidden_hash")
+                if frozen_manifest and bundle.manifest_hash != frozen_manifest:
+                    target_verification_error = (
+                        f"Target manifest hash mismatch: loaded {bundle.manifest_hash[:12]} != frozen {frozen_manifest[:12]}"
+                    )
+                elif frozen_hidden and bundle.hidden_hash != frozen_hidden:
+                    target_verification_error = (
+                        f"Target hidden hash mismatch: loaded {bundle.hidden_hash[:12]} != frozen {frozen_hidden[:12]}"
+                    )
+                else:
+                    try:
+                        ev = verify_target_submission(
+                            bundle,
+                            files,
+                            run_visible=True,
+                            run_hidden=True,
+                        )
+                        target_evidence = {
+                            "target_id": ev.target_id,
+                            "target_version": ev.target_version,
+                            "manifest_hash": ev.manifest_hash,
+                            "passed": ev.passed,
+                            "visible_passed": ev.visible_passed,
+                            "hidden_passed": ev.hidden_passed,
+                            "visible_exit_code": ev.visible_exit_code,
+                            "hidden_exit_code": ev.hidden_exit_code,
+                            "duration_seconds": ev.duration_seconds,
+                        }
+                        passed = ev.passed
+                    except Exception as exc:
+                        target_verification_error = f"Verifier execution error: {exc}"
+
+        if target_id and not is_builder_breaker(format_config):
+            # FAIL-CLOSED: if target verification was required but errored/unavailable, FAIL CLOSED
+            if target_verification_error:
+                outcome = "VERIFY_ERROR"
+                passed = False
+            elif target_evidence:
+                if target_evidence["passed"]:
+                    outcome = "TEST_PASS"
+                elif budget_exceeded:
+                    outcome = "STEP_BUDGET_EXCEEDED"
+                else:
+                    outcome = "TEST_FAIL"
+            else:
+                outcome = "VERIFY_ERROR"
+                passed = False
+        elif passed:
             outcome = "TEST_PASS"
         elif budget_exceeded:
             outcome = "STEP_BUDGET_EXCEEDED"
@@ -1290,6 +1261,14 @@ class AdvancedExecutor(Executor):
             "present": [r for r in required_artifacts if r in files],
             "missing": [r for r in required_artifacts if r not in files],
         }
+        policy_violations = []
+        if harness_tampered:
+            policy_violations.append("harness-tampered")
+        if target_verification_error:
+            policy_violations.append("target-verifier-error")
+
+        policy_status = "invalid" if policy_violations else "clean"
+
         # Compact, correctness-first record: `files` (potentially large) are
         # excluded because they already persist via the separate artifact
         # event + rounds doc. Ordering keeps truncation-safe fields first so
@@ -1307,8 +1286,8 @@ class AdvancedExecutor(Executor):
             "parse_errors": parse_errors,
             "artifact_checks": artifact_checks,
             "policy": {
-                "status": "invalid" if harness_tampered else "clean",
-                "violations": ["harness-tampered"] if harness_tampered else [],
+                "status": policy_status,
+                "violations": policy_violations,
             },
             "chosen_skills": chosen_skills,
             "theory": theory[:2000],
@@ -1317,6 +1296,13 @@ class AdvancedExecutor(Executor):
             "spec_hash": str((format_config or {}).get("spec_hash") or ""),
             "evaluation_mode": str((format_config or {}).get("evaluation_mode") or ""),
         }
+        if target_evidence:
+            result["target_id"] = target_evidence["target_id"]
+            result["target_version"] = target_evidence["target_version"]
+            result["target_verification"] = target_evidence
+        elif target_verification_error:
+            result["target_id"] = target_id
+            result["target_verification_error"] = target_verification_error
         files_json = json.dumps(
             {
                 "files": files,
@@ -1629,11 +1615,14 @@ class AdvancedExecutor(Executor):
             )
 
             env_cfg = format_config.get("environment") or {}
+            ver_cfg = format_config.get("verification") or {}
+            test_cmd = ver_cfg.get("visible_command")
             sess = ToolSession(
                 work,
                 root=work,
                 tool_timeout=tool_timeout,
                 allow_network=bool(env_cfg.get("network")),
+                test_cmd=test_cmd,
             )
 
             preview_server = None
@@ -1982,6 +1971,7 @@ class AdvancedExecutor(Executor):
             plan = parse_battle_plan(format_config)
             if plan is not None:
                 snapshots: dict = {}
+                phase_files: dict[str, dict[str, str]] = {}
 
                 def record_missing_handoff(phase, missing_refs):
                     model_id = role_to_model.get(phase.actor)
@@ -2080,6 +2070,9 @@ class AdvancedExecutor(Executor):
                         if not results:
                             raise
                     work = root / f"work_{phase.actor}"
+                    if work.exists():
+                        # Capture the full workspace for asymmetric verification.
+                        phase_files[phase.actor] = self._collect_workspace(work)[0]
                     snap_refs = phase.required_outputs or phase.handoff_artifacts
                     snapshots[phase.phase_id] = snapshot_handoff(work, snap_refs)
                     model_id = role_to_model.get(phase.actor)
@@ -2108,6 +2101,78 @@ class AdvancedExecutor(Executor):
                                 workspace=work.name,
                                 phase_id=phase.phase_id,
                             )
+
+                # Asymmetric builder vs breaker verification: run once after both
+                # phases, scoring the builder's output against the breaker's
+                # exploit instead of the single-phase target path.
+                target_id = (format_config or {}).get("target_id")
+                if (
+                    target_id
+                    and is_builder_breaker(format_config)
+                    and "builder" in phase_files
+                    and "breaker" in phase_files
+                ):
+                    builder_files = phase_files["builder"]
+                    breaker_files = phase_files["breaker"]
+                    bb_evidence = None
+                    bb_error = None
+                    try:
+                        from agent_arena.target_library import get_target_library
+                        from agent_arena.target_verifier import (
+                            verify_builder_breaker_submission,
+                        )
+
+                        bundle = get_target_library().get_target(target_id)
+                        if bundle is None:
+                            bb_error = f"Target '{target_id}' not found in target library"
+                        else:
+                            bb_ev = verify_builder_breaker_submission(
+                                bundle, builder_files, breaker_files
+                            )
+                            bb_evidence = {
+                                "target_id": bb_ev.target_id,
+                                "target_version": bb_ev.target_version,
+                                "manifest_hash": bb_ev.manifest_hash,
+                                "builder_functional_passed": bb_ev.builder_functional_passed,
+                                "builder_hidden_passed": bb_ev.builder_hidden_passed,
+                                "breaker_exploit_passed": bb_ev.breaker_exploit_passed,
+                                "builder_passed": bb_ev.builder_passed,
+                                "breaker_passed": bb_ev.breaker_passed,
+                                "duration_seconds": bb_ev.duration_seconds,
+                            }
+                    except Exception as exc:
+                        bb_error = f"Builder/breaker verifier execution error: {exc}"
+
+                    # Re-emit the per-role results with the asymmetric verdict so
+                    # the persisted EXECUTOR_RESULT stream (which downstream
+                    # evidence/scoring parse) reflects builder vs breaker outcomes.
+                    for r in list(results):
+                        if r.get("role") not in ("builder", "breaker"):
+                            continue
+                        corrected = dict(r)
+                        corrected["builder_breaker_verification"] = (
+                            bb_evidence.copy() if bb_evidence else None
+                        )
+                        if bb_error:
+                            corrected["outcome"] = "VERIFY_ERROR"
+                            corrected["passed"] = False
+                            corrected["builder_breaker_verification_error"] = bb_error
+                            corrected.setdefault("policy", {})["status"] = "invalid"
+                            corrected.setdefault("policy", {}).setdefault("violations", [])
+                            corrected["policy"]["violations"].append("target-verifier-error")
+                        elif bb_evidence:
+                            role_passed = (
+                                bb_evidence["builder_passed"]
+                                if r.get("role") == "builder"
+                                else bb_evidence["breaker_passed"]
+                            )
+                            corrected["outcome"] = "TEST_PASS" if role_passed else "TEST_FAIL"
+                            corrected["passed"] = role_passed
+                        with io_lock:
+                            self.emit_result(
+                                client, battle_id, corrected["phase"], corrected
+                            )
+                            results.append(corrected)
             else:
                 jobs = [
                     (idx, role)
