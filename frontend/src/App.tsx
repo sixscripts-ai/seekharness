@@ -12,8 +12,14 @@ import History from "@/pages/History";
 import { useEffect } from "react";
 import { subscribeSystemTheme } from "@/lib/theme";
 
-function isBattlePath(pathname: string): boolean {
-  return pathname === "/battles/new" || pathname === "/battles/custom" || pathname.startsWith("/battles/");
+function isFullWidthPath(pathname: string): boolean {
+  return (
+    pathname === "/battles/new" ||
+    pathname === "/battles/custom" ||
+    pathname === "/providers" ||
+    pathname === "/keys" ||
+    pathname.startsWith("/battles/")
+  );
 }
 
 function isLiveBattlePath(pathname: string): boolean {
@@ -26,7 +32,7 @@ function isLiveBattlePath(pathname: string): boolean {
 
 function AppShell() {
   const loc = useLocation();
-  const battle = isBattlePath(loc.pathname);
+  const fullWidth = isFullWidthPath(loc.pathname);
   const liveBattle = isLiveBattlePath(loc.pathname);
 
   useEffect(() => {
@@ -39,7 +45,7 @@ function AppShell() {
       <SiteHeader />
       <main
         className={[
-          battle ? "px-0 py-0" : "mx-auto max-w-[1360px] px-6 py-8",
+          fullWidth ? "px-0 py-0" : "mx-auto max-w-[1360px] px-6 py-8",
           liveBattle ? "meticulous-ignore" : "",
         ]
           .filter(Boolean)
@@ -50,6 +56,7 @@ function AppShell() {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/providers" element={<Providers />} />
+          <Route path="/keys" element={<Providers />} />
           <Route path="/battles/new" element={<NewBattle />} />
           <Route path="/battles/custom" element={<CustomBattle />} />
           <Route path="/battles/:id" element={<LiveBattle />} />
