@@ -179,6 +179,18 @@ export default function LiveExecutionPane({
     URL.revokeObjectURL(url);
   }
 
+  function downloadAllFiles() {
+    if (!files) return;
+    const payload = JSON.stringify(files, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(role || "fighter").replace(/[^a-zA-Z0-9_-]/g, "_")}_workspace_files.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <section
       className={cn(
@@ -242,17 +254,32 @@ export default function LiveExecutionPane({
           ))}
         </div>
 
-        {tab === "terminal" && actions.length > 0 && (
-          <button
-            type="button"
-            onClick={downloadTerminalLogs}
-            title="Download terminal execution log"
-            className="mr-3 inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-zinc-300 hover:border-pink-500/50 hover:bg-pink-500/10 hover:text-pink-400 transition-colors"
-          >
-            <Download className="h-3 w-3" />
-            <span>Export Log</span>
-          </button>
-        )}
+        {/* Global Download / Export Quick Actions */}
+        <div className="flex items-center gap-2 pr-3">
+          {actions.length > 0 && (
+            <button
+              type="button"
+              onClick={downloadTerminalLogs}
+              title="Download terminal execution log as TXT"
+              className="inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-zinc-300 hover:border-pink-500/50 hover:bg-pink-500/10 hover:text-pink-400 transition-colors"
+            >
+              <Download className="h-3 w-3" />
+              <span>Export Log</span>
+            </button>
+          )}
+
+          {fileEntries.length > 0 && (
+            <button
+              type="button"
+              onClick={downloadAllFiles}
+              title="Download all generated workspace files as JSON"
+              className="inline-flex items-center gap-1.5 rounded border border-pink-500/30 bg-pink-500/10 px-2.5 py-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-pink-400 hover:bg-pink-500/20 transition-colors"
+            >
+              <Download className="h-3 w-3" />
+              <span>Download Files ({fileEntries.length})</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Viewport Canvas */}

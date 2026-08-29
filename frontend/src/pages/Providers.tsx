@@ -557,21 +557,36 @@ export default function Providers() {
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => testProviderConnection(p.id)}
-                      disabled={isTesting}
-                      className="mono flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[11px] font-bold text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
-                    >
-                      {isTesting ? (
-                        <>
-                          <RefreshCw className="h-3 w-3 animate-spin" />
-                          <span>TESTING…</span>
-                        </>
-                      ) : (
-                        <span>[ TEST CONNECTION ]</span>
-                      )}
-                    </button>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => testProviderConnection(p.id)}
+                        disabled={isTesting}
+                        className="mono flex-1 h-8 items-center justify-center gap-2 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[11px] font-bold text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+                      >
+                        {isTesting ? (
+                          <>
+                            <RefreshCw className="h-3 w-3 animate-spin" />
+                            <span>TESTING…</span>
+                          </>
+                        ) : (
+                          <span>[ TEST CONNECTION ]</span>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => toggle(p.id)}
+                        title={isHidden(p.id) ? "Unhide from arena selectors" : "Remove/Hide from arena selectors"}
+                        className={`mono h-8 px-3 rounded-lg border text-[10.5px] font-bold transition-colors ${
+                          isHidden(p.id)
+                            ? "border-accent/40 bg-accent/15 text-accent"
+                            : "border-[#2A2A2E] bg-[#0D0D0F] text-zinc-400 hover:border-zinc-600 hover:text-white"
+                        }`}
+                      >
+                        {isHidden(p.id) ? "HIDDEN (UNHIDE)" : "[ HIDE ]"}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -781,12 +796,12 @@ export default function Providers() {
                       </div>
 
                       {/* Action Buttons */}
-                      <div className="flex items-center gap-2 pt-2">
+                      <div className="flex flex-wrap items-center gap-2 pt-2">
                         <button
                           type="button"
                           onClick={() => testProviderConnection(p.id)}
                           disabled={health.state === "TESTING"}
-                          className="mono flex-1 h-9 rounded-lg border border-accent/40 bg-accent/10 text-xs font-bold text-accent transition-all hover:bg-accent/20 disabled:opacity-50"
+                          className="mono flex-1 min-w-[140px] h-9 rounded-lg border border-accent/40 bg-accent/10 text-xs font-bold text-accent transition-all hover:bg-accent/20 disabled:opacity-50"
                         >
                           {health.state === "TESTING"
                             ? "TESTING…"
@@ -795,9 +810,18 @@ export default function Providers() {
                         <button
                           type="button"
                           onClick={() => openRegisterModal(p)}
-                          className="mono h-9 px-4 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-xs font-bold text-zinc-300 hover:text-white hover:border-[#3F3F46]"
+                          className="mono h-9 px-3.5 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-xs font-bold text-zinc-300 hover:text-white hover:border-[#3F3F46]"
                         >
                           [ EDIT ]
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(p)}
+                          className="mono h-9 px-3.5 rounded-lg border border-red-500/40 bg-red-950/20 text-xs font-bold text-red-400 hover:bg-red-950/50 hover:border-red-500 transition-all flex items-center gap-1.5"
+                          title="Delete Provider Key"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>[ DELETE ]</span>
                         </button>
                       </div>
                     </div>
