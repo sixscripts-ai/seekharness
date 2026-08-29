@@ -5,11 +5,15 @@ import {
   CheckCircle2,
   Clock3,
   Copy,
+  Download,
   ExternalLink,
   FileCode2,
   GitCompare,
   Layers3,
+  Lock,
   Radio,
+  ShieldAlert,
+  ShieldCheck,
   Terminal,
   Wrench,
   XCircle,
@@ -38,6 +42,7 @@ type Props = {
   win?: boolean;
   winText?: string;
   className?: string;
+  protectedFiles?: string[];
 };
 
 type Tab = "artifact" | "diff" | "output" | "tools" | "versions" | "preview";
@@ -240,6 +245,7 @@ export default function CodePane({
   win,
   winText,
   className,
+  protectedFiles = [],
 }: Props) {
   const [tab, setTab] = useState<Tab>("artifact");
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -316,6 +322,27 @@ export default function CodePane({
     window.setTimeout(() => setCopied(false), 1200);
   }
 
+  function downloadCurrentArtifact() {
+    if (!displayCode) return;
+    const filename = activeFile || `${modelId.replace(/[^a-zA-Z0-9_-]/g, "_")}_artifact.py`;
+    const blob = new Blob([displayCode], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const isProtectedFile = (filename: string | null) => {
+    if (!filename) return false;
+    if (protectedFiles && protectedFiles.includes(filename)) return true;
+    if (role === "breaker" && (filename === "auth.py" || filename.includes("auth"))) return true;
+    if (filename.startsWith("test_") || filename.includes("harness")) return true;
+    return false;
+  };
+  const activeIsProtected = isProtectedFile(activeFile);
+
   function selectVersion(index: number) {
     setSelectedVersion(index);
     setSelectedFile(null);
@@ -359,6 +386,16 @@ export default function CodePane({
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={downloadCurrentArtifact}
+            disabled={!displayCode}
+            className="grid h-8 w-8 place-items-center rounded-md border border-border bg-surface2 text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
+            aria-label="Download current artifact file"
+            title="Download current artifact file"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
           <button
             type="button"
             onClick={copyArtifact}
@@ -431,29 +468,51 @@ export default function CodePane({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 bg-code">
+      <div className="min-h-0 flex-1 bg-code flex flex-col">
+        {activeIsProtected && tab === "artifact" && (
+          <div className="flex items-center gap-2 border-b border-accent/30 bg-accent/10 px-3 py-1.5 font-mono text-[10px] text-accent">
+            <Lock className="h-3 w-3 shrink-0" />
+            <span className="font-bold">PROTECTED HARNESS FILE (READ-ONLY)</span>
+            <span className="hidden text-muted sm:inline">— Auto-restored from frozen snapshot if modified</span>
+          </div>
+        )}
         {tab === "artifact" && (
-          <div className="flex h-full min-h-0">
+          <div className="flex h-full min-h-0 flex-1">
             {files && fileList.length > 0 && (
               <aside
-                className="hidden w-[132px] shrink-0 overflow-auto border-r border-codeBorder bg-code/70 p-2 sm:block"
+                className="hidden w-[148px] shrink-0 overflow-auto border-r border-codeBorder bg-code/70 p-2 sm:block"
                 aria-label="Artifact files"
               >
-                <div className="mb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-lineNo">
-                  work/
+                <div className="mb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-lineNo flex items-center justify-between">
+                  <span>work/</span>
+                  <span className="text-[7px] text-accent">FS ROOT</span>
                 </div>
                 <div className="space-y-0.5">
-                  {fileList.map((file) => (
-                    <button
-                      key={file}
-                      type="button"
-                      onClick={() => setSelectedFile(file)}
-                      className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-[9px] ${activeFile === file ? "bg-white/[0.08] text-codeFg" : "text-lineNo hover:bg-white/[0.04] hover:text-codeFg"}`}
-                    >
-                      <FileCode2 className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{file}</span>
-                    </button>
-                  ))}
+                  {fileList.map((file) => {
+                    const locked = isProtectedFile(file);
+                    return (
+                      <button
+                        key={file}
+                        type="button"
+                        onClick={() => setSelectedFile(file)}
+                        className={`flex w-full items-center justify-between gap-1 rounded px-1.5 py-1 text-left font-mono text-[9px] ${
+                          activeFile === file
+                            ? "bg-white/[0.08] text-codeFg"
+                            : "text-lineNo hover:bg-white/[0.04] hover:text-codeFg"
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 truncate">
+                          <FileCode2 className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{file}</span>
+                        </div>
+                        {locked && (
+                          <span title="Protected harness file (read-only)">
+                            <Lock className="h-2.5 w-2.5 shrink-0 text-accent" />
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </aside>
             )}

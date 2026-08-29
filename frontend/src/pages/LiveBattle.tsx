@@ -519,6 +519,7 @@ export default function LiveBattle() {
                 artifactMeta={`${(latest.length / 1024).toFixed(1)}kb · ${latest ? latest.split("\n").length : 0} lines`}
                 win={winner === modelId && status === "completed"}
                 winText="winner"
+                protectedFiles={index === 1 || battle?.format_id?.includes("auth") ? ["auth.py"] : []}
               />
             </div>
           );
