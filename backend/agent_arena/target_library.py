@@ -36,13 +36,34 @@ def _get_default_library_root() -> Path:
     return (Path(__file__).resolve().parents[2] / "targets" / "library").resolve()
 
 
+# Public API — thin wrappers over the private helpers that are now
+# legitimate shared functionality for the authoring toolkit.
+
+
+def get_default_library_root() -> Path:
+    """Public: resolve the default target library root (env → /opt → repo)."""
+    return _get_default_library_root()
+
+
+def validate_safe_relative_path(rel_path: str, context: str = "") -> str:
+    """Public: validate a relative path against traversal/unsafe chars."""
+    return _validate_safe_relative_path(rel_path, context=context)
+
+
+def compute_bundle_hash(file_dict: dict[str, bytes]) -> str:
+    """Public: deterministic SHA256 over sorted paths and contents."""
+    return _compute_bundle_hash(file_dict)
+
+
 class TargetSecurityError(ValueError):
     """Raised when a target manifest attempts path traversal, symlink escape, or unsafe paths."""
+
     pass
 
 
 class TargetManifestError(ValueError):
     """Raised when a target manifest is malformed or missing required fields."""
+
     pass
 
 
@@ -111,12 +132,18 @@ def _validate_safe_relative_path(rel_path: str, context: str = "") -> str:
     while clean.startswith("./"):
         clean = clean[2:]
     if not clean or clean.startswith("/"):
-        raise TargetSecurityError(f"Invalid path '{rel_path}' in {context}: must be relative")
+        raise TargetSecurityError(
+            f"Invalid path '{rel_path}' in {context}: must be relative"
+        )
     parts = clean.split("/")
     if ".." in parts or "." in parts:
-        raise TargetSecurityError(f"Path traversal detected in '{rel_path}' ({context})")
+        raise TargetSecurityError(
+            f"Path traversal detected in '{rel_path}' ({context})"
+        )
     if not _SAFE_PATH_REGEX.match(clean):
-        raise TargetSecurityError(f"Invalid characters in path '{rel_path}' ({context})")
+        raise TargetSecurityError(
+            f"Invalid characters in path '{rel_path}' ({context})"
+        )
     return clean
 
 
@@ -140,15 +167,22 @@ def _read_directory_files(base_dir: Path, sub_rel: str) -> dict[str, bytes]:
     try:
         target_dir.relative_to(base_dir.resolve())
     except ValueError:
-        raise TargetSecurityError(f"Subdirectory '{sub_rel}' escapes target root '{base_dir}'")
+        raise TargetSecurityError(
+            f"Subdirectory '{sub_rel}' escapes target root '{base_dir}'"
+        )
 
     if not target_dir.exists():
         return {}
     if not target_dir.is_dir():
-        raise TargetManifestError(f"Path '{sub_rel}' is not a directory in '{base_dir.name}'")
+        raise TargetManifestError(
+            f"Path '{sub_rel}' is not a directory in '{base_dir.name}'"
+        )
 
     files: dict[str, bytes] = {}
     for p in sorted(target_dir.rglob("*")):
+        # Ignore Python cache artifacts – non-deterministic, not part of immutable bundle
+        if "__pycache__" in p.parts or p.suffix == ".pyc" or p.name.endswith(".pyo"):
+            continue
         if p.is_symlink():
             # In strict partition mode: reject symlinks that escape this specific partition
             resolved = p.resolve()
@@ -200,11 +234,15 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
     }
     missing = required_fields - set(raw)
     if missing:
-        raise TargetManifestError(f"{manifest_path.name} missing required fields: {sorted(missing)}")
+        raise TargetManifestError(
+            f"{manifest_path.name} missing required fields: {sorted(missing)}"
+        )
 
     target_id = str(raw["id"]).strip()
     if target_id != target_dir.name:
-        raise TargetManifestError(f"Target id '{target_id}' does not match folder name '{target_dir.name}'")
+        raise TargetManifestError(
+            f"Target id '{target_id}' does not match folder name '{target_dir.name}'"
+        )
 
     ws_raw = raw.get("workspace") or {}
     if not isinstance(ws_raw, dict):
@@ -240,7 +278,9 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
     verification_cfg = TargetVerificationConfig(
         visible_command=str(ver_raw.get("visible_command") or ""),
         hidden_command=str(ver_raw.get("hidden_command") or ""),
-        ranked_requires_hidden_pass=bool(ver_raw.get("ranked_requires_hidden_pass", True)),
+        ranked_requires_hidden_pass=bool(
+            ver_raw.get("ranked_requires_hidden_pass", True)
+        ),
     )
 
     # Seatbelt at load time: refuse to ship a target whose verification commands
@@ -279,7 +319,9 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
 
     if isinstance(raw_objectives, dict):
         for role_key, items in raw_objectives.items():
-            parsed_items = [str(x) for x in (items if isinstance(items, list) else [items])]
+            parsed_items = [
+                str(x) for x in (items if isinstance(items, list) else [items])
+            ]
             role_objectives[str(role_key)] = parsed_items
             for item in parsed_items:
                 flat_objectives.append(f"[{role_key.upper()}] {item}")
@@ -372,7 +414,9 @@ def get_target_library(root: Path | None = None) -> TargetLibraryRegistry:
     return _GLOBAL_REGISTRY
 
 
-def compile_target_to_battle_config(bundle: TargetBundle, arena_size: int = 2) -> dict[str, Any]:
+def compile_target_to_battle_config(
+    bundle: TargetBundle, arena_size: int = 2
+) -> dict[str, Any]:
     """Compile a TargetBundle into an authoritative battle_config with TARGET.md and role_missions."""
     starter_dict: dict[str, str] = {}
     for rel, data in bundle.starter_files.items():
@@ -406,9 +450,14 @@ def compile_target_to_battle_config(bundle: TargetBundle, arena_size: int = 2) -
 
     # Only protected paths present in starter workspace need restore tracking
     protected_in_starter = [
-        s for s in merged_starters
+        s
+        for s in merged_starters
         if any(
-            (p == s or (p.endswith("/**") and s.startswith(p[:-3])) or (p.endswith("/*") and s.startswith(p[:-2])))
+            (
+                p == s
+                or (p.endswith("/**") and s.startswith(p[:-3]))
+                or (p.endswith("/*") and s.startswith(p[:-2]))
+            )
             for p in bundle.workspace.protected_paths
         )
     ]
