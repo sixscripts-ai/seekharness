@@ -182,7 +182,38 @@ def test_apply_self_learning_no_failed_winners():
         {"model_id": "host:modal-kimi", "passed": False, "steps": 5, "chosen_skills": ["secure-code-execution"]}
     ]
     battle = {"user_id": "test_user", "format_id": "solo", "model_ids": ["host:modal-kimi"]}
-    
+
     # Run self learning on failed solo battle
     # Should not raise and should not credit the failed fighter with a win
     _apply_self_learning(None, "db", battle, "battle_failed_solo", results)
+
+
+def test_serialization_repair_never_invents_tool_intent():
+    """Verify that serialization repair strictly normalizes aliases and NEVER
+    hallucinates or invents tool calls when the model simply reasons in natural language.
+    """
+    prose_samples = [
+        "I should probably test this package now by running npm test.",
+        "Let's write some code to fix the issue in src/index.js.",
+        "We need to read package.json to see what scripts exist.",
+        "I'm going to look at the files: ls -la",
+        "Maybe I will execute pytest and then check the result.",
+    ]
+    for sample in prose_samples:
+        norm = normalize_response(sample)
+        assert len(norm.calls) == 0, f"Expected 0 calls for natural language '{sample}', got {norm.calls}"
+        assert norm.parse_status == "failed"
+
+    # In contrast, structured aliases MUST be normalized accurately without modifying values
+    alias_sample = (
+        'TOOL shell command="npm test --silent"\n'
+        'TOOL write path="fix.js"\n'
+        'console.log("hello");\n'
+        'END_TOOL\n'
+    )
+    norm_alias = normalize_response(alias_sample)
+    assert len(norm_alias.calls) == 2
+    assert norm_alias.calls[0].name == "shell"
+    assert norm_alias.calls[0].arguments == {"cmd": "npm test --silent"}
+    assert norm_alias.calls[1].name == "write"
+    assert norm_alias.calls[1].arguments == {"path": "fix.js", "content": 'console.log("hello");'}

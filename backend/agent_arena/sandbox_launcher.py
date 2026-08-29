@@ -150,6 +150,7 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
                         "END_TOOL\n"
                         "DONE"
                     )
+                    return {"content": content, "tool_calls": []}
                 else:
                     resp = llm_client.chat_completion(
                         base_url=base,
@@ -157,12 +158,18 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
                         api_key=key,
                         model=model,
                         messages=body.get("messages") or [],
+                        tools=body.get("tools"),
+                        tool_choice=body.get("tool_choice"),
                     )
-                    content = getattr(resp, "text", str(resp))
-            except Exception:
-                content = f"[stub:{body.get('model_id')}]"
-            transport.rounds  # keep
-            return {"content": content}
+                    return {
+                        "content": resp.text if hasattr(resp, "text") else str(resp),
+                        "tool_calls": [c.model_dump() for c in resp.tool_calls]
+                        if hasattr(resp, "tool_calls")
+                        else [],
+                        "raw": getattr(resp, "raw", None),
+                    }
+            except Exception as exc:
+                return {"content": f"[stub:{body.get('model_id')}]", "tool_calls": []}
         if path == "/internal/judge":
             try:
                 return judge_mod.judge_battle(
