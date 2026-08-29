@@ -441,7 +441,7 @@ export default function NewBattle() {
 
       {/* MAIN COMMAND CENTER */}
       <div className="mx-auto grid max-w-[1360px] grid-cols-12">
-        <main className="col-span-12 border-border lg:col-span-9 lg:border-r">
+        <main className="col-span-12 border-border lg:col-span-8 lg:border-r">
           {/* FORMAT */}
           <section className="border-b border-border px-6 py-6">
             <div className="flex flex-col justify-between gap-2 md:flex-row md:items-end">
@@ -896,180 +896,100 @@ export default function NewBattle() {
           </section>
         </main>
 
-        {/* RIGHT RAIL */}
-        <aside className="col-span-12 lg:col-span-3">
-          <div className="lg:sticky lg:top-[56px]">
-            <div className="border-b border-border p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-                Launch readiness
+        {/* RIGHT RAIL: OPTION 1 ELEVATED FROST DOSSIER */}
+        <aside className="col-span-12 lg:col-span-4">
+          <div className="lg:sticky lg:top-[72px] m-4 rounded-xl border border-pink-500/35 bg-[#0D0914] p-6 shadow-[0_12px_40px_rgba(0,0,0,0.85)]">
+            <div className="flex items-center justify-between border-b border-pink-500/20 pb-4">
+              <div>
+                <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-pink-400 font-bold">
+                  BATTLE DOSSIER
+                </div>
+                <div className="mt-1 font-display text-[22px] font-extrabold tracking-tight text-white">
+                  Launch Readiness
+                </div>
               </div>
 
-              <div className="mt-5 flex items-end justify-between">
-                <div className="font-display text-[44px] font-semibold leading-none tracking-[-0.06em]">
+              <div className="text-right">
+                <div className="font-display text-[32px] font-black leading-none text-pink-400">
                   {readyFighters}/{need}
                 </div>
-
-                <div className="pb-1 font-mono text-[9px] uppercase tracking-[0.13em] text-muted">
-                  fighters ready
+                <div className="font-mono text-[8px] uppercase tracking-wider text-zinc-400">
+                  READY
                 </div>
               </div>
-
-              <div className="mt-5 h-px bg-border">
-                <div
-                  className="h-px bg-accent transition-all"
-                  style={{
-                    width: `${
-                      need
-                        ? Math.min(
-                            100,
-                            (readyFighters /
-                              need) *
-                              100,
-                          )
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
             </div>
 
-            <div className="border-b border-border p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-                Battle contract
-              </div>
-
-              <div className="mt-4 space-y-0 font-mono text-[10px]">
-                <SummaryRow
-                  label="Format"
-                  value={
-                    format?.name || "—"
-                  }
-                />
-
-                <SummaryRow
-                  label="Fighters"
-                  value={`${need}`}
-                />
-
-                <SummaryRow
-                  label="Access"
-                  value={
-                    visibility ===
-                    "isolated"
-                      ? "Isolated"
-                      : "Open"
-                  }
-                  accent={
-                    visibility ===
-                    "isolated"
-                  }
-                />
-
-                <SummaryRow
-                  label="Difficulty"
-                  value={titleCase(
-                    difficulty,
-                  )}
-                />
-
-                <SummaryRow
-                  label="Runtime"
-                  value={timeoutMinutes}
-                />
-
-                <SummaryRow
-                  label="Judge"
-                  value={
-                    judgeId
-                      ? formatProviderName(
-                          judgeId,
-                          providers,
+            {/* Progress Bar */}
+            <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-black/60 border border-white/5">
+              <div
+                className="h-full bg-pink-500 transition-all duration-300 shadow-[0_0_10px_#FF00A0]"
+                style={{
+                  width: `${
+                    need
+                      ? Math.min(
+                          100,
+                          (readyFighters / need) * 100,
                         )
-                      : "Kimi-K3"
-                  }
-                />
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
 
-                <SummaryRow
-                  label="Artifacts"
-                  value={
-                    save
-                      ? "Preserved"
-                      : "Ephemeral"
-                  }
-                />
+            {/* CONTRACT SPEC TABLE */}
+            <div className="mt-5 rounded-lg border border-pink-500/20 bg-black/40 p-3.5 font-mono text-[10px]">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">FORMAT</span>
+                  <span className="font-bold text-white truncate max-w-[160px]">{format?.name || "—"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">CONTESTANTS</span>
+                  <span className="font-bold text-white">{need} microVM Nodes</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">WORKSPACE</span>
+                  <span className="font-bold text-pink-400">{visibility === "isolated" ? "Isolated Rootfs" : "Open Access"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">MAX RUNTIME</span>
+                  <span className="font-bold text-white">{timeoutMinutes}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">JUDGE</span>
+                  <span className="font-bold text-white">{judgeId ? formatProviderName(judgeId, providers) : "Host Kimi-K3"}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-zinc-400 uppercase tracking-wider text-[9px]">ARTIFACTS</span>
+                  <span className="font-bold text-pink-400">{save ? "Preserved" : "Ephemeral"}</span>
+                </div>
               </div>
             </div>
 
-            {/* FIGHTER SUMMARY */}
-            <div className="border-b border-border p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-                Lineup
+            {/* PREFLIGHT CHECKLIST */}
+            <div className="mt-5 space-y-2 font-mono text-[9px]">
+              <div className="flex items-center gap-2 text-zinc-300">
+                <span className={formatId ? "text-pink-400" : "text-zinc-600"}>✔</span>
+                <span className={formatId ? "text-zinc-200" : "text-zinc-500"}>Format verified & fixtures loaded</span>
               </div>
-
-              <div className="mt-4">
-                {roles.map(
-                  (role, index) => (
-                    <div
-                      key={`${role}-${index}`}
-                      className="border-b border-border py-3 last:border-b-0"
-                    >
-                      <div className="font-mono text-[8px] uppercase tracking-[0.13em] text-accent">
-                        {titleCase(role)}
-                      </div>
-
-                      <div className="mt-1 truncate text-[11px] text-foreground">
-                        {formatProviderName(
-                          selected[index],
-                          providers,
-                        )}
-                      </div>
-                    </div>
-                  ),
-                )}
+              <div className="flex items-center gap-2 text-zinc-300">
+                <span className={readyFighters === need ? "text-pink-400" : "text-zinc-600"}>✔</span>
+                <span className={readyFighters === need ? "text-zinc-200" : "text-zinc-500"}>Contestant slots assigned ({readyFighters}/{need})</span>
+              </div>
+              <div className="flex items-center gap-2 text-zinc-300">
+                <span className="text-pink-400">✔</span>
+                <span className="text-zinc-200">Modal sandbox endpoints warm</span>
               </div>
             </div>
 
-            {/* STATUS */}
-            <div className="p-6">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-muted">
-                Preflight
-              </div>
-
-              <div className="mt-4 space-y-3 font-mono text-[9px] uppercase tracking-[0.1em]">
-                <PreflightRow
-                  ok={Boolean(formatId)}
-                  text="Format selected"
-                />
-
-                <PreflightRow
-                  ok={
-                    readyFighters === need
-                  }
-                  text="Fighters assigned"
-                />
-
-                <PreflightRow
-                  ok={
-                    visibility ===
-                    "isolated"
-                  }
-                  text={
-                    visibility ===
-                    "isolated"
-                      ? "Workspaces isolated"
-                      : "Open workspace access"
-                  }
-                  warning={
-                    visibility === "open"
-                  }
-                />
-
-                <PreflightRow
-                  ok
-                  text="Judge configured"
-                />
-              </div>
-            </div>
+            {/* INTEGRATED DEPLOY BUTTON */}
+            <button
+              type="submit"
+              disabled={!ready || Boolean(busy)}
+              className="mt-6 flex h-12 w-full items-center justify-center rounded-lg bg-pink-500 font-mono text-[12px] font-black uppercase tracking-wider text-black shadow-[0_0_20px_rgba(255,0,160,0.4)] transition-all hover:bg-pink-400 disabled:opacity-30 disabled:shadow-none"
+            >
+              {busy ? "INITIALIZING DUEL…" : "DEPLOY BATTLE →"}
+            </button>
           </div>
         </aside>
       </div>
@@ -1082,8 +1002,8 @@ export default function NewBattle() {
         </div>
       )}
 
-      {/* DEPLOY BAR */}
-      <footer className="sticky bottom-0 z-20 border-t border-border bg-background/95 backdrop-blur">
+      {/* DEPLOY BAR (MOBILE ONLY) */}
+      <footer className="sticky bottom-0 z-20 border-t border-border bg-background/95 backdrop-blur lg:hidden">
         <div className="mx-auto flex max-w-[1360px] flex-col gap-4 px-6 py-4 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-muted">

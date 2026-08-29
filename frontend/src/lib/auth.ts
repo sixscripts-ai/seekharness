@@ -83,3 +83,8 @@ export const useAuth = create<AuthState>((set, get) => ({
     safeSet("arena_jwt", null);
   },
 }));
+
+if (typeof window !== "undefined") {
+  (window as any).useAuth = useAuth;
+}
+

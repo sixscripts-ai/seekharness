@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Braces,
   Check,
@@ -15,6 +16,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Terminal,
+  Trophy,
   Wrench,
   XCircle,
 } from "lucide-react";
@@ -45,7 +47,8 @@ type Props = {
   protectedFiles?: string[];
 };
 
-type Tab = "artifact" | "diff" | "output" | "tools" | "versions" | "preview";
+type Tab = "terminal" | "artifact" | "diff" | "tools" | "versions" | "preview";
+
 type Parsed = {
   files?: Record<string, string>;
   chosen_skills?: string[];
@@ -68,24 +71,6 @@ type EventView = {
   duration: string;
   detail: string;
 };
-
-const DOT: Record<string, string> = {
-  accent: "bg-accent",
-  accent2: "bg-accent",
-  rival: "bg-accent",
-  neutral: "bg-zinc-400",
-  success: "bg-success",
-  danger: "bg-danger",
-};
-
-const TABS: Array<{ key: Tab; label: string; icon: typeof Braces }> = [
-  { key: "artifact", label: "Artifact", icon: Braces },
-  { key: "diff", label: "Diff", icon: GitCompare },
-  { key: "output", label: "Output", icon: Terminal },
-  { key: "tools", label: "Tools", icon: Wrench },
-  { key: "versions", label: "Versions", icon: Layers3 },
-  { key: "preview", label: "Preview", icon: ExternalLink },
-];
 
 function tryParse(code: string): Parsed | null {
   try {
@@ -230,6 +215,25 @@ function timeLabel(t: number): string {
   });
 }
 
+function formatFighterName(id: string): string {
+  if (!id) return "Agent";
+  const lower = id.toLowerCase();
+  if (lower.includes("claude") || lower.includes("laguna") || lower.includes("sonnet")) return "Claude 3.7 Sonnet";
+  if (lower.includes("deepseek") || lower.includes("6a85") || lower.includes("r1")) return "DeepSeek R1";
+  if (lower.includes("o3") || lower.includes("gpt") || lower.includes("openai")) return "OpenAI o3-mini";
+  if (lower.includes("kimi") || lower.includes("moonshot")) return "Moonshot Kimi-K3";
+  if (lower.includes("gemini") || lower.includes("flash")) return "Gemini 2.5 Pro";
+  if (id.startsWith("host:")) {
+    const clean = id.replace("host:", "").replace(/[-_]/g, " ");
+    return clean
+      .split(" ")
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(" ");
+  }
+  if (id.length > 16) return `Agent ${id.slice(0, 8)}`;
+  return id;
+}
+
 export default function CodePane({
   modelId,
   label,
@@ -237,22 +241,21 @@ export default function CodePane({
   code,
   status,
   tok,
-  color = "neutral",
   artifactMeta,
   history = [],
   events = [],
   previewUrl,
   win,
-  winText,
+  winText = "winner",
   className,
   protectedFiles = [],
 }: Props) {
-  const [tab, setTab] = useState<Tab>("artifact");
+  const [tab, setTab] = useState<Tab>("terminal");
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [previewKey, setPreviewKey] = useState(0);
-  const dot = DOT[color] || DOT.neutral;
+  const [followTail, setFollowTail] = useState(true);
+  const termScrollRef = useRef<HTMLDivElement | null>(null);
 
   const versions = useMemo(() => {
     const artifactEvents = history.filter(
@@ -292,32 +295,37 @@ export default function CodePane({
       ? selectedFile
       : fileList[0] || null;
   const displayCode = activeFile && files ? files[activeFile] : activeArtifact;
-  const lines = displayCode.split("\n");
+  const lines = displayCode ? displayCode.split("\n") : [];
   const diffRows = useMemo(
     () => lineDiff(previousArtifact, activeArtifact),
     [previousArtifact, activeArtifact],
   );
 
   const toolEvents = useMemo(
-    () => events.filter((item) => item.kind === "action_log").slice(-80),
+    () => events.filter((item) => item.kind === "action_log"),
     [events],
   );
-  const outputEvents = useMemo(
-    () =>
-      events
-        .filter(
-          (item) => item.kind === "transcript" || item.kind === "action_log",
-        )
-        .slice(-80),
-    [events],
-  );
-  const latestEvent = events[events.length - 1];
-  const isLatest =
-    !versions.length || activeVersionIndex === versions.length - 1;
 
-  async function copyArtifact() {
-    if (!activeArtifact) return;
-    await navigator.clipboard.writeText(activeArtifact);
+  const terminalLogs = useMemo(() => {
+    return events.filter(
+      (item) =>
+        item.kind === "transcript" ||
+        item.kind === "action_log" ||
+        item.kind === "artifact",
+    );
+  }, [events]);
+
+  // Auto-scroll terminal when followTail is enabled
+  useEffect(() => {
+    if (followTail && termScrollRef.current) {
+      termScrollRef.current.scrollTop = termScrollRef.current.scrollHeight;
+    }
+  }, [terminalLogs, followTail]);
+
+  async function copyTerminalOutput() {
+    const text = terminalLogs.map((e) => `[${timeLabel(e.t)}] ${e.artifact}`).join("\n");
+    if (!text && !activeArtifact) return;
+    await navigator.clipboard.writeText(text || activeArtifact);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1200);
   }
@@ -343,240 +351,357 @@ export default function CodePane({
   };
   const activeIsProtected = isProtectedFile(activeFile);
 
-  function selectVersion(index: number) {
-    setSelectedVersion(index);
-    setSelectedFile(null);
-    setTab("artifact");
-  }
+  const fighterDisplayName = formatFighterName(label || modelId);
+  const isWinner = Boolean(win);
+  const promptUser = role === "breaker" ? "breaker" : "builder";
 
   return (
     <section
       className={cn(
-        "card flex h-[560px] min-h-0 flex-col overflow-hidden bg-surface",
-        (color === "accent" ||
-          color === "accent2" ||
-          color === "rival" ||
-          color === "success") &&
-          "border-l-2 border-l-accent",
+        "flex h-[580px] min-h-0 flex-col overflow-hidden rounded-xl border bg-[#030206] shadow-2xl transition-all",
+        isWinner
+          ? "border-pink-500 shadow-[0_0_35px_rgba(255,0,160,0.25)]"
+          : "border-pink-500/25",
         className,
       )}
-      aria-label={`${label} execution inspector`}
+      aria-label={`${fighterDisplayName} execution console`}
     >
-      <header className="flex min-h-[64px] items-center justify-between gap-3 border-b border-border px-4 py-3">
+      {/* TERMINAL HEADER TITLEBAR */}
+      <header className="flex min-h-[50px] items-center justify-between gap-3 border-b border-pink-500/20 bg-[#0C0914] px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-borderStrong bg-surface2 font-mono text-[11px] font-semibold">
-            {modelId[0]?.toUpperCase()}
+          {/* Terminal Window Dots */}
+          <div className="flex items-center gap-1.5">
+            <div className="h-2.5 w-2.5 rounded-full bg-pink-500" />
+            <div className="h-2.5 w-2.5 rounded-full bg-pink-500/40" />
+            <div className="h-2.5 w-2.5 rounded-full bg-pink-500/20" />
           </div>
-          <div className="min-w-0">
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="truncate text-[12px] font-semibold tracking-[-0.01em]">
-                {label}
-              </div>
-              {role && (
-                <span className="hidden rounded-full border border-border px-2 py-0.5 font-mono text-[8px] uppercase tracking-[0.09em] text-muted sm:inline">
-                  {role}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 truncate font-mono text-[9px] uppercase tracking-[0.08em] text-muted">
-              {modelId}
-              {tok ? ` / ${tok}` : ""}
-            </div>
+
+          <div className="flex min-w-0 items-center gap-2">
+            {role && (
+              <span
+                className={cn(
+                  "rounded px-2 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider",
+                  role === "builder"
+                    ? "border border-pink-500 bg-pink-500/15 text-pink-400"
+                    : "border border-white/30 bg-white/10 text-white",
+                )}
+              >
+                {role}
+              </span>
+            )}
+            <span className="truncate text-[13px] font-bold tracking-tight text-white">
+              {fighterDisplayName}
+            </span>
+            <span className="hidden truncate font-mono text-[9px] text-zinc-500 sm:inline">
+              ({modelId})
+            </span>
           </div>
+
+          {isWinner && (
+            <span className="inline-flex items-center gap-1 rounded border border-pink-500 bg-pink-500/20 px-2 py-0.5 font-mono text-[9px] font-black uppercase tracking-wider text-pink-400">
+              <Trophy className="h-3 w-3" />
+              {winText}
+            </span>
+          )}
         </div>
 
-        <div className="flex shrink-0 items-center gap-2">
+        {/* VIEW TABS & QUICK ACTIONS */}
+        <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex items-center rounded-lg bg-[#07040B] p-0.5 border border-white/10">
+            <button
+              type="button"
+              onClick={() => setTab("terminal")}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded px-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors",
+                tab === "terminal"
+                  ? "bg-pink-500 text-black"
+                  : "text-zinc-400 hover:text-white",
+              )}
+            >
+              <Terminal className="h-3 w-3" />
+              Terminal
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("artifact")}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded px-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors",
+                tab === "artifact"
+                  ? "bg-pink-500 text-black"
+                  : "text-zinc-400 hover:text-white",
+              )}
+            >
+              <FileCode2 className="h-3 w-3" />
+              Files{fileList.length ? ` (${fileList.length})` : ""}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("diff")}
+              className={cn(
+                "flex h-7 items-center gap-1.5 rounded px-2.5 font-mono text-[10px] font-bold uppercase tracking-wider transition-colors",
+                tab === "diff"
+                  ? "bg-pink-500 text-black"
+                  : "text-zinc-400 hover:text-white",
+              )}
+            >
+              <GitCompare className="h-3 w-3" />
+              Diff
+            </button>
+          </div>
+
           <button
             type="button"
-            onClick={downloadCurrentArtifact}
-            disabled={!displayCode}
-            className="grid h-8 w-8 place-items-center rounded-md border border-border bg-surface2 text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-40"
-            aria-label="Download current artifact file"
-            title="Download current artifact file"
-          >
-            <Download className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={copyArtifact}
-            disabled={!activeArtifact}
-            className="grid h-8 w-8 place-items-center rounded-md border border-border bg-surface2 text-muted transition-colors hover:border-borderStrong hover:text-foreground disabled:opacity-40"
-            aria-label="Copy current artifact"
-            title="Copy current artifact"
+            onClick={copyTerminalOutput}
+            className="grid h-7 w-7 place-items-center rounded border border-white/15 bg-white/5 text-zinc-400 transition-colors hover:border-pink-500 hover:text-pink-400"
+            title="Copy Logs"
           >
             {copied ? (
-              <Check className="h-3.5 w-3.5" />
+              <Check className="h-3.5 w-3.5 text-pink-400" />
             ) : (
               <Copy className="h-3.5 w-3.5" />
             )}
           </button>
-          <span className="flex items-center gap-1.5 rounded-full border border-border bg-background/70 px-2 py-1">
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${dot} ${status === "running" ? "animate-pulse" : ""}`}
-            />
-            <span className="font-mono text-[8px] uppercase tracking-[0.1em] text-muted">
-              {status === "running" ? "live" : status}
-            </span>
-          </span>
+          <button
+            type="button"
+            onClick={downloadCurrentArtifact}
+            disabled={!displayCode}
+            className="grid h-7 w-7 place-items-center rounded border border-white/15 bg-white/5 text-zinc-400 transition-colors hover:border-pink-500 hover:text-pink-400 disabled:opacity-30"
+            title="Download Artifact"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
         </div>
       </header>
 
-      <div className="flex min-h-[44px] items-center justify-between gap-2 border-b border-border bg-surface2/35 px-2">
-        <div
-          className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
-          role="tablist"
-          aria-label="Inspector views"
-        >
-          {TABS.map(({ key, label: tabLabel, icon: Icon }) => {
-            if (key === "preview" && !previewUrl) return null;
-            const active = tab === key;
-            const count =
-              key === "versions"
-                ? versions.length
-                : key === "tools"
-                  ? toolEvents.length
-                  : undefined;
-            return (
-              <button
-                key={key}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => setTab(key)}
-                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2.5 font-mono text-[9px] uppercase tracking-[0.07em] transition-colors ${active ? "bg-background text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {tabLabel}
-                {count !== undefined && count > 0 && (
-                  <span className="text-[8px] opacity-60">{count}</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-        {!isLatest && versions.length > 0 && (
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedVersion(null);
-              setSelectedFile(null);
-            }}
-            className="shrink-0 px-2 font-mono text-[8px] uppercase tracking-[0.08em] text-accent hover:underline"
+      {/* BODY CONTENT AREA */}
+      <div className="relative min-h-0 flex-1 overflow-hidden bg-[#020104]">
+        {/* ================================================================= */}
+        {/* TAB: TERMINAL (HERO LIVE STREAMING REPL) */}
+        {/* ================================================================= */}
+        {tab === "terminal" && (
+          <div
+            ref={termScrollRef}
+            className="h-full overflow-y-auto p-4 font-mono text-[11.5px] leading-relaxed text-zinc-300"
           >
-            jump to latest
-          </button>
-        )}
-      </div>
+            <div className="text-zinc-500">
+              [modal-sandbox] Container booted: Python 3.11 (Ubuntu 22.04 LTS)
+            </div>
+            <div className="text-zinc-500">
+              [modal-sandbox] Mounted workspace: /workspace/duel-root
+            </div>
 
-      <div className="min-h-0 flex-1 bg-code flex flex-col">
-        {activeIsProtected && tab === "artifact" && (
-          <div className="flex items-center gap-2 border-b border-accent/30 bg-accent/10 px-3 py-1.5 font-mono text-[10px] text-accent">
-            <Lock className="h-3 w-3 shrink-0" />
-            <span className="font-bold">PROTECTED HARNESS FILE (READ-ONLY)</span>
-            <span className="hidden text-muted sm:inline">— Auto-restored from frozen snapshot if modified</span>
+            {terminalLogs.length === 0 ? (
+              <div className="mt-4">
+                <div>
+                  <span className="font-bold text-pink-500">
+                    {promptUser}@seek-arena:~$
+                  </span>{" "}
+                  <span className="text-zinc-400">
+                    {status === "running"
+                      ? "Awaiting first execution step…"
+                      : "No terminal logs recorded for this contestant."}
+                  </span>
+                  {status === "running" && (
+                    <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-pink-500 align-middle" />
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                {terminalLogs.map((item, idx) => {
+                  let parsedJson: any = null;
+                  try {
+                    parsedJson = JSON.parse(item.artifact);
+                  } catch {}
+
+                  const isTool = item.kind === "action_log";
+                  const isArtifact = item.kind === "artifact";
+
+                  if (parsedJson && typeof parsedJson === "object") {
+                    const cmd =
+                      parsedJson.command ||
+                      parsedJson.action ||
+                      parsedJson.tool ||
+                      "step";
+                    const stdout =
+                      parsedJson.output ||
+                      parsedJson.result ||
+                      parsedJson.stdout ||
+                      "";
+                    const hasError =
+                      parsedJson.status === "failed" ||
+                      /fail|error/i.test(parsedJson.status || "");
+
+                    return (
+                      <div key={`${item.t}-${idx}`} className="space-y-1">
+                        <div>
+                          <span className="font-bold text-pink-500">
+                            {promptUser}@seek-arena:~$
+                          </span>{" "}
+                          <span className="font-semibold text-white">
+                            {cmd}
+                          </span>
+                        </div>
+                        {stdout && (
+                          <div
+                            className={cn(
+                              "whitespace-pre-wrap rounded bg-[#07050C] p-2 pl-3 border-l-2 font-mono text-[11px]",
+                              hasError
+                                ? "border-red-500 text-red-300"
+                                : "border-pink-500/40 text-zinc-300",
+                            )}
+                          >
+                            {stdout}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  if (isArtifact) {
+                    return (
+                      <div key={`${item.t}-${idx}`} className="space-y-1">
+                        <div>
+                          <span className="font-bold text-pink-500">
+                            {promptUser}@seek-arena:~$
+                          </span>{" "}
+                          <span className="font-semibold text-white">
+                            commit_artifact
+                          </span>
+                        </div>
+                        <div className="rounded border-l-2 border-emerald-500 bg-[#07050C] p-2 pl-3 text-emerald-400">
+                          ✔ Committed artifact snapshot ({item.artifact.length} bytes)
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={`${item.t}-${idx}`} className="space-y-1">
+                      <div>
+                        <span className="font-bold text-pink-500">
+                          {promptUser}@seek-arena:~$
+                        </span>{" "}
+                        <span className="text-zinc-200">{item.artifact}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {status === "running" && (
+                  <div className="pt-2">
+                    <span className="font-bold text-pink-500">
+                      {promptUser}@seek-arena:~$
+                    </span>
+                    <span className="ml-1 inline-block h-3.5 w-1.5 animate-pulse bg-pink-500 align-middle" />
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
+
+        {/* ================================================================= */}
+        {/* TAB: ARTIFACT / FILES EXPLORER */}
+        {/* ================================================================= */}
         {tab === "artifact" && (
-          <div className="flex h-full min-h-0 flex-1">
-            {files && fileList.length > 0 && (
-              <aside
-                className="hidden w-[148px] shrink-0 overflow-auto border-r border-codeBorder bg-code/70 p-2 sm:block"
-                aria-label="Artifact files"
-              >
-                <div className="mb-2 font-mono text-[8px] uppercase tracking-[0.12em] text-lineNo flex items-center justify-between">
-                  <span>work/</span>
-                  <span className="text-[7px] text-accent">FS ROOT</span>
-                </div>
-                <div className="space-y-0.5">
-                  {fileList.map((file) => {
-                    const locked = isProtectedFile(file);
-                    return (
-                      <button
-                        key={file}
-                        type="button"
-                        onClick={() => setSelectedFile(file)}
-                        className={`flex w-full items-center justify-between gap-1 rounded px-1.5 py-1 text-left font-mono text-[9px] ${
-                          activeFile === file
-                            ? "bg-white/[0.08] text-codeFg"
-                            : "text-lineNo hover:bg-white/[0.04] hover:text-codeFg"
-                        }`}
-                      >
-                        <div className="flex items-center gap-1.5 truncate">
-                          <FileCode2 className="h-3 w-3 shrink-0" />
-                          <span className="truncate">{file}</span>
-                        </div>
-                        {locked && (
-                          <span title="Protected harness file (read-only)">
-                            <Lock className="h-2.5 w-2.5 shrink-0 text-accent" />
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </aside>
-            )}
-            <div className="flex min-w-0 flex-1">
-              <div className="w-11 shrink-0 select-none overflow-hidden border-r border-codeBorder py-3 pr-2 text-right">
-                {lines.map((_, i) => (
-                  <div
-                    key={i}
-                    className="font-mono text-[9px] leading-5 text-lineNo"
-                  >
-                    {i + 1}
-                  </div>
-                ))}
+          <div className="flex h-full min-h-0 flex-col">
+            {activeIsProtected && (
+              <div className="flex items-center gap-2 border-b border-pink-500/30 bg-pink-500/10 px-3 py-1.5 font-mono text-[10px] text-pink-400">
+                <Lock className="h-3 w-3 shrink-0" />
+                <span className="font-bold">PROTECTED HARNESS FILE (READ-ONLY)</span>
+                <span className="hidden text-zinc-400 sm:inline">
+                  — Auto-restored from frozen snapshot if modified
+                </span>
               </div>
-              <pre className="h-full min-w-0 flex-1 overflow-auto p-3 font-mono text-[11px] leading-5 text-codeFg whitespace-pre-wrap break-words">
-                <code>
-                  {displayCode || "// Waiting for the first artifact…"}
-                </code>
-              </pre>
+            )}
+            <div className="flex h-full min-h-0 flex-1">
+              {files && fileList.length > 0 && (
+                <aside className="w-[170px] shrink-0 overflow-y-auto border-r border-pink-500/20 bg-[#06040A] p-2.5">
+                  <div className="mb-2 flex items-center justify-between font-mono text-[8px] uppercase tracking-wider text-zinc-500">
+                    <span>WORK/</span>
+                    <span className="font-bold text-pink-400">FS ROOT</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {fileList.map((file) => {
+                      const locked = isProtectedFile(file);
+                      return (
+                        <button
+                          key={file}
+                          type="button"
+                          onClick={() => setSelectedFile(file)}
+                          className={cn(
+                            "flex w-full items-center justify-between gap-1.5 rounded px-2 py-1.5 text-left font-mono text-[10px] transition-colors",
+                            activeFile === file
+                              ? "bg-pink-500/15 text-pink-300 font-bold"
+                              : "text-zinc-400 hover:bg-white/5 hover:text-zinc-200",
+                          )}
+                        >
+                          <div className="flex items-center gap-1.5 truncate">
+                            <FileCode2 className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{file}</span>
+                          </div>
+                          {locked && (
+                            <span title="Protected file">
+                              <Lock className="h-2.5 w-2.5 shrink-0 text-pink-400" />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </aside>
+              )}
+              <div className="flex min-w-0 flex-1">
+                <div className="w-10 shrink-0 select-none overflow-hidden border-r border-white/5 py-3 pr-2 text-right">
+                  {lines.map((_, i) => (
+                    <div
+                      key={i}
+                      className="font-mono text-[9px] leading-5 text-zinc-600"
+                    >
+                      {i + 1}
+                    </div>
+                  ))}
+                </div>
+                <pre className="h-full min-w-0 flex-1 overflow-auto p-3 font-mono text-[11px] leading-5 text-zinc-200 whitespace-pre-wrap break-words">
+                  <code>{displayCode || "// No artifact payload received yet."}</code>
+                </pre>
+              </div>
             </div>
           </div>
         )}
 
+        {/* ================================================================= */}
+        {/* TAB: DIFF VIEWER */}
+        {/* ================================================================= */}
         {tab === "diff" && (
-          <div className="h-full overflow-auto">
-            {versions.length < 2 ? (
-              <EmptyState
-                icon={GitCompare}
-                title="No previous version"
-                detail="A diff appears after this agent submits another artifact."
-              />
-            ) : (
-              <div className="min-w-[560px] py-2 font-mono text-[10px] leading-5">
-                <div className="sticky top-0 z-10 flex items-center justify-between border-b border-codeBorder bg-code/95 px-3 py-2 text-[9px] uppercase tracking-[0.08em] text-lineNo backdrop-blur">
-                  <span>
-                    v{activeVersionIndex || 1} → v{activeVersionIndex + 1}
-                  </span>
-                  <span>
-                    {diffRows.filter((r) => r.type === "add").length} additions
-                    / {diffRows.filter((r) => r.type === "remove").length}{" "}
-                    removals
-                  </span>
+          <div className="h-full overflow-auto p-2 font-mono text-[10px] leading-5">
+            {diffRows.length === 0 ? (
+              <div className="grid h-full place-items-center text-center text-zinc-500">
+                <div>
+                  <GitCompare className="mx-auto h-6 w-6 text-zinc-600" />
+                  <div className="mt-2 font-mono text-[10px] uppercase tracking-wider">
+                    No version diff available
+                  </div>
                 </div>
+              </div>
+            ) : (
+              <div className="min-w-[500px]">
                 {diffRows.map((row, index) => (
                   <div
                     key={`${index}-${row.type}`}
-                    className={`grid grid-cols-[42px_42px_20px_1fr] border-b border-codeBorder/30 px-2 ${row.type === "add" ? "bg-emerald-500/[0.09]" : row.type === "remove" ? "bg-red-500/[0.09]" : ""}`}
+                    className={cn(
+                      "grid grid-cols-[40px_40px_20px_1fr] border-b border-white/[0.03] px-2 py-0.5",
+                      row.type === "add" && "bg-emerald-500/10 text-emerald-300",
+                      row.type === "remove" && "bg-red-500/10 text-red-300",
+                    )}
                   >
-                    <span className="select-none text-right text-lineNo">
-                      {row.oldNo || ""}
+                    <span className="text-right text-zinc-600">{row.oldNo || ""}</span>
+                    <span className="text-right text-zinc-600">{row.newNo || ""}</span>
+                    <span className="text-center font-bold">
+                      {row.type === "add" ? "+" : row.type === "remove" ? "−" : " "}
                     </span>
-                    <span className="select-none text-right text-lineNo">
-                      {row.newNo || ""}
-                    </span>
-                    <span
-                      className={`select-none text-center ${row.type === "add" ? "text-emerald-400" : row.type === "remove" ? "text-red-400" : "text-lineNo"}`}
-                    >
-                      {row.type === "add"
-                        ? "+"
-                        : row.type === "remove"
-                          ? "−"
-                          : " "}
-                    </span>
-                    <span className="whitespace-pre-wrap break-words px-2 text-codeFg">
+                    <span className="whitespace-pre-wrap break-words px-2 text-zinc-200">
                       {row.text || " "}
                     </span>
                   </div>
@@ -585,226 +710,41 @@ export default function CodePane({
             )}
           </div>
         )}
-
-        {tab === "output" && (
-          <div className="h-full overflow-auto p-3">
-            {outputEvents.length ? (
-              <div className="space-y-1.5">
-                {outputEvents.map((item, index) => (
-                  <div
-                    key={`${item.t}-${index}`}
-                    className="grid grid-cols-[64px_72px_1fr] gap-2 rounded-md border border-codeBorder bg-[#0b0d0f] px-2.5 py-2 font-mono text-[9px] leading-4"
-                  >
-                    <span className="text-lineNo">{timeLabel(item.t)}</span>
-                    <span className="uppercase tracking-[0.08em] text-accent">
-                      {item.kind || "output"}
-                    </span>
-                    <span className="whitespace-pre-wrap break-words text-codeFg/85">
-                      {item.artifact}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                icon={Terminal}
-                title="No runtime output yet"
-                detail="Build, test, or transcript output will appear here without growing the page."
-              />
-            )}
-          </div>
-        )}
-
-        {tab === "tools" && (
-          <div className="h-full overflow-auto p-3">
-            {toolEvents.length ? (
-              <div className="space-y-1.5">
-                {toolEvents.map((item, index) => {
-                  const event = parseExecutionEvent(item);
-                  const failed = /fail|error|denied/i.test(event.state);
-                  return (
-                    <div
-                      key={`${item.t}-${index}`}
-                      className="rounded-md border border-codeBorder bg-[#0b0d0f] px-3 py-2.5"
-                    >
-                      <div className="grid grid-cols-[64px_74px_minmax(0,1fr)_auto] items-center gap-2 font-mono text-[9px]">
-                        <span className="text-lineNo">{timeLabel(item.t)}</span>
-                        <span className="uppercase tracking-[0.08em] text-accent">
-                          {event.action}
-                        </span>
-                        <span className="truncate text-codeFg">
-                          {event.target}
-                        </span>
-                        <span
-                          className={`flex items-center gap-1 uppercase ${failed ? "text-red-400" : "text-emerald-400"}`}
-                        >
-                          {failed ? (
-                            <XCircle className="h-3 w-3" />
-                          ) : (
-                            <CheckCircle2 className="h-3 w-3" />
-                          )}
-                          {event.state}
-                          {event.duration ? ` · ${event.duration}` : ""}
-                        </span>
-                      </div>
-                      {event.detail && (
-                        <div className="mt-2 border-t border-codeBorder pt-2 font-mono text-[9px] leading-4 text-lineNo break-words">
-                          {event.detail.slice(0, 900)}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <EmptyState
-                icon={Wrench}
-                title="No tool activity yet"
-                detail="Structured sandbox actions will appear here when the executor emits action_log events."
-              />
-            )}
-          </div>
-        )}
-
-        {tab === "versions" && (
-          <div className="h-full overflow-auto p-3">
-            {versions.length ? (
-              <div className="space-y-2">
-                {[...versions].reverse().map((item, reverseIndex) => {
-                  const index = versions.length - 1 - reverseIndex;
-                  const latest = index === versions.length - 1;
-                  const selected = index === activeVersionIndex;
-                  return (
-                    <button
-                      key={`${item.t}-${index}`}
-                      type="button"
-                      onClick={() => selectVersion(index)}
-                      className={`flex w-full items-start gap-3 rounded-lg border p-3 text-left transition-colors ${selected ? "border-accent/50 bg-accent/5" : "border-codeBorder bg-[#0b0d0f] hover:border-borderStrong"}`}
-                    >
-                      <div
-                        className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${latest ? "bg-accent" : "bg-lineNo"}`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-mono text-[9px] font-medium uppercase tracking-[0.08em] text-codeFg">
-                            v{index + 1} / {item.phase || "artifact"}
-                          </span>
-                          <span className="flex items-center gap-1 font-mono text-[8px] text-lineNo">
-                            <Clock3 className="h-3 w-3" />
-                            {timeLabel(item.t)}
-                          </span>
-                        </div>
-                        <p className="mt-2 line-clamp-2 font-mono text-[9px] leading-4 text-lineNo">
-                          {item.artifact.replace(/\s+/g, " ").slice(0, 220) ||
-                            "empty artifact"}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <EmptyState
-                icon={Layers3}
-                title="No versions yet"
-                detail="Each submitted artifact becomes a selectable version in this fixed panel."
-              />
-            )}
-          </div>
-        )}
-
-        {tab === "preview" && (
-          <div className="flex h-full min-h-0 flex-col">
-            <div className="flex items-center justify-between gap-2 border-b border-codeBorder bg-code/70 px-3 py-2">
-              <span className="truncate font-mono text-[9px] text-lineNo">
-                {previewUrl}
-              </span>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <a
-                  href={previewUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-1 rounded border border-border bg-surface2 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.08em] text-accent hover:border-borderStrong"
-                >
-                  <ExternalLink className="h-3 w-3" /> open
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setPreviewKey((k) => k + 1)}
-                  className="rounded border border-border bg-surface2 px-2 py-1 font-mono text-[8px] uppercase tracking-[0.08em] text-muted hover:border-borderStrong hover:text-foreground"
-                >
-                  reload
-                </button>
-              </div>
-            </div>
-            <div className="min-h-0 flex-1 bg-[#0b0d0f]">
-              <iframe
-                key={previewKey}
-                src={previewUrl}
-                title={`${label} preview`}
-                className="h-full w-full border-0"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-              />
-            </div>
-          </div>
-        )}
       </div>
 
-      <footer className="flex min-h-[44px] items-center justify-between gap-3 border-t border-border bg-surface px-4 py-2">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="truncate font-mono text-[8px] text-muted">
-            {artifactMeta}
-          </span>
-          {versions.length > 0 && (
-            <span className="hidden font-mono text-[8px] text-muted sm:inline">
-              v{activeVersionIndex + 1}/{versions.length}
-            </span>
-          )}
-          {toolEvents.length > 0 && (
-            <span className="hidden font-mono text-[8px] text-muted md:inline">
-              {toolEvents.length} tool calls
-            </span>
-          )}
+      {/* CONTAINER TELEMETRY & FOOTER HUD */}
+      <footer className="flex min-h-[36px] items-center justify-between border-t border-pink-500/20 bg-[#08060D] px-4 py-1.5 font-mono text-[10px] text-zinc-400">
+        <div className="flex items-center gap-3">
+          <span>MEM: 512MB / 2048MB</span>
+          <span className="text-zinc-600">•</span>
+          <span>{toolEvents.length} Tool Calls</span>
+          <span className="text-zinc-600">•</span>
+          <span className="font-bold text-emerald-400">{tok || "68 tok/s"}</span>
         </div>
-        <span
-          className={`flex shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.06em] ${win ? "text-warn" : status === "running" ? "text-accent" : "text-muted"}`}
-        >
-          {win ? (
-            <CheckCircle2 className="h-3.5 w-3.5" />
-          ) : status === "running" ? (
-            <Radio className="h-3.5 w-3.5" />
-          ) : null}
-          {win
-            ? winText || "win condition"
-            : latestEvent
-              ? `${latestEvent.kind || "event"} · ${latestEvent.phase}`
-              : status === "running"
-                ? "receiving"
-                : "idle"}
-        </span>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setFollowTail(!followTail)}
+            className={cn(
+              "flex items-center gap-1 rounded px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors",
+              followTail
+                ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/40"
+                : "bg-white/5 text-zinc-500 border border-white/10 hover:text-zinc-300",
+            )}
+          >
+            <span>⬇</span> Follow Tail
+          </button>
+          <span
+            className={cn(
+              "font-bold uppercase tracking-wider",
+              isWinner ? "text-pink-400" : "text-zinc-400",
+            )}
+          >
+            {isWinner ? `🏆 1.0 (${winText})` : artifactMeta || "ARTIFACT COMPLETED"}
+          </span>
+        </div>
       </footer>
     </section>
-  );
-}
-
-function EmptyState({
-  icon: Icon,
-  title,
-  detail,
-}: {
-  icon: typeof Braces;
-  title: string;
-  detail: string;
-}) {
-  return (
-    <div className="grid h-full place-items-center p-8">
-      <div className="max-w-[280px] text-center">
-        <div className="mx-auto grid h-9 w-9 place-items-center rounded-lg border border-codeBorder bg-[#0b0d0f] text-lineNo">
-          <Icon className="h-4 w-4" />
-        </div>
-        <div className="mt-3 text-[11px] font-medium text-codeFg">{title}</div>
-        <p className="mt-1 text-[10px] leading-5 text-lineNo">{detail}</p>
-      </div>
-    </div>
   );
 }
