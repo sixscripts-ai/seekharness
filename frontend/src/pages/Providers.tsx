@@ -162,7 +162,7 @@ function formatRelativeTime(date: Date): string {
 export default function Providers() {
   const { user, jwt, refreshJwt } = useAuth();
   const nav = useNavigate();
-  const { hiddenIds, toggle, isHidden, unhide, clearAll } =
+  const { hiddenIds, hide, toggle, isHidden, unhide, clearAll } =
     useHiddenProviders();
 
   const [items, setItems] = useState<ProviderOut[]>([]);
@@ -233,20 +233,41 @@ export default function Providers() {
     };
   }, [items]);
 
-  const filteredPersonal = useMemo(() => {
-    return personalProviders.filter((p) => {
-      if (activeTab === "hidden" && !isHidden(p.id)) return false;
-      if (activeTab !== "hidden" && isHidden(p.id)) return false;
+  function matchesSearch(p: ProviderOut) {
+    if (!filterQuery.trim()) return true;
+    const q = filterQuery.toLowerCase();
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.model_name.toLowerCase().includes(q) ||
+      p.base_url.toLowerCase().includes(q)
+    );
+  }
 
-      if (!filterQuery) return true;
-      const q = filterQuery.toLowerCase();
-      return (
-        p.name.toLowerCase().includes(q) ||
-        p.model_name.toLowerCase().includes(q) ||
-        p.base_url.toLowerCase().includes(q)
-      );
+  const visiblePlatform = useMemo(() => {
+    return platformModels.filter((p) => {
+      if (activeTab === "hidden") return isHidden(p.id) && matchesSearch(p);
+      return !isHidden(p.id) && matchesSearch(p);
+    });
+  }, [platformModels, activeTab, isHidden, filterQuery]);
+
+  const visiblePersonal = useMemo(() => {
+    return personalProviders.filter((p) => {
+      if (activeTab === "hidden") return isHidden(p.id) && matchesSearch(p);
+      return !isHidden(p.id) && matchesSearch(p);
     });
   }, [personalProviders, activeTab, isHidden, filterQuery]);
+
+  const totalActiveCount = items.filter((p) => !isHidden(p.id)).length;
+  const totalHiddenCount = items.filter((p) => isHidden(p.id)).length;
+
+  function handleToggleHide(p: ProviderOut) {
+    const isNowHidden = toggle(p.id);
+    if (isNowHidden) {
+      setMsg(`Removed "${p.name}" from active arena lineup.`);
+    } else {
+      setMsg(`Restored "${p.name}" to active arena lineup.`);
+    }
+  }
 
   // Test provider connection with real backend verification
   async function testProviderConnection(providerId: string) {
@@ -366,16 +387,21 @@ export default function Providers() {
 
   async function handleDeleteProvider() {
     if (!deleteTarget) return;
-    const token = (await refreshJwt()) || jwt;
-    if (!token) return;
-
     setDeleting(true);
     setErr(null);
     try {
+      if (isHostProviderId(deleteTarget.id)) {
+        hide(deleteTarget.id);
+        setMsg(`Platform model "${deleteTarget.name}" removed from active lineup.`);
+        setDeleteTarget(null);
+        return;
+      }
+      const token = (await refreshJwt()) || jwt;
+      if (!token) throw new Error("Not authenticated");
       await api.deleteProvider(token, deleteTarget.id);
       unhide(deleteTarget.id);
       setItems((current) => current.filter((p) => p.id !== deleteTarget.id));
-      setMsg(`Provider "${deleteTarget.name}" deleted from encrypted vault.`);
+      setMsg(`Provider "${deleteTarget.name}" permanently deleted from vault.`);
       setDeleteTarget(null);
     } catch (e) {
       setErr(cleanErrorMessage(e, "Failed to delete provider key"));
@@ -497,339 +523,424 @@ export default function Providers() {
           )}
 
           {/* =============================================================== */}
-          {/* SECTION 1: PLATFORM MODELS                                       */}
+          {/* GLOBAL TABS & SEARCH CONTROLS                                    */}
           {/* =============================================================== */}
-          <div className="relative z-10 space-y-4">
-            <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-accent">■</span>
-                <h2 className="mono text-xs font-bold uppercase tracking-widest text-white">
-                  Platform Models ({platformModels.length})
-                </h2>
-              </div>
-              <span className="mono text-[10px] text-zinc-500">
-                HOSTED BY MODAL & SEEKHARNESS CLUSTER
-              </span>
+          <div className="relative z-10 flex flex-col gap-4 border-b border-[#1F1F22] pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-1.5 rounded-xl border border-[#1F1F22] bg-[#050508] p-1.5">
+              <button
+                type="button"
+                onClick={() => setActiveTab("all")}
+                className={`mono rounded-lg px-4 py-2 text-xs font-bold transition-all ${
+                  activeTab === "all"
+                    ? "bg-accent text-white shadow-[0_0_12px_rgba(255,0,160,0.35)]"
+                    : "text-zinc-400 hover:text-white hover:bg-[#161619]"
+                }`}
+              >
+                All Active ({totalActiveCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("hidden")}
+                className={`mono rounded-lg px-4 py-2 text-xs font-bold transition-all ${
+                  activeTab === "hidden"
+                    ? "bg-accent text-white shadow-[0_0_12px_rgba(255,0,160,0.35)]"
+                    : "text-zinc-400 hover:text-white hover:bg-[#161619]"
+                }`}
+              >
+                Hidden ({totalHiddenCount})
+              </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {platformModels.map((p) => {
-                const health = healthMap[p.id] || { state: "HEALTHY" };
-                const isTesting = health.state === "TESTING";
+            <div className="flex items-center gap-3">
+              {activeTab === "hidden" && totalHiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearAll();
+                    setMsg("Restored all hidden models to active arena lineup.");
+                  }}
+                  className="mono h-9 px-3.5 rounded-xl border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60"
+                >
+                  [ RESTORE ALL HIDDEN ]
+                </button>
+              )}
 
-                return (
-                  <div
-                    key={p.id}
-                    className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-5 shadow-lg space-y-4 transition-all hover:border-accent/40"
-                  >
-                    <div className="space-y-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
-                            PLATFORM HOSTED
-                          </div>
-                          <h3 className="text-sm font-bold text-white">
-                            {p.name}
-                          </h3>
-                        </div>
-                        <span className="mono flex items-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                          READY
-                        </span>
-                      </div>
-                      <div className="mono text-[11px] text-zinc-400">
-                        {p.model_name || "Auto-routed"}
-                      </div>
-                    </div>
-
-                    <div className="border-t border-[#1F1F22] pt-3 text-[11px] space-y-1.5 mono text-zinc-400">
-                      <div className="flex justify-between">
-                        <span>Capabilities:</span>
-                        <span className="text-white font-medium">
-                          Fighter ✓ · Judge ✓
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Latency:</span>
-                        <span className="text-emerald-400 font-medium">
-                          {health.latencyMs ? `${health.latencyMs}ms` : "Sub-second"}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => testProviderConnection(p.id)}
-                        disabled={isTesting}
-                        className="mono flex-1 h-8 items-center justify-center gap-2 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[11px] font-bold text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
-                      >
-                        {isTesting ? (
-                          <>
-                            <RefreshCw className="h-3 w-3 animate-spin" />
-                            <span>TESTING…</span>
-                          </>
-                        ) : (
-                          <span>[ TEST CONNECTION ]</span>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => toggle(p.id)}
-                        title={isHidden(p.id) ? "Unhide from arena selectors" : "Remove/Hide from arena selectors"}
-                        className={`mono h-8 px-3 rounded-lg border text-[10.5px] font-bold transition-colors ${
-                          isHidden(p.id)
-                            ? "border-accent/40 bg-accent/15 text-accent"
-                            : "border-[#2A2A2E] bg-[#0D0D0F] text-zinc-400 hover:border-zinc-600 hover:text-white"
-                        }`}
-                      >
-                        {isHidden(p.id) ? "HIDDEN (UNHIDE)" : "[ HIDE ]"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              <div className="relative">
+                <Search className="absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                <input
+                  type="text"
+                  value={filterQuery}
+                  onChange={(e) => setFilterQuery(e.target.value)}
+                  placeholder="Search models & credentials..."
+                  className="mono h-9 w-60 rounded-xl border border-[#1F1F22] bg-[#050508] pl-9 pr-3 text-xs text-white placeholder:text-zinc-600 focus:border-accent focus:outline-none"
+                />
+              </div>
             </div>
           </div>
 
           {/* =============================================================== */}
-          {/* SECTION 2: YOUR PROVIDERS (AUTHORITATIVE STATES)                  */}
+          {/* TAB 1: ALL ACTIVE MODELS                                         */}
           {/* =============================================================== */}
-          <div className="relative z-10 space-y-5 pt-4">
-            <div className="flex flex-col gap-4 border-b border-[#1F1F22] pb-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-accent">■</span>
-                <h2 className="mono text-xs font-bold uppercase tracking-widest text-white">
-                  Your Providers ({personalProviders.length})
-                </h2>
-              </div>
+          {activeTab === "all" && (
+            <div className="relative z-10 space-y-8">
+              {/* Platform Models */}
+              {visiblePlatform.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-accent">■</span>
+                      <h2 className="mono text-xs font-bold uppercase tracking-widest text-white">
+                        Platform Models ({visiblePlatform.length})
+                      </h2>
+                    </div>
+                    <span className="mono text-[10px] text-zinc-500">
+                      HOSTED BY MODAL & SEEKHARNESS CLUSTER
+                    </span>
+                  </div>
 
-              {/* Filter Tabs & Search */}
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex rounded-lg border border-[#1F1F22] bg-[#050508] p-1">
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("all")}
-                    className={`mono rounded px-3 py-1 text-[11px] font-bold transition-all ${
-                      activeTab === "all"
-                        ? "bg-accent text-white shadow-[0_0_10px_rgba(255,0,160,0.3)]"
-                        : "text-zinc-400 hover:text-white"
-                    }`}
-                  >
-                    All Active (
-                    {personalProviders.filter((p) => !isHidden(p.id)).length})
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab("hidden")}
-                    className={`mono rounded px-3 py-1 text-[11px] font-bold transition-all ${
-                      activeTab === "hidden"
-                        ? "bg-accent text-white shadow-[0_0_10px_rgba(255,0,160,0.3)]"
-                        : "text-zinc-400 hover:text-white"
-                    }`}
-                  >
-                    Hidden ({hiddenIds.size})
-                  </button>
-                </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {visiblePlatform.map((p) => {
+                      const health = healthMap[p.id] || { state: "HEALTHY" };
+                      const isTesting = health.state === "TESTING";
 
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
-                  <input
-                    type="text"
-                    value={filterQuery}
-                    onChange={(e) => setFilterQuery(e.target.value)}
-                    placeholder="Search credentials..."
-                    className="mono h-8 w-48 rounded-lg border border-[#1F1F22] bg-[#050508] pl-9 pr-3 text-xs text-white placeholder:text-zinc-600 focus:border-accent focus:outline-none"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Provider Cards formatted as specified by user */}
-            {filteredPersonal.length === 0 ? (
-              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-10 text-center space-y-3">
-                <Key className="mx-auto h-8 w-8 text-zinc-600" />
-                <h4 className="text-sm font-bold text-white">
-                  {activeTab === "hidden"
-                    ? "No Hidden Providers"
-                    : "No Personal Providers Registered"}
-                </h4>
-                <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                  {activeTab === "hidden"
-                    ? "You haven't hidden any providers from the battle selector dropdowns."
-                    : "Register your OpenAI, Anthropic, DeepSeek, or custom API keys to battle with proprietary weights."}
-                </p>
-                {activeTab !== "hidden" && (
-                  <button
-                    type="button"
-                    onClick={() => openRegisterModal()}
-                    className="btn btn-primary mx-auto flex h-9 items-center gap-2 px-5 text-xs font-bold mt-2"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span>Register New Key</span>
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {filteredPersonal.map((p) => {
-                  const health = healthMap[p.id] || { state: "UNTESTED" };
-                  const isHiddenCard = isHidden(p.id);
-
-                  // Extract last4 or masked credential representation
-                  const maskedCred = p.masked_key
-                    ? `••••••${p.masked_key.slice(-4)}`
-                    : "••••••••••••";
-
-                  return (
-                    <div
-                      key={p.id}
-                      className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl space-y-5 transition-all hover:border-accent/40"
-                    >
-                      {/* Provider Header */}
-                      <div className="space-y-1">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
-                              {p.name}
+                      return (
+                        <div
+                          key={p.id}
+                          className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-5 shadow-lg space-y-4 transition-all hover:border-accent/40"
+                        >
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
+                                  PLATFORM HOSTED
+                                </div>
+                                <h3 className="text-sm font-bold text-white">
+                                  {p.name}
+                                </h3>
+                              </div>
+                              <span className="mono flex items-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                READY
+                              </span>
                             </div>
-                            <h3 className="text-base font-extrabold text-white mt-0.5">
-                              {p.model_name || "Custom Model"}
-                            </h3>
+                            <div className="mono text-[11px] text-zinc-400">
+                              {p.model_name || "Auto-routed"}
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1">
+
+                          <div className="border-t border-[#1F1F22] pt-3 text-[11px] space-y-1.5 mono text-zinc-400">
+                            <div className="flex justify-between">
+                              <span>Capabilities:</span>
+                              <span className="text-white font-medium">
+                                Fighter ✓ · Judge ✓
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Latency:</span>
+                              <span className="text-emerald-400 font-medium">
+                                {health.latencyMs ? `${health.latencyMs}ms` : "Sub-second"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 pt-1">
                             <button
                               type="button"
-                              onClick={() => toggle(p.id)}
-                              className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-[#161619] hover:text-white"
-                              title={
-                                isHiddenCard
-                                  ? "Unhide from selectors"
-                                  : "Hide from selectors"
-                              }
+                              onClick={() => testProviderConnection(p.id)}
+                              disabled={isTesting}
+                              className="mono flex-1 h-8 items-center justify-center gap-2 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[11px] font-bold text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
                             >
-                              {isHiddenCard ? (
-                                <Eye className="h-3.5 w-3.5 text-accent" />
+                              {isTesting ? (
+                                <>
+                                  <RefreshCw className="h-3 w-3 animate-spin" />
+                                  <span>TESTING…</span>
+                                </>
                               ) : (
-                                <EyeOff className="h-3.5 w-3.5" />
+                                <span>[ TEST CONNECTION ]</span>
                               )}
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={() => handleToggleHide(p)}
+                              title="Remove/Hide from arena selectors"
+                              className="mono h-8 px-3 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[10.5px] font-bold text-zinc-400 hover:border-zinc-600 hover:text-white transition-colors"
+                            >
+                              [ HIDE ]
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Personal Providers */}
+              <div className="space-y-4 pt-2">
+                <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-accent">■</span>
+                    <h2 className="mono text-xs font-bold uppercase tracking-widest text-white">
+                      Your Providers ({visiblePersonal.length})
+                    </h2>
+                  </div>
+                  <span className="mono text-[10px] text-zinc-500">
+                    AES-256 ENCRYPTED PERSONAL CREDENTIALS
+                  </span>
+                </div>
+
+                {visiblePersonal.length === 0 ? (
+                  <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-8 text-center space-y-3">
+                    <Key className="mx-auto h-8 w-8 text-zinc-600" />
+                    <h4 className="text-sm font-bold text-white">
+                      No Personal Keys Registered
+                    </h4>
+                    <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                      Add your OpenAI, Anthropic, DeepSeek, or custom API keys to battle with proprietary weights.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => openRegisterModal()}
+                      className="btn btn-primary mx-auto inline-flex h-9 items-center gap-2 px-5 text-xs font-bold mt-2"
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Register Provider Key</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                    {visiblePersonal.map((p) => {
+                      const health = healthMap[p.id] || { state: "UNTESTED" };
+                      const maskedCred = p.masked_key
+                        ? `••••••${p.masked_key.slice(-4)}`
+                        : "••••••••••••";
+
+                      return (
+                        <div
+                          key={p.id}
+                          className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl space-y-5 transition-all hover:border-accent/40"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
+                                  {p.name}
+                                </div>
+                                <h3 className="text-base font-extrabold text-white mt-0.5">
+                                  {p.model_name || "Custom Model"}
+                                </h3>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleHide(p)}
+                                  className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-[#161619] hover:text-white"
+                                  title="Hide from selectors"
+                                >
+                                  <EyeOff className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setDeleteTarget(p)}
+                                  className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-red-950/40 hover:text-red-400"
+                                  title="Delete Provider Key"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="border-b border-[#1F1F22]" />
+
+                          <div className="space-y-2 mono text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-500">Credential</span>
+                              <span className="text-white font-medium">
+                                {maskedCred}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-500">Status</span>
+                              <span>
+                                {health.state === "HEALTHY" && (
+                                  <span className="inline-flex items-center gap-1.5 text-emerald-400 font-bold">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                                    ● HEALTHY
+                                    {health.latencyMs ? ` (${health.latencyMs}ms)` : ""}
+                                  </span>
+                                )}
+                                {health.state === "ERROR" && (
+                                  <span className="inline-flex items-center gap-1.5 text-red-400 font-bold" title={health.detail}>
+                                    <span className="h-1.5 w-1.5 rounded-full bg-red-400"></span>
+                                    ● ERROR
+                                  </span>
+                                )}
+                                {health.state === "TESTING" && (
+                                  <span className="inline-flex items-center gap-1.5 text-accent font-bold animate-pulse">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-accent"></span>
+                                    ● TESTING…
+                                  </span>
+                                )}
+                                {health.state === "UNTESTED" && (
+                                  <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                                    ○ UNTESTED
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+
+                            {health.detail && health.state === "ERROR" && (
+                              <div className="rounded bg-red-950/30 border border-red-500/20 p-2 text-[10.5px] text-red-300">
+                                {health.detail}
+                              </div>
+                            )}
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-500">Last checked</span>
+                              <span className="text-zinc-300">
+                                {health.lastChecked || "Never"}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-500">Fighter</span>
+                              <span className="text-emerald-400 font-bold">✓</span>
+                            </div>
+
+                            <div className="flex items-center justify-between">
+                              <span className="text-zinc-500">Judge</span>
+                              <span className="text-emerald-400 font-bold">✓</span>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 pt-2">
+                            <button
+                              type="button"
+                              onClick={() => testProviderConnection(p.id)}
+                              disabled={health.state === "TESTING"}
+                              className="mono flex-1 min-w-[130px] h-9 rounded-lg border border-accent/40 bg-accent/10 text-xs font-bold text-accent transition-all hover:bg-accent/20 disabled:opacity-50"
+                            >
+                              {health.state === "TESTING" ? "TESTING…" : "[ TEST CONNECTION ]"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openRegisterModal(p)}
+                              className="mono h-9 px-3.5 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-xs font-bold text-zinc-300 hover:text-white hover:border-[#3F3F46]"
+                            >
+                              [ EDIT ]
                             </button>
                             <button
                               type="button"
                               onClick={() => setDeleteTarget(p)}
-                              className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-red-950/40 hover:text-red-400"
+                              className="mono h-9 px-3.5 rounded-lg border border-red-500/40 bg-red-950/20 text-xs font-bold text-red-400 hover:bg-red-950/50 hover:border-red-500 transition-all flex items-center gap-1.5"
                               title="Delete Provider Key"
                             >
                               <Trash2 className="h-3.5 w-3.5" />
+                              <span>[ DELETE ]</span>
                             </button>
                           </div>
                         </div>
-                      </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
-                      {/* Divider (────────────────────────────) */}
-                      <div className="border-b border-[#1F1F22]" />
-
-                      {/* Metadata Table */}
-                      <div className="space-y-2 mono text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-500">Credential</span>
-                          <span className="text-white font-medium">
-                            {maskedCred}
-                          </span>
+          {/* =============================================================== */}
+          {/* TAB 2: HIDDEN MODELS & PROVIDERS                                 */}
+          {/* =============================================================== */}
+          {activeTab === "hidden" && (
+            <div className="relative z-10 space-y-6">
+              {visiblePlatform.length === 0 && visiblePersonal.length === 0 ? (
+                <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-12 text-center space-y-3">
+                  <Eye className="mx-auto h-8 w-8 text-zinc-600" />
+                  <h4 className="text-base font-bold text-white">
+                    No Hidden Models or Keys
+                  </h4>
+                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                    Any platform model or custom provider you remove/hide will appear here for easy restoration.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                  {/* Hidden Platform Models */}
+                  {visiblePlatform.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl space-y-4 opacity-80 hover:opacity-100 transition-opacity"
+                    >
+                      <div className="space-y-1">
+                        <div className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                          HIDDEN PLATFORM MODEL
                         </div>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-500">Status</span>
-                          <span>
-                            {health.state === "HEALTHY" && (
-                              <span className="inline-flex items-center gap-1.5 text-emerald-400 font-bold">
-                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-                                ● HEALTHY
-                                {health.latencyMs
-                                  ? ` (${health.latencyMs}ms)`
-                                  : ""}
-                              </span>
-                            )}
-                            {health.state === "ERROR" && (
-                              <span className="inline-flex items-center gap-1.5 text-red-400 font-bold" title={health.detail}>
-                                <span className="h-1.5 w-1.5 rounded-full bg-red-400"></span>
-                                ● ERROR
-                              </span>
-                            )}
-                            {health.state === "TESTING" && (
-                              <span className="inline-flex items-center gap-1.5 text-accent font-bold animate-pulse">
-                                <span className="h-1.5 w-1.5 rounded-full bg-accent"></span>
-                                ● TESTING…
-                              </span>
-                            )}
-                            {health.state === "UNTESTED" && (
-                              <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                                ○ UNTESTED
-                              </span>
-                            )}
-                          </span>
-                        </div>
-
-                        {health.detail && health.state === "ERROR" && (
-                          <div className="rounded bg-red-950/30 border border-red-500/20 p-2 text-[10.5px] text-red-300">
-                            {health.detail}
-                          </div>
-                        )}
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-500">Last checked</span>
-                          <span className="text-zinc-300">
-                            {health.lastChecked || "Never"}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-500">Fighter</span>
-                          <span className="text-emerald-400 font-bold">✓</span>
-                        </div>
-
-                        <div className="flex items-center justify-between">
-                          <span className="text-zinc-500">Judge</span>
-                          <span className="text-emerald-400 font-bold">✓</span>
+                        <h3 className="text-base font-bold text-white">
+                          {p.name}
+                        </h3>
+                        <div className="mono text-xs text-zinc-400">
+                          {p.model_name || "Platform"}
                         </div>
                       </div>
 
-                      {/* Action Buttons */}
-                      <div className="flex flex-wrap items-center gap-2 pt-2">
+                      <div className="pt-2 border-t border-[#1F1F22] flex items-center justify-between">
+                        <span className="mono text-[10px] text-zinc-500">Excluded from arena</span>
                         <button
                           type="button"
-                          onClick={() => testProviderConnection(p.id)}
-                          disabled={health.state === "TESTING"}
-                          className="mono flex-1 min-w-[140px] h-9 rounded-lg border border-accent/40 bg-accent/10 text-xs font-bold text-accent transition-all hover:bg-accent/20 disabled:opacity-50"
+                          onClick={() => handleToggleHide(p)}
+                          className="mono h-8 px-4 rounded-lg border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60 transition-all flex items-center gap-1.5"
                         >
-                          {health.state === "TESTING"
-                            ? "TESTING…"
-                            : "[ TEST CONNECTION ]"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => openRegisterModal(p)}
-                          className="mono h-9 px-3.5 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-xs font-bold text-zinc-300 hover:text-white hover:border-[#3F3F46]"
-                        >
-                          [ EDIT ]
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(p)}
-                          className="mono h-9 px-3.5 rounded-lg border border-red-500/40 bg-red-950/20 text-xs font-bold text-red-400 hover:bg-red-950/50 hover:border-red-500 transition-all flex items-center gap-1.5"
-                          title="Delete Provider Key"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          <span>[ DELETE ]</span>
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>[ UNHIDE / RESTORE ]</span>
                         </button>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                  ))}
+
+                  {/* Hidden Personal Providers */}
+                  {visiblePersonal.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl space-y-4 opacity-80 hover:opacity-100 transition-opacity"
+                    >
+                      <div className="space-y-1">
+                        <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
+                          HIDDEN CUSTOM KEY
+                        </div>
+                        <h3 className="text-base font-bold text-white">
+                          {p.name}
+                        </h3>
+                        <div className="mono text-xs text-zinc-400">
+                          {p.model_name || "Custom"}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t border-[#1F1F22] flex items-center justify-between gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setDeleteTarget(p)}
+                          className="mono h-8 px-3 rounded-lg border border-red-500/40 bg-red-950/20 text-xs font-bold text-red-400 hover:bg-red-950/50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleHide(p)}
+                          className="mono flex-1 h-8 px-4 rounded-lg border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60 transition-all flex items-center justify-center gap-1.5"
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>[ UNHIDE / RESTORE ]</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

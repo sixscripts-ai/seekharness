@@ -8,6 +8,7 @@ import {
   type StatsOut,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useHiddenProviders } from "@/lib/hiddenProviders";
 import {
   Activity,
   ArrowRight,
@@ -36,6 +37,7 @@ function formatElapsed(seconds: number): string {
 
 export default function Home() {
   const { user, jwt, refreshJwt } = useAuth();
+  const { isHidden } = useHiddenProviders();
   const navigate = useNavigate();
 
   const [formats, setFormats] = useState<FormatOut[]>([]);
@@ -49,6 +51,11 @@ export default function Home() {
   const [fighterB, setFighterB] = useState<string>("");
   const [selectedFormat, setSelectedFormat] = useState<string>("");
   const [launching, setLaunching] = useState(false);
+
+  const visibleProviders = useMemo(
+    () => providers.filter((p) => !isHidden(p.id)),
+    [providers, isHidden],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -450,12 +457,12 @@ export default function Home() {
                       onChange={(e) => setFighterA(e.target.value)}
                       className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#09090E] px-2.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
                     >
-                      {providers.map((p) => (
+                      {visibleProviders.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
                       ))}
-                      {providers.length === 0 && (
+                      {visibleProviders.length === 0 && (
                         <option value="host:modal-kimi">Kimi K3 (Platform)</option>
                       )}
                     </select>
@@ -470,12 +477,12 @@ export default function Home() {
                       onChange={(e) => setFighterB(e.target.value)}
                       className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#09090E] px-2.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
                     >
-                      {providers.map((p) => (
+                      {visibleProviders.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.name}
                         </option>
                       ))}
-                      {providers.length === 0 && (
+                      {visibleProviders.length === 0 && (
                         <option value="host:openrouter-free">DeepSeek R1 (Platform)</option>
                       )}
                     </select>
