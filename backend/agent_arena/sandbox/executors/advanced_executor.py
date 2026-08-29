@@ -1444,6 +1444,7 @@ class AdvancedExecutor(Executor):
             model_id,
             action,
             target="",
+            command="",
             state="",
             duration_ms=0,
             result="",
@@ -1454,6 +1455,8 @@ class AdvancedExecutor(Executor):
             reason="",
             response_hash="",
             phase_id="",
+            role="",
+            workspace="",
         ):
             action_phase = phase_id or phase_name
             with io_lock:
@@ -1469,10 +1472,15 @@ class AdvancedExecutor(Executor):
                     "exec_id": exec_id,
                     "action": action,
                     "target": target,
+                    "command": command,
                     "state": state,
                     "duration_ms": int(duration_ms),
                     "result": (result or "")[:4000],
                 }
+                if role:
+                    payload["role"] = role
+                if workspace:
+                    payload["workspace"] = workspace
                 if reason:
                     payload["reason"] = reason
                 if response_hash:
@@ -1656,8 +1664,17 @@ class AdvancedExecutor(Executor):
             emit(
                 local_phase,
                 model_id,
-                f"phase_start:{role} workdir {work.name}"
-                + (f" preview {preview_url}" if preview_url else ""),
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "fighter_id": model_id,
+                        "role": role,
+                        "phase_id": local_phase,
+                        "workspace": work.name,
+                        "network_enabled": bool(env_cfg.get("network")),
+                        "preview_url": preview_url or None,
+                    }
+                ),
                 "phase_start",
             )
 
@@ -1857,31 +1874,79 @@ class AdvancedExecutor(Executor):
                         metrics["tool_calls"] = metrics.get("tool_calls", 0) + 1
                         tool_call_id = f"tool_{metrics['tool_calls']:03d}"
                         tool_name_now = call.get("tool", "?")
+                        target_now = (
+                            call.get("path")
+                            or call.get("name")
+                            or call.get("url")
+                            or ""
+                        )
+                        if tool_name_now in {"shell", "install"}:
+                            command_now = str(call.get("cmd") or tool_name_now)
+                        elif tool_name_now == "run":
+                            command_now = f"python {call.get('path') or ''}".strip()
+                        elif tool_name_now == "test":
+                            test_target = str(call.get("path") or "").strip()
+                            command_now = f"pytest {test_target}".strip() if test_target else "pytest -q"
+                        elif tool_name_now == "read":
+                            command_now = f"cat {call.get('path') or ''}".strip()
+                        elif tool_name_now == "write":
+                            command_now = f"write {call.get('path') or ''}".strip()
+                        elif tool_name_now == "ls":
+                            command_now = f"ls {call.get('path') or '.'}".strip()
+                        elif tool_name_now == "tree":
+                            command_now = f"tree {call.get('path') or '.'}".strip()
+                        elif tool_name_now == "grep":
+                            command_now = (
+                                f"grep {call.get('pattern') or ''} {call.get('path') or '.'}"
+                            ).strip()
+                        elif tool_name_now == "fetch":
+                            command_now = f"fetch {call.get('url') or ''}".strip()
+                        else:
+                            command_now = str(tool_name_now)
                         process_tool = tool_name_now in {
                             "shell", "install", "run", "test", "bg",
                         }
                         exec_id = (
                             "exec_" + uuid.uuid4().hex[:12] if process_tool else None
                         )
+
+                        # Emit before execution so the browser can show a real
+                        # RUNNING command immediately instead of waiting for the
+                        # entire tool call to return.
+                        emit_action(
+                            model_id,
+                            tool_name_now,
+                            target=target_now,
+                            command=command_now,
+                            state="running",
+                            turn_id=turn + 1,
+                            tool_step=step_before + 1,
+                            tool_call_id=tool_call_id,
+                            exec_id=exec_id,
+                            role=role,
+                            workspace=work.name,
+                        )
+
                         exec_res = sess.exec_tool(call)
-                        if isinstance(exec_res, str) and exec_res.startswith("ERROR"):
+                        failed = isinstance(exec_res, str) and exec_res.startswith("ERROR")
+                        if failed:
                             metrics["tool_errors"] += 1
                         exec_ms = int((time.time() - exec_start) * 1000)
                         exec_res_sanitized = sanitize_artifact(exec_res[:10000])
                         emit_action(
                             model_id,
                             tool_name_now,
-                            target=call.get("path")
-                            or call.get("name")
-                            or call.get("url")
-                            or "",
-                            state="done",
+                            target=target_now,
+                            command=command_now,
+                            state="failed" if failed else "done",
                             duration_ms=exec_ms,
                             result=exec_res_sanitized[:4000],
                             turn_id=turn + 1,
                             tool_step=step_before + 1,
                             tool_call_id=tool_call_id,
                             exec_id=exec_id,
+                            role=role,
+                            workspace=work.name,
                         )
                         record_artifact(model_id, exec_res_sanitized, role)
 
@@ -2017,8 +2082,32 @@ class AdvancedExecutor(Executor):
                     work = root / f"work_{phase.actor}"
                     snap_refs = phase.required_outputs or phase.handoff_artifacts
                     snapshots[phase.phase_id] = snapshot_handoff(work, snap_refs)
+                    model_id = role_to_model.get(phase.actor)
+                    if model_id:
+                        emit_action(
+                            model_id,
+                            "handoff_snapshot",
+                            target=phase.phase_id,
+                            state="done",
+                            result=json.dumps(
+                                snapshots[phase.phase_id].get("manifest") or []
+                            )[:4000],
+                            role=phase.actor,
+                            workspace=work.name,
+                            phase_id=phase.phase_id,
+                        )
                     if work.exists():
                         shutil.rmtree(work, ignore_errors=True)
+                        if model_id:
+                            emit_action(
+                                model_id,
+                                "workspace_destroyed",
+                                target=work.name,
+                                state="done",
+                                role=phase.actor,
+                                workspace=work.name,
+                                phase_id=phase.phase_id,
+                            )
             else:
                 jobs = [
                     (idx, role)

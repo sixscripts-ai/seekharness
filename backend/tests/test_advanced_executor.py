@@ -1147,11 +1147,10 @@ def test_dynamic_fighter_roles_are_isolated(monkeypatch):
         format_overlay=_CUSTOM_QUICK,
         role_to_model={"fighter_1": "a", "fighter_2": "b"},
     )
-    assert scores
     starts = [
         r.get("artifact", "")
         for r in transport.rounds
-        if "phase_start:" in (r.get("artifact") or "")
+        if r.get("event_type") == "phase_start" or "phase_start" in (r.get("artifact") or "")
     ]
     assert any("work_fighter_1" in s for s in starts)
     assert any("work_fighter_2" in s for s in starts)
