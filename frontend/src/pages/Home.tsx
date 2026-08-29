@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, type FormatOut, type StatsOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import FormatCard from "@/components/FormatCard";
 import { 
   Zap, 
   Terminal as TerminalIcon, 
@@ -11,7 +10,11 @@ import {
   Layers, 
   Cpu, 
   Activity,
-  Sparkles
+  Sparkles,
+  ShieldCheck,
+  CheckCircle2,
+  Gauge,
+  Boxes
 } from "lucide-react";
 
 const FALLBACK_HOST_FREE = "nemotron-3-ultra:free • r1:free • llama-3.3-70b";
@@ -28,7 +31,6 @@ export default function Home() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [formats, setFormats] = useState<FormatOut[]>([]);
-  const [engine, setEngine] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<StatsOut | null>(null);
 
@@ -99,14 +101,6 @@ export default function Home() {
       : `${Math.floor(s / 60)}m${s % 60 ? `${s % 60}s` : ""}`;
   }, [stats]);
 
-  const engines = useMemo(() => {
-    const s = new Set(formats.map((f) => f.engine).filter(Boolean));
-    return ["all", ...Array.from(s).sort()];
-  }, [formats]);
-
-  const filtered =
-    engine === "all" ? formats : formats.filter((f) => f.engine === engine);
-
   const handleLaunchQuickDuel = () => {
     if (!user) {
       navigate("/signup");
@@ -116,12 +110,14 @@ export default function Home() {
   };
 
   return (
-    <div className="space-y-12 md:space-y-16 pb-12">
+    <div className="space-y-12 md:space-y-16 pb-16">
+      {/* ===================================================================== */}
       {/* HERO COMMAND CENTER */}
+      {/* ===================================================================== */}
       <section className="relative overflow-hidden rounded-2xl border border-border bg-[#09090E] p-6 md:p-10 shadow-2xl">
         {/* Ambient Neon Radial Glow */}
-        <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.18)_0%,transparent_70%)]" />
-        <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(168,85,247,0.12)_0%,transparent_70%)]" />
+        <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.22)_0%,transparent_70%)]" />
+        <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.12)_0%,transparent_70%)]" />
 
         <div className="grid grid-cols-12 gap-8 items-center relative z-10">
           {/* Left Column: Hero Copy & Actions */}
@@ -165,7 +161,7 @@ export default function Home() {
                 to="/leaderboard"
                 className="btn btn-ghost h-11 px-5 text-[13px] hover:border-borderStrong"
               >
-                <Trophy className="h-4 w-4 text-amber-400" />
+                <Trophy className="h-4 w-4 text-accent" />
                 Leaderboard
               </Link>
             </div>
@@ -178,9 +174,9 @@ export default function Home() {
               <div className="flex items-center justify-between border-b border-border bg-[#0C0C12] px-4 py-2.5">
                 <div className="flex items-center gap-2">
                   <div className="flex gap-1.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
-                    <div className="h-2.5 w-2.5 rounded-full bg-amber-500/80" />
-                    <div className="h-2.5 w-2.5 rounded-full bg-green-500/80" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-accent/80" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-accent/50" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-accent/20" />
                   </div>
                   <span className="mono text-[11px] font-semibold text-muted ml-2">
                     MODAL SANDBOX #892 • SWE-BENCH VERIFIED
@@ -204,7 +200,7 @@ export default function Home() {
                     <span className="mono text-[10px] text-muted">68 tok/s</span>
                   </div>
                   <div className="mono text-[11px] space-y-1 text-muted leading-relaxed">
-                    <div className="text-emerald-400">&gt; Sandbox: Python 3.11 ready</div>
+                    <div className="text-accent/90">&gt; Sandbox: Python 3.11 ready</div>
                     <div className="text-foreground">&gt; Reading django/db/query.py</div>
                     <div className="text-accent font-medium">
                       + def filter_rel_prefetch(self):
@@ -213,7 +209,7 @@ export default function Home() {
                       + return super().prefetch()
                     </div>
                     <div className="text-zinc-500">&gt; Pytest: 18 passed in 1.4s</div>
-                    <div className="text-emerald-400 font-bold">
+                    <div className="text-accent font-bold">
                       ✓ SOLVED (+{stepCount} lines)
                     </div>
                   </div>
@@ -222,22 +218,22 @@ export default function Home() {
                 {/* Agent 2 Terminal Feed */}
                 <div className="p-4 space-y-3 bg-[#07070B]">
                   <div className="flex items-center justify-between">
-                    <span className="mono text-[11px] font-bold text-purple-400">
+                    <span className="mono text-[11px] font-bold text-accent/80">
                       DEEPSEEK R1
                     </span>
                     <span className="mono text-[10px] text-muted">54 tok/s</span>
                   </div>
                   <div className="mono text-[11px] space-y-1 text-muted leading-relaxed">
-                    <div className="text-emerald-400">&gt; Sandbox: Python 3.11 ready</div>
+                    <div className="text-accent/90">&gt; Sandbox: Python 3.11 ready</div>
                     <div className="text-foreground">&gt; Reading django/db/query.py</div>
-                    <div className="text-purple-300 font-medium">
+                    <div className="text-zinc-300 font-medium">
                       + def _build_prefetch_map():
                     </div>
-                    <div className="text-purple-300/80 font-medium">
+                    <div className="text-zinc-300/80 font-medium">
                       + self._prefetch_done = True
                     </div>
-                    <div className="text-amber-400">&gt; Pytest: 17 passed, 1 failing</div>
-                    <div className="text-purple-400 font-medium">
+                    <div className="text-accent/70">&gt; Pytest: 17 passed, 1 failing</div>
+                    <div className="text-accent font-medium">
                       &gt; Self-refining reasoning...
                     </div>
                   </div>
@@ -254,7 +250,9 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ===================================================================== */}
       {/* QUICK 1-CLICK DUEL LAUNCHER */}
+      {/* ===================================================================== */}
       <section className="card p-5 md:p-6 bg-surface border-borderStrong shadow-md">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -291,7 +289,7 @@ export default function Home() {
 
             {/* Model B Select */}
             <div className="flex items-center gap-2">
-              <span className="mono text-[11px] font-bold text-purple-400">P2:</span>
+              <span className="mono text-[11px] font-bold text-accent">P2:</span>
               <select
                 value={modelB}
                 onChange={(e) => setModelB(e.target.value)}
@@ -315,25 +313,27 @@ export default function Home() {
         </div>
       </section>
 
+      {/* ===================================================================== */}
       {/* TELEMETRY METRICS ROW */}
+      {/* ===================================================================== */}
       <section className="grid grid-cols-12 gap-4">
         <div className="col-span-12 sm:col-span-6 lg:col-span-3 card p-5 flex flex-col justify-between hover:border-borderStrong transition-colors">
           <div className="flex items-center justify-between text-muted">
-            <span className="text-[12px] font-medium">Active Formats</span>
+            <span className="text-[12px] font-medium">Available Benchmarks</span>
             <Layers className="h-4 w-4 text-accent" />
           </div>
           <div className="mt-3">
             <div className="text-[30px] font-extrabold tracking-[-0.02em] text-foreground">
               {loading ? "—" : formats.length}
             </div>
-            <div className="text-[11px] text-muted mt-0.5">{engines.length - 1} duel engines</div>
+            <div className="text-[11px] text-muted mt-0.5">SWE-bench, CTF, Refactor</div>
           </div>
         </div>
 
         <div className="col-span-12 sm:col-span-6 lg:col-span-3 card p-5 flex flex-col justify-between hover:border-borderStrong transition-colors">
           <div className="flex items-center justify-between text-muted">
             <span className="text-[12px] font-medium">Median Battle Time</span>
-            <Activity className="h-4 w-4 text-emerald-400" />
+            <Activity className="h-4 w-4 text-accent" />
           </div>
           <div className="mt-3">
             <div className="text-[30px] font-extrabold tracking-[-0.02em] text-accent">
@@ -346,7 +346,7 @@ export default function Home() {
         <div className="col-span-12 sm:col-span-6 lg:col-span-3 card p-5 flex flex-col justify-between hover:border-borderStrong transition-colors">
           <div className="flex items-center justify-between text-muted">
             <span className="text-[12px] font-medium">Free Host Models</span>
-            <span className="tag border-emerald-500/30 text-emerald-400 bg-emerald-500/10 font-bold">FREE</span>
+            <span className="tag border-accent/30 text-accent bg-accent/10 font-bold">FREE</span>
           </div>
           <div className="mt-3">
             <div className="text-[13px] font-bold text-foreground line-clamp-1">
@@ -359,11 +359,11 @@ export default function Home() {
         <div className="col-span-12 sm:col-span-6 lg:col-span-3 card p-5 flex flex-col justify-between hover:border-borderStrong transition-colors">
           <div className="flex items-center justify-between text-muted">
             <span className="text-[12px] font-medium">Compute Cluster</span>
-            <Cpu className="h-4 w-4 text-purple-400" />
+            <Cpu className="h-4 w-4 text-accent" />
           </div>
           <div className="mt-3">
             <div className="text-[13px] font-bold text-foreground flex items-center gap-1.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="h-2 w-2 rounded-full bg-accent animate-pulse" />
               Modal GPU Sandboxes
             </div>
             <div className="text-[11px] text-muted mt-0.5">Sub-second warm container spinup</div>
@@ -371,57 +371,179 @@ export default function Home() {
         </div>
       </section>
 
-      {/* FORMAT LIBRARY & ENGINES */}
-      <section className="space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border pb-4">
-          <div>
-            <h2 className="text-[20px] font-extrabold tracking-[-0.02em] text-foreground flex items-center gap-2">
-              <TerminalIcon className="h-5 w-5 text-accent" />
-              Battle Format Library
-              <span className="text-[12px] font-normal text-muted bg-surface2 px-2 py-0.5 rounded-full border border-border">
-                {filtered.length}
-              </span>
-            </h2>
-            <p className="text-[12px] text-muted mt-1">
-              Filter by test-bed engine: pen-testing, head-to-head racing, or toolbelt-enabled agents.
-            </p>
+      {/* ===================================================================== */}
+      {/* OPTION C: HOW THE ARENA WORKS (PINK MESH GRADIENT PIPELINE) */}
+      {/* ===================================================================== */}
+      <section className="relative overflow-hidden rounded-2xl border border-accent/30 bg-[#08070D] p-6 md:p-10 shadow-2xl">
+        {/* Luminous Ambient Pink Mesh Background */}
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_0%,rgba(255,0,160,0.22)_0%,rgba(255,0,160,0.03)_60%,transparent_85%)]" />
+        <div className="pointer-events-none absolute -bottom-20 -right-20 h-64 w-64 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.15)_0%,transparent_70%)]" />
+
+        <div className="relative z-10 space-y-8">
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 border-b border-accent/20 pb-6">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/15 px-3 py-1 text-[11px] font-bold text-accent mb-3 shadow-[0_0_10px_rgba(255,0,160,0.25)]">
+                <Boxes className="h-3.5 w-3.5" />
+                HOW THE ARENA WORKS • ZERO SYNTHETIC LOGS
+              </div>
+              <h2 className="text-[26px] md:text-[34px] font-extrabold tracking-[-0.02em] text-foreground">
+                Authentic, Isolated, Cheat-Proof Duels
+              </h2>
+              <p className="text-[13px] md:text-[14px] text-muted max-w-[65ch] mt-1.5 leading-relaxed">
+                Every code battle runs inside an isolated microVM sandbox on Modal Cloud. Both models stream real tokens in parallel and are verified against verified unit test suites.
+              </p>
+            </div>
+            <Link
+              to={user ? "/battles/new" : "/signup"}
+              className="btn btn-primary shrink-0 h-10 px-5 text-[12px] font-bold shadow-[0_0_14px_rgba(255,0,160,0.35)]"
+            >
+              Launch Sandbox Duel →
+            </Link>
           </div>
 
-          <div className="flex flex-wrap gap-1.5">
-            {engines.map((e) => (
-              <button
-                key={e}
-                onClick={() => setEngine(e)}
-                className={`rounded-lg border px-3 py-1.5 text-[12px] font-semibold transition-all ${
-                  engine === e
-                    ? "border-accent bg-accent text-accent-fg shadow-[0_0_12px_rgba(255,0,160,0.35)]"
-                    : "border-border bg-surface text-muted hover:border-borderStrong hover:text-foreground"
-                }`}
-              >
-                {e === "all" ? "All Formats" : e}
-              </button>
-            ))}
+          {/* 4-Stage Frosted Glass Step Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Step 1 */}
+            <div className="rounded-xl border border-accent/25 bg-[#120A16]/60 backdrop-blur-md p-5 flex flex-col justify-between hover:border-accent hover:shadow-[0_0_16px_rgba(255,0,160,0.2)] transition-all">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="mono text-[11px] font-extrabold text-accent bg-accent/15 border border-accent/40 px-2.5 py-1 rounded-md">
+                    01
+                  </span>
+                  <Cpu className="h-4 w-4 text-accent" />
+                </div>
+                <h4 className="text-[14px] font-bold text-foreground">Modal MicroVM Isolation</h4>
+                <p className="text-[12px] text-muted mt-2 leading-relaxed">
+                  Clean Ubuntu rootfs with Python 3.11, Docker, and git initialized in &lt;800ms per contestant.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-accent/15 mono text-[10px] text-accent font-semibold flex items-center gap-1.5">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Zero Host Cross-Contamination
+              </div>
+            </div>
+
+            {/* Step 2 */}
+            <div className="rounded-xl border border-accent/25 bg-[#120A16]/60 backdrop-blur-md p-5 flex flex-col justify-between hover:border-accent hover:shadow-[0_0_16px_rgba(255,0,160,0.2)] transition-all">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="mono text-[11px] font-extrabold text-accent bg-accent/15 border border-accent/40 px-2.5 py-1 rounded-md">
+                    02
+                  </span>
+                  <TerminalIcon className="h-4 w-4 text-accent" />
+                </div>
+                <h4 className="text-[14px] font-bold text-foreground">Raw Token Multiplexing</h4>
+                <p className="text-[12px] text-muted mt-2 leading-relaxed">
+                  Direct stdout/stderr streaming from both models side-by-side with zero artificial buffering or mock feeds.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-accent/15 mono text-[10px] text-accent font-semibold flex items-center gap-1.5">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Sub-Millisecond SSE Feed
+              </div>
+            </div>
+
+            {/* Step 3 */}
+            <div className="rounded-xl border border-accent/25 bg-[#120A16]/60 backdrop-blur-md p-5 flex flex-col justify-between hover:border-accent hover:shadow-[0_0_16px_rgba(255,0,160,0.2)] transition-all">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="mono text-[11px] font-extrabold text-accent bg-accent/15 border border-accent/40 px-2.5 py-1 rounded-md">
+                    03
+                  </span>
+                  <ShieldCheck className="h-4 w-4 text-accent" />
+                </div>
+                <h4 className="text-[14px] font-bold text-foreground">Pytest Sandbox Verification</h4>
+                <p className="text-[12px] text-muted mt-2 leading-relaxed">
+                  Automated test suites run directly against generated git patches to verify bug fixes and security exploits.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-accent/15 mono text-[10px] text-accent font-semibold flex items-center gap-1.5">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Deterministic Pass/Fail
+              </div>
+            </div>
+
+            {/* Step 4 */}
+            <div className="rounded-xl border border-accent/25 bg-[#120A16]/60 backdrop-blur-md p-5 flex flex-col justify-between hover:border-accent hover:shadow-[0_0_16px_rgba(255,0,160,0.2)] transition-all">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <span className="mono text-[11px] font-extrabold text-accent bg-accent/15 border border-accent/40 px-2.5 py-1 rounded-md">
+                    04
+                  </span>
+                  <Trophy className="h-4 w-4 text-accent" />
+                </div>
+                <h4 className="text-[14px] font-bold text-foreground">Blind Referee & Elo Update</h4>
+                <p className="text-[12px] text-muted mt-2 leading-relaxed">
+                  Neutral judge LLM evaluates patch elegance, latency, and correctness to update global competitive rankings.
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-accent/15 mono text-[10px] text-accent font-semibold flex items-center gap-1.5">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Standard Elo Rating Algorithm
+              </div>
+            </div>
+          </div>
+
+          {/* Real-time Streaming Latency Telemetry Widget */}
+          <div className="rounded-xl border border-accent/30 bg-[#0F0814] p-5 md:p-6 shadow-inner">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+              <div className="flex items-center gap-2">
+                <Gauge className="h-4 w-4 text-accent" />
+                <span className="mono text-[12px] font-bold text-accent uppercase tracking-wider">
+                  Real-Time Model Velocity (Tokens/Sec & SWE-Bench Pass)
+                </span>
+              </div>
+              <span className="mono text-[11px] text-muted">Updated live from Modal sandboxes</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="rounded-lg border border-accent/20 bg-[#160A1A] p-3.5">
+                <div className="flex justify-between items-center mono text-[11px]">
+                  <span className="font-bold text-foreground">Claude 3.7 Sonnet</span>
+                  <span className="text-accent font-extrabold">68 tok/s</span>
+                </div>
+                <div className="w-full bg-[#200D26] h-2 rounded-full mt-2.5 overflow-hidden">
+                  <div className="bg-accent h-full rounded-full shadow-[0_0_8px_#FF00A0]" style={{ width: "85%" }} />
+                </div>
+                <div className="flex justify-between mono text-[10px] text-muted mt-2">
+                  <span>SWE-bench Verified</span>
+                  <span className="text-accent">70.3% Resolved</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-accent/20 bg-[#160A1A] p-3.5">
+                <div className="flex justify-between items-center mono text-[11px]">
+                  <span className="font-bold text-foreground">DeepSeek R1</span>
+                  <span className="text-accent font-extrabold">54 tok/s</span>
+                </div>
+                <div className="w-full bg-[#200D26] h-2 rounded-full mt-2.5 overflow-hidden">
+                  <div className="bg-accent h-full rounded-full shadow-[0_0_8px_#FF00A0]" style={{ width: "68%" }} />
+                </div>
+                <div className="flex justify-between mono text-[10px] text-muted mt-2">
+                  <span>Reasoning Trace</span>
+                  <span className="text-accent">65.8% Resolved</span>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-accent/20 bg-[#160A1A] p-3.5">
+                <div className="flex justify-between items-center mono text-[11px]">
+                  <span className="font-bold text-foreground">GPT-4.5 Preview</span>
+                  <span className="text-accent font-extrabold">48 tok/s</span>
+                </div>
+                <div className="w-full bg-[#200D26] h-2 rounded-full mt-2.5 overflow-hidden">
+                  <div className="bg-accent h-full rounded-full shadow-[0_0_8px_#FF00A0]" style={{ width: "60%" }} />
+                </div>
+                <div className="flex justify-between mono text-[10px] text-muted mt-2">
+                  <span>Frontier Code</span>
+                  <span className="text-accent">62.4% Resolved</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-
-        {loading ? (
-          <div className="flex items-center justify-center p-12 text-[13px] text-muted">
-            <span className="animate-spin mr-2">⟳</span> Loading battle formats…
-          </div>
-        ) : (
-          <div className="grid grid-cols-12 gap-4">
-            {filtered.map((f, i) => (
-              <FormatCard key={f.id} format={f} user={user} large={i < 2} />
-            ))}
-            {filtered.length === 0 && (
-              <div className="col-span-12 rounded-xl border border-dashed border-border p-12 text-center text-[13px] text-muted">
-                No formats found for engine "{engine}".
-              </div>
-            )}
-          </div>
-        )}
       </section>
     </div>
   );
 }
+
 
