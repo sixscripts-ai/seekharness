@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
 import {
   api,
   isHostProviderId,
@@ -36,7 +40,15 @@ function specText(spec: BattleSpec | null | undefined): string {
 export default function CustomBattle() {
   const { user, jwt, refreshJwt } = useAuth();
   const nav = useNavigate();
-  const [mode, setMode] = useState<Mode>("quick");
+  const [searchParams] = useSearchParams();
+
+  const initialMode: Mode =
+    searchParams.get("mode") === "verified"
+      ? "verified"
+      : "quick";
+
+  const [mode, setMode] =
+    useState<Mode>(initialMode);
   const [draft, setDraft] = useState<BattleDraftOut | null>(null);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
   const [message, setMessage] = useState("");
