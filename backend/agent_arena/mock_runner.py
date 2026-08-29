@@ -47,9 +47,7 @@ def _iter_phases(cfg: dict) -> list[tuple[str, list[str]]]:
     if normalized:
         return normalized
 
-    roles = [
-        str(r) for r in (cfg.get("roles") or []) if r and r != "judge"
-    ]
+    roles = [str(r) for r in (cfg.get("roles") or []) if r and r != "judge"]
     if roles:
         return [("race", roles)]
 
@@ -60,7 +58,13 @@ def _persist_rounds(battle_id: str, artifacts: list[dict]) -> None:
     from .persistence import service
 
     for art in artifacts:
-        service.round_create(battle_id, art["phase"], art["model_id"], art["artifact"])
+        service.round_create(
+            battle_id,
+            art["phase"],
+            art["model_id"],
+            art["artifact"],
+            meta=art.get("meta"),
+        )
 
 
 def _persist_scores(battle_id: str, scores: dict[str, float]) -> None:
@@ -100,7 +104,9 @@ def run_battle(battle_id: str) -> None:
     battle = service.battle_get("", battle_id)
     if battle is None:
         return
-    event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": "running"}})
+    event_bus.publish(
+        battle_id, {"type": "battle_status", "data": {"status": "running"}}
+    )
     try:
         service.battle_update(battle_id, {"status": "running"})
         fmt = service.format_get(battle["format_id"])
@@ -111,20 +117,39 @@ def run_battle(battle_id: str) -> None:
         phases = _iter_phases(cfg)
         artifacts: list[dict] = []
         for phase_name, participants in phases:
-            event_bus.publish(battle_id, {"type": "phase_start", "data": {"phase": phase_name}})
+            event_bus.publish(
+                battle_id, {"type": "phase_start", "data": {"phase": phase_name}}
+            )
             for participant in participants:
                 battle = service.battle_get("", battle_id)
                 if battle is None or battle["status"] == "cancelled":
-                    event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": "cancelled"}})
+                    event_bus.publish(
+                        battle_id,
+                        {"type": "battle_status", "data": {"status": "cancelled"}},
+                    )
                     return
                 artifact_text = sanitize_artifact(
                     f"[mock:{battle_id}] {phase_name}/{participant}: executed plan"
                 )
-                artifacts.append({"phase": phase_name, "model_id": participant, "artifact": artifact_text})
-                event_bus.publish(battle_id, {
-                    "type": "artifact",
-                    "data": {"phase": phase_name, "model_id": participant, "artifact": artifact_text},
-                })
+                artifacts.append(
+                    {
+                        "phase": phase_name,
+                        "model_id": participant,
+                        "artifact": artifact_text,
+                        "meta": {"runner": "mock", "is_mock": True},
+                    }
+                )
+                event_bus.publish(
+                    battle_id,
+                    {
+                        "type": "artifact",
+                        "data": {
+                            "phase": phase_name,
+                            "model_id": participant,
+                            "artifact": artifact_text,
+                        },
+                    },
+                )
                 time.sleep(0.1)
         scores = {m: _mock_score(battle_id, m) for m in battle["model_ids"]}
         event_bus.publish(battle_id, {"type": "scores", "data": {"scores": scores}})
@@ -135,15 +160,21 @@ def run_battle(battle_id: str) -> None:
         if battle.get("saved"):
             _persist_scores(battle_id, scores)
         if is_ranked_battle(battle, cfg):
-            service.leaderboard_apply_result(battle["format_id"], battle["model_ids"], scores)
+            service.leaderboard_apply_result(
+                battle["format_id"], battle["model_ids"], scores
+            )
         service.battle_update(
             battle_id,
             {"status": "completed", "completed_at": datetime.now(timezone.utc)},
         )
-        event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": "completed"}})
+        event_bus.publish(
+            battle_id, {"type": "battle_status", "data": {"status": "completed"}}
+        )
     except Exception:
         try:
             service.battle_update(battle_id, {"status": "failed"})
         except Exception:
             pass
-        event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": "failed"}})
+        event_bus.publish(
+            battle_id, {"type": "battle_status", "data": {"status": "failed"}}
+        )

@@ -82,16 +82,28 @@ def test_schema_creation(pg_engine):
     """All expected tables exist in the isolated schema; no targets/users tables."""
     tables = set(Base.metadata.tables.keys())
     assert tables == {
-        "providers", "formats", "battles", "battle_participants",
-        "battle_drafts", "battle_events", "rounds", "scores",
-        "leaderboard", "skills", "memories",
+        "providers",
+        "formats",
+        "battles",
+        "battle_participants",
+        "battle_drafts",
+        "battle_events",
+        "rounds",
+        "scores",
+        "leaderboard",
+        "skills",
+        "memories",
     }
     assert "targets" not in tables
     assert "users" not in tables
 
 
 def test_jsonb_round_trips(pg_session):
-    cfg = {"roles": ["a", "b"], "nested": {"deep": [1, 2, {"x": True}]}, "difficulty": "expert"}
+    cfg = {
+        "roles": ["a", "b"],
+        "nested": {"deep": [1, 2, {"x": True}]},
+        "difficulty": "expert",
+    }
     fmt = repositories.formats.format_create(
         pg_session, name="round-trip-format", engine="agent_tool_race", config=cfg
     )
@@ -111,22 +123,65 @@ def test_jsonb_round_trips(pg_session):
     assert reloaded.preview_urls["fighter"]["url"] == "https://example.test/p"
 
 
+def test_round_artifact_enrichment_columns(pg_session):
+    battle = _create_battle(pg_session, battle_config={"roles": ["builder", "breaker"]})
+    pg_session.commit()
+    pg_session.add(
+        Round(
+            battle_id=battle.id,
+            phase="build",
+            model_id="host:opencode-go",
+            artifact="applied patch to starter/app.py",
+            tool_trace={
+                "steps": [
+                    {"tool": "read", "path": "starter/app.py"},
+                    {"tool": "edit", "path": "starter/app.py"},
+                ]
+            },
+            verification_log="3 passed, 1 failed in 2.31s",
+            meta={"runner": "sandbox", "is_mock": False, "duration_ms": 4120},
+        )
+    )
+    pg_session.commit()
+    pg_session.expire_all()
+    row = pg_session.scalar(
+        select(Round).where(
+            Round.battle_id == battle.id, Round.model_id == "host:opencode-go"
+        )
+    )
+    assert row.tool_trace["steps"][1]["tool"] == "edit"
+    assert row.tool_trace["steps"][1]["path"] == "starter/app.py"
+    assert "3 passed, 1 failed" in row.verification_log
+    assert row.meta["is_mock"] is False
+    assert row.meta["runner"] == "sandbox"
+
+
 def test_provider_uniqueness_per_user_name(pg_session):
     repositories.providers.provider_create(
-        pg_session, user_id="u1", name="Anthropic", base_url="https://x",
-        encrypted_key="cipher-a", masked_key="sk-...abcd",
+        pg_session,
+        user_id="u1",
+        name="Anthropic",
+        base_url="https://x",
+        encrypted_key="cipher-a",
+        masked_key="sk-...abcd",
     )
     pg_session.commit()
     # same name, different user -> allowed
     repositories.providers.provider_create(
-        pg_session, user_id="u2", name="Anthropic", base_url="https://x",
+        pg_session,
+        user_id="u2",
+        name="Anthropic",
+        base_url="https://x",
         encrypted_key="cipher-b",
     )
     pg_session.commit()
     # same user, same name -> unique violation
     with pytest.raises(Exception) as excinfo:
         repositories.providers.provider_create(
-            pg_session, user_id="u1", name="Anthropic", base_url="https://y",
+            pg_session,
+            user_id="u1",
+            name="Anthropic",
+            base_url="https://y",
             encrypted_key="cipher-c",
         )
         pg_session.commit()
@@ -141,7 +196,11 @@ def test_participant_ordering_and_model_ids(pg_session):
         roles=["builder", "breaker", None],
     )
     pg_session.commit()
-    assert repositories.battles.battle_model_ids(pg_session, battle.id) == ["host:a", "host:b", "host:c"]
+    assert repositories.battles.battle_model_ids(pg_session, battle.id) == [
+        "host:a",
+        "host:b",
+        "host:c",
+    ]
 
 
 def test_host_model_ids_need_no_provider_rows(pg_session):
@@ -156,27 +215,56 @@ def test_host_model_ids_need_no_provider_rows(pg_session):
 def test_cascade_delete_battle_children(pg_session):
     battle = _create_battle(pg_session)
     repositories.events.event_append(
-        pg_session, battle.id, "phase_start", {"phase": "build"}, event_id="evt-1", sequence=1
+        pg_session,
+        battle.id,
+        "phase_start",
+        {"phase": "build"},
+        event_id="evt-1",
+        sequence=1,
     )
-    pg_session.add(Round(battle_id=battle.id, phase="build", model_id="host:a", artifact="log"))
-    repositories.scores.score_insert(pg_session, battle_id=battle.id, model_id="host:a", score=1.0)
+    pg_session.add(
+        Round(battle_id=battle.id, phase="build", model_id="host:a", artifact="log")
+    )
+    repositories.scores.score_insert(
+        pg_session, battle_id=battle.id, model_id="host:a", score=1.0
+    )
     pg_session.commit()
 
     pg_session.delete(pg_session.get(Battle, battle.id))
     pg_session.commit()
 
-    assert pg_session.scalars(select(BattleParticipant).where(BattleParticipant.battle_id == battle.id)).all() == []
-    assert pg_session.scalars(select(BattleEvent).where(BattleEvent.battle_id == battle.id)).all() == []
-    assert pg_session.scalars(select(Round).where(Round.battle_id == battle.id)).all() == []
-    assert pg_session.scalars(select(Score).where(Score.battle_id == battle.id)).all() == []
+    assert (
+        pg_session.scalars(
+            select(BattleParticipant).where(BattleParticipant.battle_id == battle.id)
+        ).all()
+        == []
+    )
+    assert (
+        pg_session.scalars(
+            select(BattleEvent).where(BattleEvent.battle_id == battle.id)
+        ).all()
+        == []
+    )
+    assert (
+        pg_session.scalars(select(Round).where(Round.battle_id == battle.id)).all()
+        == []
+    )
+    assert (
+        pg_session.scalars(select(Score).where(Score.battle_id == battle.id)).all()
+        == []
+    )
 
 
 def test_score_uniqueness_idempotent(pg_session):
     battle = _create_battle(pg_session)
     pg_session.commit()
-    repositories.scores.score_insert(pg_session, battle_id=battle.id, model_id="host:a", score=10.0)
+    repositories.scores.score_insert(
+        pg_session, battle_id=battle.id, model_id="host:a", score=10.0
+    )
     pg_session.commit()
-    repositories.scores.score_insert(pg_session, battle_id=battle.id, model_id="host:a", score=99.0)
+    repositories.scores.score_insert(
+        pg_session, battle_id=battle.id, model_id="host:a", score=99.0
+    )
     pg_session.commit()
     rows = repositories.scores.score_list(pg_session, battle.id)
     assert len(rows) == 1

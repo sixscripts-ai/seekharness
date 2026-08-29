@@ -173,7 +173,13 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
             from .persistence import service
 
             service.round_create(
-                battle_id, body.get("phase", ""), body.get("model_id", ""), art
+                battle_id,
+                body.get("phase", ""),
+                body.get("model_id", ""),
+                art,
+                tool_trace=body.get("tool_trace"),
+                verification_log=body.get("verification_log"),
+                meta=body.get("meta"),
             )
             event_bus.publish(
                 battle_id,
@@ -301,9 +307,10 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
             "ARENA_TARGETS_DIR": "/opt/arena-targets",
         }
     )
-    preview_on = bool((cfg.get("environment") or {}).get("preview")) and len(
-        battle.get("model_ids") or []
-    ) == 2
+    preview_on = (
+        bool((cfg.get("environment") or {}).get("preview"))
+        and len(battle.get("model_ids") or []) == 2
+    )
     create_kwargs = {
         "image": image,
         "secrets": [secret],

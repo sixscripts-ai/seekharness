@@ -175,7 +175,9 @@ def format_get(format_id: str) -> dict | None:
 
 def _is_not_found(exc: Exception) -> bool:
     name = exc.__class__.__name__
-    return name == "AppwriteException" and str(getattr(exc, "code", "") or "") in ("404",)
+    return name == "AppwriteException" and str(getattr(exc, "code", "") or "") in (
+        "404",
+    )
 
 
 def _format_read_through(record: dict) -> None:
@@ -221,7 +223,8 @@ def providers_list(user_id: str) -> list[dict]:
     from appwrite.query import Query
 
     res = databases.list_documents(
-        database_id, "providers",
+        database_id,
+        "providers",
         queries=[Query.equal("user_id", user_id), Query.limit(100)],
     )
     return [
@@ -281,11 +284,20 @@ def provider_upsert(
             _dual_write(
                 "provider dual write",
                 lambda: _aw_provider_upsert(
-                    record["id"], user_id, name, base_url, encrypted_key, masked_key, auth_style, model_name
+                    record["id"],
+                    user_id,
+                    name,
+                    base_url,
+                    encrypted_key,
+                    masked_key,
+                    auth_style,
+                    model_name,
                 ),
             )
         return record
-    return _aw_provider_upsert(None, user_id, name, base_url, encrypted_key, masked_key, auth_style, model_name)
+    return _aw_provider_upsert(
+        None, user_id, name, base_url, encrypted_key, masked_key, auth_style, model_name
+    )
 
 
 def _aw_provider_upsert(
@@ -313,8 +325,13 @@ def _aw_provider_upsert(
     existing = provider_id
     if existing is None:
         res = databases.list_documents(
-            database_id, "providers",
-            queries=[Query.equal("user_id", user_id), Query.equal("name", name), Query.limit(1)],
+            database_id,
+            "providers",
+            queries=[
+                Query.equal("user_id", user_id),
+                Query.equal("name", name),
+                Query.limit(1),
+            ],
         )
         existing = res.documents[0].id if res.documents else None
     if existing:
@@ -407,7 +424,9 @@ def _aw_provider_delete(provider_id: str) -> None:
     databases.delete_document(database_id, "providers", provider_id)
 
 
-def _aw_provider_delete_with_owner(provider_id: str, user_id: str) -> tuple[bool, str | None]:
+def _aw_provider_delete_with_owner(
+    provider_id: str, user_id: str
+) -> tuple[bool, str | None]:
     from appwrite.exception import AppwriteException
 
     databases, database_id = _aw()
@@ -419,6 +438,7 @@ def _aw_provider_delete_with_owner(provider_id: str, user_id: str) -> tuple[bool
         return False, doc.data.get("name")
     databases.delete_document(database_id, "providers", provider_id)
     return True, doc.data.get("name")
+
 
 # ---------------------------------------------------------------------------
 # Battles
@@ -495,7 +515,10 @@ def battle_create(
         )
     target_bundle = None
     if target_id:
-        from agent_arena.target_library import compile_target_to_battle_config, get_target_library
+        from agent_arena.target_library import (
+            compile_target_to_battle_config,
+            get_target_library,
+        )
 
         target_bundle = get_target_library().get_target(target_id)
         if target_bundle is None:
@@ -670,9 +693,8 @@ def _battle_read_through(record: dict) -> None:
                 ranked=record.get("ranked"),
                 target_id=record.get("target_id"),
                 target_version=record.get("target_version"),
-                target_manifest_hash=record.get("target_manifest_hash") or (
-                    record.get("spec_hash") if record.get("target_id") else None
-                ),
+                target_manifest_hash=record.get("target_manifest_hash")
+                or (record.get("spec_hash") if record.get("target_id") else None),
             )
     except Exception as exc:
         _sanitized_log("battle read-through", exc)
@@ -683,9 +705,7 @@ def battle_get(user_id: str, battle_id: str) -> dict | None:
         with session_scope() as session:
             battle = repositories.battles.battle_get(session, battle_id)
             if battle is not None:
-                return _pg_battle_dict(
-                    battle, _battle_model_ids_pg(session, battle_id)
-                )
+                return _pg_battle_dict(battle, _battle_model_ids_pg(session, battle_id))
         if not appwrite_read_fallback():
             return None
     try:
@@ -708,7 +728,9 @@ def battle_list(user_id: str, *, saved: bool | None = None) -> list[dict]:
             rows = repositories.battles.battle_list(
                 session, user_id=user_id, saved=saved
             )
-            return [_pg_battle_dict(b, _battle_model_ids_pg(session, b.id)) for b in rows]
+            return [
+                _pg_battle_dict(b, _battle_model_ids_pg(session, b.id)) for b in rows
+            ]
     from appwrite.query import Query
 
     databases, database_id = _aw()
@@ -730,7 +752,8 @@ def battle_count_active(user_id: str) -> int:
 
     databases, database_id = _aw()
     res = databases.list_documents(
-        database_id, "battles",
+        database_id,
+        "battles",
         queries=[
             Query.equal("user_id", user_id),
             Query.equal("status", ["queued", "running"]),
@@ -818,7 +841,9 @@ def events_append(
         return
     databases, database_id = _aw()
     databases.create_document(
-        database_id, "battle_events", "unique()",
+        database_id,
+        "battle_events",
+        "unique()",
         {
             "battle_id": battle_id,
             "event_id": event_id or "",
@@ -835,7 +860,9 @@ def events_load(battle_id: str) -> list[dict]:
             rows = repositories.events.event_list(session, battle_id)
             out = []
             for row in rows:
-                created = row.created_at.timestamp() if row.created_at is not None else 0.0
+                created = (
+                    row.created_at.timestamp() if row.created_at is not None else 0.0
+                )
                 out.append(
                     {
                         "type": row.event_type,
@@ -865,35 +892,72 @@ def events_load(battle_id: str) -> list[dict]:
     return events
 
 
-def round_create(battle_id: str, phase: str, model_id: str, artifact: str) -> None:
+def round_create(
+    battle_id: str,
+    phase: str,
+    model_id: str,
+    artifact: str,
+    *,
+    tool_trace: dict | None = None,
+    verification_log: str | None = None,
+    meta: dict | None = None,
+) -> None:
     if using_postgres():
         with session_scope() as session:
             session.add(
-                Round(battle_id=battle_id, phase=phase, model_id=model_id, artifact=artifact)
+                Round(
+                    battle_id=battle_id,
+                    phase=phase,
+                    model_id=model_id,
+                    artifact=artifact,
+                    tool_trace=tool_trace,
+                    verification_log=verification_log,
+                    meta=meta,
+                )
             )
         return
     databases, database_id = _aw()
-    databases.create_document(
-        database_id, "rounds", "unique()",
-        {"battle_id": battle_id, "phase": phase, "model_id": model_id, "artifact": artifact},
-    )
+    payload: dict = {
+        "battle_id": battle_id,
+        "phase": phase,
+        "model_id": model_id,
+        "artifact": artifact,
+    }
+    if tool_trace is not None:
+        payload["tool_trace"] = json.dumps(tool_trace, default=str)
+    if verification_log is not None:
+        payload["verification_log"] = verification_log
+    if meta is not None:
+        payload["meta"] = json.dumps(meta, default=str)
+    databases.create_document(database_id, "rounds", "unique()", payload)
 
 
 def rounds_list(battle_id: str) -> list[dict]:
     if using_postgres():
         with session_scope() as session:
             rows = session.scalars(
-                select(Round).where(Round.battle_id == battle_id).order_by(Round.created_at)
+                select(Round)
+                .where(Round.battle_id == battle_id)
+                .order_by(Round.created_at)
             ).all()
             return [
-                {"battle_id": r.battle_id, "phase": r.phase, "model_id": r.model_id, "artifact": r.artifact}
+                {
+                    "battle_id": r.battle_id,
+                    "phase": r.phase,
+                    "model_id": r.model_id,
+                    "artifact": r.artifact,
+                    "tool_trace": r.tool_trace,
+                    "verification_log": r.verification_log,
+                    "meta": r.meta,
+                }
                 for r in rows
             ]
     databases, database_id = _aw()
     from appwrite.query import Query
 
     res = databases.list_documents(
-        database_id, "rounds",
+        database_id,
+        "rounds",
         queries=[Query.equal("battle_id", battle_id), Query.limit(500)],
     )
     return [dict(d.data) for d in res.documents]
@@ -919,7 +983,9 @@ def score_upsert(
         return
     databases, database_id = _aw()
     databases.create_document(
-        database_id, "scores", "unique()",
+        database_id,
+        "scores",
+        "unique()",
         {
             "battle_id": battle_id,
             "model_id": model_id,
@@ -948,7 +1014,8 @@ def scores_list(battle_id: str) -> list[dict]:
     from appwrite.query import Query
 
     res = databases.list_documents(
-        database_id, "scores",
+        database_id,
+        "scores",
         queries=[Query.equal("battle_id", battle_id), Query.limit(100)],
     )
     return [dict(d.data) for d in res.documents]
@@ -962,10 +1029,12 @@ def scores_exist(battle_id: str) -> bool:
 
     databases, database_id = _aw()
     res = databases.list_documents(
-        database_id, "scores",
+        database_id,
+        "scores",
         queries=[Query.equal("battle_id", battle_id), Query.limit(1)],
     )
     return bool(res.documents)
+
 
 # ---------------------------------------------------------------------------
 # Stats (SQL aggregation in Postgres)
@@ -975,27 +1044,37 @@ def scores_exist(battle_id: str) -> bool:
 def stats_snapshot() -> dict:
     if using_postgres():
         with session_scope() as session:
-            counts = session.execute(text(
-                "SELECT count(*) FILTER (WHERE status IN ('queued', 'running')) AS running, "
-                "count(*) AS total FROM battles"
-            )).one()
-            median_row = session.execute(text(
-                "SELECT percentile_cont(0.5) WITHIN GROUP "
-                "(ORDER BY EXTRACT(EPOCH FROM (completed_at - created_at))) AS med "
-                "FROM battles WHERE status = 'completed' "
-                "AND completed_at IS NOT NULL AND created_at IS NOT NULL"
-            )).one()
-            top_rows = session.execute(text(
-                "SELECT model_id, elo, games_played FROM leaderboard "
-                "WHERE scope = 'overall' ORDER BY elo DESC LIMIT 5"
-            )).all()
+            counts = session.execute(
+                text(
+                    "SELECT count(*) FILTER (WHERE status IN ('queued', 'running')) AS running, "
+                    "count(*) AS total FROM battles"
+                )
+            ).one()
+            median_row = session.execute(
+                text(
+                    "SELECT percentile_cont(0.5) WITHIN GROUP "
+                    "(ORDER BY EXTRACT(EPOCH FROM (completed_at - created_at))) AS med "
+                    "FROM battles WHERE status = 'completed' "
+                    "AND completed_at IS NOT NULL AND created_at IS NOT NULL"
+                )
+            ).one()
+            top_rows = session.execute(
+                text(
+                    "SELECT model_id, elo, games_played FROM leaderboard "
+                    "WHERE scope = 'overall' ORDER BY elo DESC LIMIT 5"
+                )
+            ).all()
         median_s = float(median_row.med) if median_row.med is not None else None
         return {
             "battles_running": int(counts.running),
             "battles_total": int(counts.total),
             "median_duration_s": round(median_s, 1) if median_s is not None else None,
             "top_models": [
-                {"model_id": r.model_id, "elo": round(float(r.elo), 1), "games_played": int(r.games_played)}
+                {
+                    "model_id": r.model_id,
+                    "elo": round(float(r.elo), 1),
+                    "games_played": int(r.games_played),
+                }
                 for r in top_rows
             ],
         }
@@ -1077,7 +1156,8 @@ def memory_list(user_id: str, *, limit: int = 100) -> list[dict]:
     from appwrite.query import Query
 
     res = databases.list_documents(
-        database_id, "memories",
+        database_id,
+        "memories",
         queries=[Query.equal("user_id", user_id), Query.limit(limit)],
     )
     out = []
@@ -1128,12 +1208,20 @@ def skill_upsert(
 
     databases, database_id = _aw()
     payload = {
-        "elo": elo, "wins": wins, "losses": losses, "draws": draws,
-        "uses": uses, "success_rate": success_rate, "tier": tier,
-        "tags": tags, "last_used": last_used,
+        "elo": elo,
+        "wins": wins,
+        "losses": losses,
+        "draws": draws,
+        "uses": uses,
+        "success_rate": success_rate,
+        "tier": tier,
+        "tags": tags,
+        "last_used": last_used,
     }
     aw_skill_upsert(
-        databases, database_id, skill,
+        databases,
+        database_id,
+        skill,
         {k: v for k, v in payload.items() if v is not None},
     )
 
@@ -1145,10 +1233,16 @@ def skill_get(skill: str) -> dict | None:
             if row is None:
                 return None
             return {
-                "skill": row.skill, "elo": row.elo, "wins": row.wins,
-                "losses": row.losses, "draws": row.draws, "uses": row.uses,
-                "success_rate": row.success_rate, "tier": row.tier,
-                "tags": row.tags or [], "last_used": row.last_used,
+                "skill": row.skill,
+                "elo": row.elo,
+                "wins": row.wins,
+                "losses": row.losses,
+                "draws": row.draws,
+                "uses": row.uses,
+                "success_rate": row.success_rate,
+                "tier": row.tier,
+                "tags": row.tags or [],
+                "last_used": row.last_used,
             }
     from agent_arena.skills_registry import _find as aw_skill_find
 
@@ -1183,7 +1277,9 @@ def battle_create_raw(user_id: str, payload: dict) -> dict:
                 session,
                 user_id=user_id,
                 format_id=payload["format_id"],
-                arena_size=int(payload.get("arena_size") or len(payload.get("model_ids") or [])),
+                arena_size=int(
+                    payload.get("arena_size") or len(payload.get("model_ids") or [])
+                ),
                 timeout_seconds=int(payload.get("timeout_seconds") or 600),
                 round_visibility=payload.get("round_visibility", "isolated"),
                 model_ids=list(payload.get("model_ids") or []),
@@ -1203,7 +1299,9 @@ def battle_create_raw(user_id: str, payload: dict) -> dict:
     return _aw_battle_create(payload)
 
 
-def leaderboard_apply_result(format_id: str, model_ids: list[str], scores: dict) -> None:
+def leaderboard_apply_result(
+    format_id: str, model_ids: list[str], scores: dict
+) -> None:
     """Apply one finished battle to Elo rankings (format scope + overall)."""
     scopes = [format_id]
     if format_id != "overall":
@@ -1218,8 +1316,12 @@ def leaderboard_apply_result(format_id: str, model_ids: list[str], scores: dict)
                         a, b = model_ids[i], model_ids[j]
                         sa = float(scores.get(a, 0))
                         sb = float(scores.get(b, 0))
-                        row_a = repositories.leaderboard.leaderboard_get(session, a, scope)
-                        row_b = repositories.leaderboard.leaderboard_get(session, b, scope)
+                        row_a = repositories.leaderboard.leaderboard_get(
+                            session, a, scope
+                        )
+                        row_b = repositories.leaderboard.leaderboard_get(
+                            session, b, scope
+                        )
                         ra = row_a.elo if row_a else elo_mod.INITIAL_RATING
                         rb = row_b.elo if row_b else elo_mod.INITIAL_RATING
                         outcome_a = 1.0 if sa > sb else (0.0 if sa < sb else 0.5)
@@ -1244,7 +1346,12 @@ def leaderboard_rankings(format_id: str = "overall") -> list[dict]:
         with session_scope() as session:
             rows = repositories.leaderboard.leaderboard_list(session, format_id)
             return [
-                {"model_id": r.model_id, "elo": r.elo, "games_played": r.games_played, "rank": i + 1}
+                {
+                    "model_id": r.model_id,
+                    "elo": r.elo,
+                    "games_played": r.games_played,
+                    "rank": i + 1,
+                }
                 for i, r in enumerate(rows)
             ]
     databases, database_id = _aw()

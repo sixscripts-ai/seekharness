@@ -73,9 +73,7 @@ class Provider(Base):
 
 class Format(Base):
     __tablename__ = "formats"
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_formats_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_formats_name"),)
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -120,8 +118,12 @@ class Battle(Base):
     judge_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     preview_urls: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     difficulty: Mapped[str | None] = mapped_column(String(32), nullable=True)
     draft_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     battle_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
@@ -149,9 +151,7 @@ class BattleParticipant(Base):
     """Ordered model slots for a battle (replaces serialized model_ids)."""
 
     __tablename__ = "battle_participants"
-    __table_args__ = (
-        Index("ix_battle_participants_model_id", "model_id"),
-    )
+    __table_args__ = (Index("ix_battle_participants_model_id", "model_id"),)
 
     battle_id: Mapped[str] = mapped_column(
         String(64),
@@ -237,6 +237,11 @@ class Round(Base):
     phase: Mapped[str] = mapped_column(String(64), nullable=False)
     model_id: Mapped[str] = mapped_column(String(255), nullable=False)
     artifact: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tool_trace: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    verification_log: Mapped[str | None] = mapped_column(Text, nullable=True)
+    meta: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True
+    )  # runner, duration_ms, tokens, cost_usd, is_mock
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -301,7 +306,9 @@ class SkillRecord(Base):
     success_rate: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
     tags: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
-    last_used: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -328,7 +335,9 @@ class Memory(Base):
     battle_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     model_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     format: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    chosen_skills: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
+    chosen_skills: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list
+    )
     theory: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
