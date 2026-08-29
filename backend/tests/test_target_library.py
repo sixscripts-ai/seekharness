@@ -191,3 +191,73 @@ def test_trusted_verifier_on_reference_solution():
     assert evidence.hidden_passed is True
     assert evidence.visible_exit_code == 0
     assert evidence.hidden_exit_code == 0
+
+
+def test_target_battle_creation_solo_and_builder_breaker_contracts(client):
+    from agent_arena.auth import get_current_user
+    from tests.conftest import make_user_id, playable_format_id
+
+    user_id = make_user_id()
+    app.dependency_overrides[get_current_user] = lambda: user_id
+    fmt_id = playable_format_id()
+    try:
+        # 1. Solo-compatible target with 1 model (Solo mode) -> 201 Created
+        resp_solo = client.post("/battles", json={
+            "format_id": fmt_id,
+            "target_id": "broken-package-recovery",
+            "model_ids": ["host:openrouter-free"],
+            "arena_size": 1,
+            "timeout_seconds": 600,
+            "round_visibility": "isolated",
+            "save": False,
+        })
+        assert resp_solo.status_code == 201
+        battle_solo = client.get(f"/battles/{resp_solo.json()['id']}").json()
+        assert battle_solo["target_id"] == "broken-package-recovery"
+        assert len(battle_solo["model_ids"]) == 1
+
+        # 2. Solo-compatible target with 2 models (Race mode) -> 201 Created
+        resp_race = client.post("/battles", json={
+            "format_id": fmt_id,
+            "target_id": "broken-package-recovery",
+            "model_ids": ["host:openrouter-free", "host:deepseek-chat"],
+            "arena_size": 2,
+            "timeout_seconds": 600,
+            "round_visibility": "isolated",
+            "save": False,
+        })
+        assert resp_race.status_code == 201
+        battle_race = client.get(f"/battles/{resp_race.json()['id']}").json()
+        assert battle_race["target_id"] == "broken-package-recovery"
+        assert len(battle_race["model_ids"]) == 2
+
+        # 3. Builder/Breaker target with 1 model -> 400 Bad Request (strictly requires 2)
+        resp_bb_1 = client.post("/battles", json={
+            "format_id": fmt_id,
+            "target_id": "authentication-gate",
+            "model_ids": ["host:openrouter-free"],
+            "arena_size": 1,
+            "timeout_seconds": 600,
+            "round_visibility": "isolated",
+            "save": False,
+        })
+        assert resp_bb_1.status_code == 400
+        assert "must match non-judge roles (2 required, got 1)" in resp_bb_1.json()["detail"]
+
+        # 4. Builder/Breaker target with 2 models -> 201 Created
+        resp_bb_2 = client.post("/battles", json={
+            "format_id": fmt_id,
+            "target_id": "authentication-gate",
+            "model_ids": ["host:openrouter-free", "host:deepseek-chat"],
+            "arena_size": 2,
+            "timeout_seconds": 600,
+            "round_visibility": "isolated",
+            "save": False,
+        })
+        assert resp_bb_2.status_code == 201
+        battle_bb = client.get(f"/battles/{resp_bb_2.json()['id']}").json()
+        assert battle_bb["target_id"] == "authentication-gate"
+        assert len(battle_bb["model_ids"]) == 2
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+

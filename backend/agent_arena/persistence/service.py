@@ -593,9 +593,11 @@ def battle_create(
 
 def _aw_battle_create(payload: dict) -> dict:
     import json as _json
+    from agent_arena.schema import COLLECTIONS
 
     databases, database_id = _aw()
-    aw_payload = dict(payload)
+    allowed_keys = {attr[0] for attr in COLLECTIONS.get("battles", [])}
+    aw_payload = {k: v for k, v in payload.items() if k in allowed_keys}
     if isinstance(aw_payload.get("battle_config"), dict):
         aw_payload["battle_config"] = _json.dumps(aw_payload["battle_config"])
     # The new tablesdb engine accepts real arrays for string attributes that
@@ -619,6 +621,10 @@ def _aw_battle_dict(doc) -> dict:
                 data[key] = json.loads(value)
             except (json.JSONDecodeError, TypeError):
                 pass
+    if not data.get("target_id") and isinstance(data.get("battle_config"), dict):
+        data["target_id"] = data["battle_config"].get("target_id")
+        data["target_version"] = data["battle_config"].get("target_version")
+        data["target_manifest_hash"] = data["battle_config"].get("manifest_hash")
     return data
 
 
