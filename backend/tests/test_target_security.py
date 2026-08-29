@@ -414,3 +414,94 @@ def test_blocked_submission_path_partitions():
     assert _blocked_submission_path("src/app.py") is False
     assert _blocked_submission_path("tests/visible/test_x.py") is False
     assert _blocked_submission_path("tests/breaker_harness.py") is False
+
+
+def test_role_objectives_cannot_leak_private_verifier_content(tmp_path: Path):
+    """Ensure private evaluator tests, secret flags, and reference solutions cannot leak into role_objectives or TargetDetailOut."""
+    from agent_arena.target_router import _to_detail
+
+    secret_flag = "SECRET_FLAG_CANNOT_LEAK_12345"
+    private_evaluator_assertion = "assert secret_token == 0xDEADBEEF"
+
+    target_dir = tmp_path / "secret-leak-test"
+    target_dir.mkdir()
+    (target_dir / "starter").mkdir()
+    (target_dir / "starter" / "main.py").write_text("print('hello')\n")
+    (target_dir / "tests" / "visible").mkdir(parents=True)
+    (target_dir / "tests" / "visible" / "test_pub.py").write_text("def test_pub(): pass\n")
+    (target_dir / "tests" / "hidden").mkdir(parents=True)
+    (target_dir / "tests" / "hidden" / "test_sec.py").write_text(f"{secret_flag}\n{private_evaluator_assertion}\n")
+    (target_dir / "reference").mkdir()
+    (target_dir / "reference" / "solution.py").write_text(f"PRIVATE_SOLUTION_CODE = '{secret_flag}'\n")
+
+    (target_dir / "target.yaml").write_text(
+        f"""
+schema_version: 1
+id: secret-leak-test
+name: Secret Leak Test
+category: security
+difficulty: expert
+format: builder_breaker
+runtime: python311
+description: Test ensuring evaluator secrets never enter role objectives
+tags: ["security", "audit"]
+objectives:
+  builder:
+    - Implement safe public interface.
+  breaker:
+    - Test for authorization bypasses.
+workspace:
+  starter_dir: "starter"
+  visible_tests_dir: "tests/visible"
+  hidden_tests_dir: "tests/hidden"
+  reference_dir: "reference"
+  protected_paths: ["tests/hidden/**"]
+  handoff_allowlist: ["main.py"]
+network: false
+verification:
+  visible_command: "pytest tests/visible"
+  hidden_command: "pytest tests/hidden"
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 10
+  exec_timeout_seconds: 60
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false
+""",
+        encoding="utf-8",
+    )
+
+    bundle = load_target_bundle(target_dir)
+
+    # 1. Check bundle's role_objectives
+    assert "builder" in bundle.role_objectives
+    assert "breaker" in bundle.role_objectives
+    assert bundle.role_objectives["builder"] == ["Implement safe public interface."]
+    assert bundle.role_objectives["breaker"] == ["Test for authorization bypasses."]
+
+    # 2. Check public TargetDetailOut
+    pub_detail = _to_detail(bundle, authenticated=False)
+    pub_dump = pub_detail.model_dump_json()
+    assert secret_flag not in pub_dump
+    assert private_evaluator_assertion not in pub_dump
+    assert pub_detail.role_objectives == {
+        "builder": ["Implement safe public interface."],
+        "breaker": ["Test for authorization bypasses."],
+    }
+    assert pub_detail.starter_files is None
+    assert pub_detail.visible_tests is None
+
+    # 3. Check authenticated TargetDetailOut
+    auth_detail = _to_detail(bundle, authenticated=True)
+    auth_dump = auth_detail.model_dump_json()
+    assert secret_flag not in auth_dump
+    assert private_evaluator_assertion not in auth_dump
+    assert auth_detail.role_objectives == {
+        "builder": ["Implement safe public interface."],
+        "breaker": ["Test for authorization bypasses."],
+    }
+    assert auth_detail.starter_files == ["main.py"]
+    assert auth_detail.visible_tests == ["test_pub.py"]
+

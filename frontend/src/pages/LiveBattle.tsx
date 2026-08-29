@@ -1,6 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Download, Save, Square, XCircle } from "lucide-react";
+import {
+  Boxes,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Copy,
+  Download,
+  ExternalLink,
+  RotateCcw,
+  Save,
+  ShieldCheck,
+  Square,
+  XCircle,
+} from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -9,6 +22,7 @@ import {
   type FormatOut,
   type ProviderOut,
   type StreamEvent,
+  type TargetDetailOut,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import LiveExecutionPane, {
@@ -81,14 +95,6 @@ function phaseStartRole(item: BattleStreamItem): string | null {
   const parsed = parseJson(item.artifact);
   if (parsed && typeof parsed.role === "string") return parsed.role;
   const match = item.artifact.match(/phase_start:([^\s]+)/i);
-  return match?.[1] || null;
-}
-
-function phaseStartWorkspace(item: BattleStreamItem): string | null {
-  if (item.kind !== "phase_start") return null;
-  const parsed = parseJson(item.artifact);
-  if (parsed && typeof parsed.workspace === "string") return parsed.workspace;
-  const match = item.artifact.match(/workdir\s+([^\s]+)/i);
   return match?.[1] || null;
 }
 
@@ -195,6 +201,8 @@ export default function LiveBattle() {
   const [busy, setBusy] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [targetDetail, setTargetDetail] = useState<TargetDetailOut | null>(null);
+  const [showMissionDrawer, setShowMissionDrawer] = useState(false);
 
   const sessionStartedRef = useRef(Date.now());
   const statusRef = useRef(status);
@@ -233,6 +241,12 @@ export default function LiveBattle() {
         setFormat(loadedFormats.find((row) => row.id === loadedBattle.format_id) || null);
         setProviders(loadedProviders);
         if (loadedBattle.preview_urls) setPreviewUrls(loadedBattle.preview_urls);
+
+        if (loadedBattle.target_id) {
+          api.target(loadedBattle.target_id, token).then((t) => {
+            if (active) setTargetDetail(t);
+          }).catch(() => {});
+        }
 
         try {
           const persisted = await api.artifacts(token, id);
@@ -520,7 +534,10 @@ export default function LiveBattle() {
     );
   }
 
-  const title = battle?.custom_title || titleCase(battle?.format_id || "Live battle");
+  const isTargetBattle = Boolean(battle?.target_id);
+  const title = isTargetBattle
+    ? (targetDetail?.name ? `Target: ${targetDetail.name}` : `Target: ${battle?.target_id}`)
+    : (battle?.custom_title || titleCase(battle?.format_id || "Live battle"));
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#040207] text-white">
@@ -531,6 +548,18 @@ export default function LiveBattle() {
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-3">
                 <h1 className="truncate text-[22px] font-bold tracking-[-0.03em] md:text-[26px] text-white font-sans">{title}</h1>
+
+                {isTargetBattle && (
+                  <Link
+                    to={`/targets/${encodeURIComponent(battle?.target_id || "")}`}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/15 px-3 py-1 font-mono text-[9.5px] font-bold uppercase tracking-wider text-accent shadow-[0_0_10px_rgba(255,0,160,0.25)] hover:bg-accent hover:text-white transition-all"
+                  >
+                    <Boxes className="h-3 w-3" />
+                    <span>Target Briefing</span>
+                    <ExternalLink className="h-2.5 w-2.5" />
+                  </Link>
+                )}
+
                 <span
                   className={cn(
                     "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[9.5px] font-bold uppercase tracking-[0.14em]",
@@ -550,7 +579,7 @@ export default function LiveBattle() {
                   {status === "running"
                     ? "● Live Execution"
                     : status === "completed"
-                    ? "REPLAY · VERIFIED RESULT"
+                    ? (isTargetBattle ? "VERIFIED TARGET RESULT" : "REPLAY · VERIFIED RESULT")
                     : status}
                 </span>
               </div>
@@ -562,12 +591,25 @@ export default function LiveBattle() {
                 </button>
                 <span>mode://{battle?.round_visibility || "isolated"}</span>
                 <span>{elapsed} elapsed</span>
-                {battle?.difficulty ? <span className="text-pink-400/80">{battle.difficulty}</span> : null}
+                {battle?.target_version ? (
+                  <span className="text-accent">v{battle.target_version}</span>
+                ) : battle?.difficulty ? (
+                  <span className="text-pink-400/80">{battle.difficulty}</span>
+                ) : null}
               </div>
             </div>
 
             {/* Action Bar */}
             <div className="flex flex-wrap items-center gap-2.5">
+              {isTargetBattle && (
+                <Link
+                  to={`/battles/new?target=${encodeURIComponent(battle?.target_id || "")}`}
+                  className="btn h-9 border border-accent/50 bg-accent/15 px-4 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-accent hover:bg-accent hover:text-white transition-all shadow-sm flex items-center gap-1.5"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  <span>Rerun Target</span>
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={downloadBattleReplay}
@@ -619,6 +661,36 @@ export default function LiveBattle() {
               );
             })}
           </div>
+
+          {/* Target Mission Drawer */}
+          {isTargetBattle && targetDetail && (
+            <div className="mt-4 rounded-xl border border-white/[0.08] bg-[#050508] p-3 text-xs mono">
+              <div className="flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => setShowMissionDrawer(!showMissionDrawer)}
+                  className="flex items-center gap-2 font-bold text-accent hover:text-white transition-colors"
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>CHALLENGE OBJECTIVES ({targetDetail.objectives.length})</span>
+                  {showMissionDrawer ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+                <span className="text-[10px] text-zinc-500">
+                  {targetDetail.category} · {targetDetail.runtime} · {targetDetail.difficulty}
+                </span>
+              </div>
+              {showMissionDrawer && (
+                <div className="mt-3 grid gap-2 border-t border-white/[0.08] pt-3 text-zinc-300 sm:grid-cols-2">
+                  {targetDetail.objectives.map((obj, idx) => (
+                    <div key={idx} className="flex items-start gap-2">
+                      <span className="text-accent font-bold">✓</span>
+                      <span className="leading-snug">{obj}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </section>
 
@@ -630,20 +702,33 @@ export default function LiveBattle() {
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
                 <span className="mono text-xs font-bold uppercase tracking-wider text-emerald-400">
-                  OFFICIAL MATCH VERDICT · VERIFIED REPLAY
+                  {isTargetBattle
+                    ? `TARGET BENCHMARK VERDICT · ${targetDetail?.name || battle?.target_id} (v${battle?.target_version || "1.0.0"})`
+                    : "OFFICIAL MATCH VERDICT · VERIFIED REPLAY"}
                 </span>
               </div>
-              <span className="mono text-[10px] text-zinc-500">
-                ISOLATED MODAL MICROVM HARNESS
-              </span>
+              <div className="flex items-center gap-3">
+                {isTargetBattle && (
+                  <Link
+                    to={`/battles/new?target=${encodeURIComponent(battle?.target_id || "")}`}
+                    className="mono inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent px-3 py-1 text-xs font-bold text-white shadow-[0_0_10px_rgba(255,0,160,0.3)] hover:bg-accent-hover transition-all"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    <span>Rerun Target</span>
+                  </Link>
+                )}
+                <span className="mono text-[10px] text-zinc-500 hidden sm:inline">
+                  ISOLATED MODAL MICROVM HARNESS
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               {modelIds.slice(0, 2).map((mId, idx) => {
                 const isWinner = scoreWinner === mId;
-                const score = scores?.[mId] ?? (isWinner ? 94 : 89);
+                const hasScore = scores && mId in scores;
+                const rawScore = hasScore ? scores[mId] : null;
                 const role = roleForModel(mId, idx);
-                const isBuilder = idx === 0;
 
                 return (
                   <div
@@ -664,9 +749,15 @@ export default function LiveBattle() {
                         </h4>
                       </div>
                       <div className="text-right">
-                        <div className="text-2xl font-black text-emerald-400">
-                          {score}
-                        </div>
+                        {hasScore ? (
+                          <div className="text-2xl font-black text-emerald-400">
+                            {rawScore}
+                          </div>
+                        ) : (
+                          <div className="text-xs font-semibold text-zinc-500 uppercase">
+                            Completed
+                          </div>
+                        )}
                         {isWinner && (
                           <span className="text-[10px] font-bold text-accent">
                             ★ WINNER
@@ -676,15 +767,13 @@ export default function LiveBattle() {
                     </div>
 
                     <div className="border-t border-[#1F1F22] pt-2 text-[11px] text-zinc-400 space-y-1">
-                      <div>
-                        {isBuilder
-                          ? "✓ Acceptance Tests: 18/18 verified"
-                          : "✓ Security Policy: Clean (No verified bypass)"}
+                      <div className="flex items-center justify-between text-[10.5px]">
+                        <span className="text-zinc-500">Status:</span>
+                        <span className="text-zinc-300 font-semibold uppercase">{status}</span>
                       </div>
-                      <div className="text-zinc-500 text-[10px]">
-                        {isBuilder
-                          ? "Deliverables compiled and passed in clean container."
-                          : "Attack iterations logged and audited by automated judge."}
+                      <div className="flex items-center justify-between text-[10.5px]">
+                        <span className="text-zinc-500">Execution:</span>
+                        <span className="text-zinc-300">Isolated MicroVM</span>
                       </div>
                     </div>
                   </div>

@@ -3,14 +3,22 @@ import { Link, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   Boxes,
-  FlaskConical,
-  GitBranch,
+  Code2,
+  Cpu,
+  Database,
+  Eye,
+  Flame,
   LockKeyhole,
-  Network,
+  Play,
   RefreshCw,
   Search,
+  Shield,
+  ShieldAlert,
   ShieldCheck,
+  Swords,
+  Terminal,
   X,
+  Zap,
 } from "lucide-react";
 import { api, type TargetSummaryOut } from "@/lib/api";
 
@@ -31,11 +39,63 @@ function compactHash(hash: string) {
   return hash.length > 16 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
 }
 
+function formatTypeLabel(format: string) {
+  switch (format.toLowerCase()) {
+    case "builder_breaker":
+      return "Builder vs Breaker";
+    case "solo":
+      return "Solo Benchmark";
+    case "ctf":
+      return "CTF Challenge";
+    case "adversarial_agent":
+      return "Adversarial Agent";
+    default:
+      return titleCase(format);
+  }
+}
+
+function categoryIcon(category: string) {
+  switch (category.toLowerCase()) {
+    case "cybersecurity":
+    case "cybersecurity-data":
+      return <Shield className="h-3.5 w-3.5" />;
+    case "systems":
+      return <Cpu className="h-3.5 w-3.5" />;
+    case "data-sql":
+      return <Database className="h-3.5 w-3.5" />;
+    case "agent-security":
+      return <ShieldAlert className="h-3.5 w-3.5" />;
+    case "agent-tool-use":
+      return <Terminal className="h-3.5 w-3.5" />;
+    case "ctf":
+      return <Flame className="h-3.5 w-3.5" />;
+    case "software-engineering":
+    default:
+      return <Code2 className="h-3.5 w-3.5" />;
+  }
+}
+
+function difficultyBadgeStyle(difficulty: string) {
+  switch (difficulty.toLowerCase()) {
+    case "novice":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400";
+    case "general":
+      return "border-cyan-500/30 bg-cyan-500/10 text-cyan-400";
+    case "advanced":
+      return "border-pink-500/40 bg-pink-500/10 text-pink-400 shadow-[0_0_10px_rgba(255,0,160,0.15)]";
+    case "expert":
+      return "border-amber-500/40 bg-amber-500/10 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.15)]";
+    default:
+      return "border-zinc-700 bg-zinc-800 text-zinc-300";
+  }
+}
+
 export default function Targets() {
   const [params, setParams] = useSearchParams();
   const [targets, setTargets] = useState<TargetSummaryOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeTag, setActiveTag] = useState<string | null>(null);
 
   const search = params.get("q") || "";
   const category = params.get("category") || "all";
@@ -72,15 +132,17 @@ export default function Targets() {
     const difficulties = Array.from(new Set(targets.map((target) => target.difficulty))).sort(
       (a, b) => difficultyRank(a) - difficultyRank(b),
     );
-    return { categories, formats, difficulties };
+    const allTags = Array.from(new Set(targets.flatMap((target) => target.tags))).sort();
+    return { categories, formats, difficulties, allTags };
   }, [targets]);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
     return targets.filter((target) => {
-      if (category !== "all" && target.category !== category) return false;
-      if (difficulty !== "all" && target.difficulty !== difficulty) return false;
-      if (format !== "all" && target.format !== format) return false;
+      if (category !== "all" && target.category.toLowerCase() !== category.toLowerCase()) return false;
+      if (difficulty !== "all" && target.difficulty.toLowerCase() !== difficulty.toLowerCase()) return false;
+      if (format !== "all" && target.format.toLowerCase() !== format.toLowerCase()) return false;
+      if (activeTag && !target.tags.some((t) => t.toLowerCase() === activeTag.toLowerCase())) return false;
       if (!term) return true;
       return [
         target.name,
@@ -93,13 +155,13 @@ export default function Targets() {
         ...target.tags,
       ].some((value) => value.toLowerCase().includes(term));
     });
-  }, [targets, search, category, difficulty, format]);
+  }, [targets, search, category, difficulty, format, activeTag]);
 
   const advancedCount = targets.filter((target) =>
     ["advanced", "expert"].includes(target.difficulty.toLowerCase()),
   ).length;
-  const verifiedCount = targets.filter((target) => target.hidden_test_count > 0).length;
-  const handoffCount = targets.filter((target) => target.handoff_required).length;
+  const builderBreakerCount = targets.filter((target) => target.format === "builder_breaker").length;
+  const soloCount = targets.length - builderBreakerCount;
 
   function updateParam(key: string, value: string) {
     const next = new URLSearchParams(params);
@@ -109,127 +171,244 @@ export default function Targets() {
   }
 
   function clearFilters() {
+    setActiveTag(null);
     setParams({}, { replace: true });
   }
 
-  const hasFilters = Boolean(search || category !== "all" || difficulty !== "all" || format !== "all");
+  const hasFilters = Boolean(search || category !== "all" || difficulty !== "all" || format !== "all" || activeTag);
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#070707] text-white">
-      <section className="border-b border-[#232326] bg-[#09090E]">
-        <div className="mx-auto max-w-[1560px] px-4 py-10 sm:px-6 lg:py-14">
+    <div className="min-h-[calc(100vh-56px)] bg-[#0A0A0A] text-foreground">
+      {/* Hero Container */}
+      <section className="relative overflow-hidden border-b border-[#1F1F22] bg-[#09090E] px-4 py-8 sm:px-6 lg:py-12">
+        {/* Ambient Neon Radial Glows */}
+        <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.18)_0%,transparent_70%)]" />
+        <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.1)_0%,transparent_70%)]" />
+
+        <div className="relative z-10 mx-auto max-w-[1560px]">
           <div className="flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
-            <div className="max-w-4xl">
-              <div className="mb-4 flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-zinc-500">
-                <span className="border border-accent/40 bg-accent/10 px-2.5 py-1 text-accent">
-                  Target Library v1
-                </span>
-                <span>Immutable benchmark bundles</span>
+            <div className="max-w-3xl space-y-4">
+              <div className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3.5 py-1 text-[11px] font-semibold text-accent shadow-[0_0_12px_rgba(255,0,160,0.25)]">
+                <Boxes className="h-3.5 w-3.5" />
+                <span>TARGET LIBRARY V2 · IMMUTABLE BENCHMARKS</span>
               </div>
-              <h1 className="text-3xl font-bold tracking-[-0.04em] sm:text-4xl lg:text-5xl">
-                Verified targets for repeatable agent evaluation.
+
+              <h1 className="text-3xl font-extrabold tracking-[-0.035em] text-white sm:text-4xl lg:text-5xl">
+                Verified Targets for{" "}
+                <span className="text-accent drop-shadow-[0_0_25px_rgba(255,0,160,0.5)]">
+                  Agent Evaluation
+                </span>
               </h1>
-              <p className="mt-4 max-w-3xl text-sm leading-6 text-zinc-400">
-                Select a frozen challenge package with a versioned manifest, isolated starter workspace,
-                visible checks, evaluator-only verification, and reproducible evidence requirements.
+
+              <p className="text-xs leading-relaxed text-zinc-400 sm:text-sm">
+                Standardized, tamper-proof repository challenges designed for robust model evaluation.
+                Each challenge features a frozen manifest hash, isolated microVM starter workspace,
+                visible test harness, and authoritative server-side hidden verification.
               </p>
             </div>
 
-            <div className="grid min-w-full grid-cols-2 border border-[#242428] bg-[#242428] gap-px sm:min-w-[520px] sm:grid-cols-4">
-              <Stat value={targets.length} label="Targets" />
-              <Stat value={verifiedCount} label="Hidden verified" />
-              <Stat value={advancedCount} label="Advanced+" />
-              <Stat value={handoffCount} label="Handoff flows" />
+            {/* Quick Metrics */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 sm:gap-4">
+              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-4 text-center">
+                <div className="text-2xl font-extrabold text-white">{targets.length}</div>
+                <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-500">Targets</div>
+              </div>
+              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-4 text-center">
+                <div className="text-2xl font-extrabold text-accent">{builderBreakerCount}</div>
+                <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-500">Builder vs Breaker</div>
+              </div>
+              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-4 text-center">
+                <div className="text-2xl font-extrabold text-emerald-400">{soloCount}</div>
+                <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-500">Solo / CTF</div>
+              </div>
+              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-4 text-center">
+                <div className="text-2xl font-extrabold text-amber-400">{advancedCount}</div>
+                <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-500">Advanced+</div>
+              </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="sticky top-14 z-30 border-b border-[#232326] bg-[#070707]/95 backdrop-blur">
-        <div className="mx-auto max-w-[1560px] px-4 py-4 sm:px-6">
-          <div className="grid gap-3 lg:grid-cols-[minmax(280px,1.5fr)_repeat(3,minmax(160px,0.6fr))_auto]">
-            <label className="relative block">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
+      {/* Filter & Search Bar */}
+      <section className="sticky top-14 z-20 border-b border-[#1F1F22] bg-[#0A0A0A]/95 backdrop-blur-md">
+        <div className="mx-auto max-w-[1560px] space-y-3 px-4 py-4 sm:px-6">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            {/* Search Input */}
+            <div className="relative min-w-[280px] flex-1">
+              <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-500" />
               <input
                 value={search}
                 onChange={(event) => updateParam("q", event.target.value)}
-                placeholder="Search targets, runtimes, tags…"
-                className="h-10 w-full border border-[#2A2A2E] bg-[#0B0B0D] pl-10 pr-3 text-xs text-white outline-none transition-colors placeholder:text-zinc-600 focus:border-accent"
+                placeholder="Search challenges by name, objective, tag, or runtime…"
+                className="mono h-10 w-full rounded-xl border border-[#1F1F22] bg-[#050508] pl-10 pr-4 text-xs text-white outline-none transition-colors placeholder:text-zinc-600 focus:border-accent focus:shadow-[0_0_12px_rgba(255,0,160,0.2)]"
               />
-            </label>
+            </div>
 
-            <FilterSelect
-              label="Category"
-              value={category}
-              options={facets.categories}
-              onChange={(value) => updateParam("category", value)}
-            />
-            <FilterSelect
-              label="Difficulty"
-              value={difficulty}
-              options={facets.difficulties}
-              onChange={(value) => updateParam("difficulty", value)}
-            />
-            <FilterSelect
-              label="Format"
-              value={format}
-              options={facets.formats}
-              onChange={(value) => updateParam("format", value)}
-            />
+            {/* Dropdown Filters */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <select
+                aria-label="Filter by Category"
+                value={category}
+                onChange={(e) => updateParam("category", e.target.value)}
+                className="mono h-10 rounded-xl border border-[#1F1F22] bg-[#050508] px-3 text-xs text-white outline-none focus:border-accent"
+              >
+                <option value="all">All Categories</option>
+                {facets.categories.map((c) => (
+                  <option key={c} value={c}>
+                    {titleCase(c)}
+                  </option>
+                ))}
+              </select>
 
+              <select
+                aria-label="Filter by Difficulty"
+                value={difficulty}
+                onChange={(e) => updateParam("difficulty", e.target.value)}
+                className="mono h-10 rounded-xl border border-[#1F1F22] bg-[#050508] px-3 text-xs text-white outline-none focus:border-accent"
+              >
+                <option value="all">All Difficulties</option>
+                {facets.difficulties.map((d) => (
+                  <option key={d} value={d}>
+                    {titleCase(d)}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                aria-label="Filter by Format"
+                value={format}
+                onChange={(e) => updateParam("format", e.target.value)}
+                className="mono h-10 rounded-xl border border-[#1F1F22] bg-[#050508] px-3 text-xs text-white outline-none focus:border-accent"
+              >
+                <option value="all">All Formats</option>
+                {facets.formats.map((f) => (
+                  <option key={f} value={f}>
+                    {formatTypeLabel(f)}
+                  </option>
+                ))}
+              </select>
+
+              {hasFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="mono flex h-10 items-center gap-1.5 rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 text-xs font-bold text-red-400 hover:bg-red-500/20 transition-colors"
+                >
+                  <X className="h-3.5 w-3.5" />
+                  Reset
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Quick Category Chips */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
             <button
               type="button"
-              onClick={clearFilters}
-              disabled={!hasFilters}
-              className="flex h-10 items-center justify-center gap-2 border border-[#2A2A2E] px-3 font-mono text-[10px] uppercase tracking-[0.1em] text-zinc-400 enabled:hover:border-zinc-500 enabled:hover:text-white disabled:opacity-35"
+              onClick={() => updateParam("category", "all")}
+              className={`mono rounded-lg px-3 py-1 text-[11px] font-bold transition-all ${
+                category === "all"
+                  ? "bg-accent text-white shadow-[0_0_10px_rgba(255,0,160,0.3)]"
+                  : "border border-[#1F1F22] bg-[#050508] text-zinc-400 hover:text-white"
+              }`}
             >
-              <X className="h-3.5 w-3.5" />
-              Clear
+              All Targets
             </button>
+            {facets.categories.map((cat) => {
+              const active = category.toLowerCase() === cat.toLowerCase();
+              return (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => updateParam("category", cat)}
+                  className={`mono inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1 text-[11px] font-bold transition-all ${
+                    active
+                      ? "bg-accent text-white shadow-[0_0_10px_rgba(255,0,160,0.3)]"
+                      : "border border-[#1F1F22] bg-[#050508] text-zinc-400 hover:text-white hover:border-zinc-600"
+                  }`}
+                >
+                  {categoryIcon(cat)}
+                  <span>{titleCase(cat)}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       </section>
 
+      {/* Main Target Grid */}
       <main className="mx-auto max-w-[1560px] px-4 py-8 sm:px-6">
-        <div className="mb-4 flex items-center justify-between border-b border-[#1F1F22] pb-3">
-          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-zinc-500">
-            {loading ? "Loading catalog" : `${visible.length} of ${targets.length} targets`}
+        {/* Results Bar */}
+        <div className="mb-6 flex items-center justify-between border-b border-[#1F1F22] pb-3 font-mono text-xs text-zinc-500">
+          <div className="flex items-center gap-2">
+            <span className="font-bold text-white">{visible.length}</span>
+            <span>of</span>
+            <span>{targets.length} challenges available</span>
+            {activeTag && (
+              <span className="inline-flex items-center gap-1 rounded border border-accent/40 bg-accent/15 px-2 py-0.5 text-[10px] text-accent">
+                tag: {activeTag}
+                <button type="button" onClick={() => setActiveTag(null)} className="hover:text-white">
+                  <X className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            )}
           </div>
-          <div className="hidden items-center gap-2 font-mono text-[9px] uppercase tracking-[0.1em] text-zinc-600 sm:flex">
+          <div className="hidden items-center gap-2 sm:flex">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-            Public metadata only · evaluator assets remain server-side
+            <span className="text-[11px] text-zinc-400">All targets run in hardened, isolated microVM sandboxes</span>
           </div>
         </div>
 
+        {/* Catalog Body */}
         {loading ? (
-          <div className="grid min-h-[360px] place-items-center border border-[#1F1F22] bg-[#09090B]">
-            <div className="flex items-center gap-3 font-mono text-xs uppercase tracking-[0.12em] text-zinc-500">
-              <RefreshCw className="h-4 w-4 animate-spin text-accent" />
-              Reading target registry
-            </div>
+          <div className="flex min-h-[380px] flex-col items-center justify-center space-y-4 rounded-2xl border border-[#1F1F22] bg-[#09090E]">
+            <RefreshCw className="h-8 w-8 animate-spin text-accent" />
+            <span className="mono text-xs uppercase tracking-wider text-zinc-400">
+              Loading Target Library Registry…
+            </span>
           </div>
         ) : error ? (
-          <div className="border border-red-500/40 bg-red-500/5 p-6 text-sm text-red-300">
-            {error}
+          <div className="rounded-2xl border border-red-500/40 bg-red-950/20 p-8 text-center">
+            <ShieldAlert className="mx-auto h-8 w-8 text-red-400" />
+            <h3 className="mt-3 text-base font-bold text-white">Failed to load target registry</h3>
+            <p className="mt-1 text-xs text-zinc-400">{error}</p>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="btn btn-primary mt-4 inline-flex h-9 items-center gap-2 px-4 text-xs font-bold"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> Retry
+            </button>
           </div>
         ) : visible.length === 0 ? (
-          <div className="grid min-h-[340px] place-items-center border border-[#1F1F22] bg-[#09090B] p-8 text-center">
-            <div>
-              <Search className="mx-auto h-7 w-7 text-zinc-700" />
-              <div className="mt-4 text-sm font-semibold">No targets match this view.</div>
-              <button
-                type="button"
-                onClick={clearFilters}
-                className="mt-3 font-mono text-[10px] uppercase tracking-[0.12em] text-accent hover:text-accent-hover"
-              >
-                Reset filters
-              </button>
+          <div className="flex min-h-[360px] flex-col items-center justify-center space-y-4 rounded-2xl border border-[#1F1F22] bg-[#09090E] p-8 text-center">
+            <div className="grid h-12 w-12 place-items-center rounded-xl border border-accent/30 bg-accent/10 text-accent">
+              <Search className="h-6 w-6" />
             </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-white">No challenges match your filters</h3>
+              <p className="text-xs text-zinc-400">
+                Try adjusting your search terms or clearing active category and difficulty filters.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="mono inline-flex h-9 items-center gap-2 rounded-xl border border-accent/40 bg-accent/15 px-4 text-xs font-bold text-accent hover:bg-accent hover:text-white transition-all"
+            >
+              Reset All Filters
+            </button>
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {visible.map((target) => (
-              <TargetCard key={target.id} target={target} />
+              <TargetCard
+                key={target.id}
+                target={target}
+                activeTag={activeTag}
+                onSelectTag={(tag) => setActiveTag(activeTag === tag ? null : tag)}
+              />
             ))}
           </div>
         )}
@@ -238,126 +417,127 @@ export default function Targets() {
   );
 }
 
-function Stat({ value, label }: { value: number; label: string }) {
-  return (
-    <div className="bg-[#0A0A0D] p-4">
-      <div className="text-xl font-semibold tracking-[-0.03em] text-white">{value}</div>
-      <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.12em] text-zinc-500">{label}</div>
-    </div>
-  );
-}
-
-function FilterSelect({
-  label,
-  value,
-  options,
-  onChange,
+function TargetCard({
+  target,
+  activeTag,
+  onSelectTag,
 }: {
-  label: string;
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
+  target: TargetSummaryOut;
+  activeTag: string | null;
+  onSelectTag: (tag: string) => void;
 }) {
-  return (
-    <select
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-      className="h-10 border border-[#2A2A2E] bg-[#0B0B0D] px-3 font-mono text-[10px] uppercase tracking-[0.08em] text-zinc-300 outline-none focus:border-accent"
-    >
-      <option value="all">All {label.toLowerCase()}s</option>
-      {options.map((option) => (
-        <option key={option} value={option}>
-          {titleCase(option)}
-        </option>
-      ))}
-    </select>
-  );
-}
+  const isBuilderBreaker = target.format === "builder_breaker";
 
-function TargetCard({ target }: { target: TargetSummaryOut }) {
   return (
-    <article className="group flex min-h-[390px] flex-col border border-[#232326] bg-[#0A0A0D] transition-colors hover:border-[#3A3A40]">
-      <div className="flex items-center justify-between border-b border-[#1F1F22] px-5 py-3">
-        <div className="flex min-w-0 items-center gap-2 font-mono text-[9px] uppercase tracking-[0.12em] text-zinc-500">
-          <span className="truncate text-accent">{target.category}</span>
-          <span className="text-zinc-700">/</span>
-          <span>{target.difficulty}</span>
+    <article className="group relative flex flex-col justify-between rounded-2xl border border-[#1F1F22] bg-[#09090E] p-6 shadow-xl transition-all duration-200 hover:border-pink-500/40 hover:shadow-[0_0_25px_rgba(255,0,160,0.12)]">
+      <div>
+        {/* Card Header: Badges */}
+        <div className="flex items-center justify-between gap-2 border-b border-[#1F1F22] pb-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span
+              className={`mono inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${difficultyBadgeStyle(
+                target.difficulty,
+              )}`}
+            >
+              {target.difficulty}
+            </span>
+            <span className="mono inline-flex items-center gap-1 rounded-full border border-white/10 bg-[#050508] px-2.5 py-0.5 text-[10px] font-semibold text-zinc-400">
+              {categoryIcon(target.category)}
+              <span>{titleCase(target.category)}</span>
+            </span>
+          </div>
+
+          <span className="mono text-[10px] font-semibold text-zinc-500">v{target.version}</span>
         </div>
-        <span className="font-mono text-[9px] text-zinc-600">v{target.version}</span>
-      </div>
 
-      <div className="flex flex-1 flex-col p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-xl font-semibold tracking-[-0.035em] text-white">{target.name}</h2>
-            <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.11em] text-zinc-600">
-              target://{target.id}
+        {/* Title & Format */}
+        <div className="mt-4 space-y-1.5">
+          <div className="flex items-start justify-between gap-3">
+            <h3 className="text-lg font-bold tracking-tight text-white group-hover:text-pink-400 transition-colors">
+              {target.name}
+            </h3>
+            <span className="mono shrink-0 rounded border border-white/[0.08] bg-[#050508] px-2 py-0.5 text-[9.5px] font-semibold text-zinc-400">
+              {target.runtime}
+            </span>
+          </div>
+
+          <div className="mono flex items-center gap-2 text-[10px] text-accent">
+            {isBuilderBreaker ? <Swords className="h-3 w-3" /> : <Play className="h-3 w-3" />}
+            <span className="font-semibold uppercase tracking-wider">{formatTypeLabel(target.format)}</span>
+          </div>
+        </div>
+
+        {/* Description */}
+        <p className="mt-3 text-xs leading-relaxed text-zinc-400 line-clamp-3">
+          {target.description}
+        </p>
+
+        {/* Verification & Safety Specs */}
+        <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-[#1F1F22] bg-[#050508] p-3 mono text-[10px]">
+          <div className="space-y-0.5">
+            <div className="text-zinc-500 text-[9px] uppercase tracking-wider flex items-center gap-1">
+              <ShieldCheck className="h-3 w-3 text-emerald-400" />
+              <span>Verification</span>
+            </div>
+            <div className="font-bold text-zinc-300">
+              {target.visible_test_count} visible · {target.hidden_test_count} hidden
             </div>
           </div>
-          <div className="grid h-9 w-9 shrink-0 place-items-center border border-accent/30 bg-accent/10 text-accent">
-            <Boxes className="h-4 w-4" />
+
+          <div className="space-y-0.5">
+            <div className="text-zinc-500 text-[9px] uppercase tracking-wider flex items-center gap-1">
+              {target.network ? <Zap className="h-3 w-3 text-amber-400" /> : <LockKeyhole className="h-3 w-3 text-zinc-400" />}
+              <span>Isolation</span>
+            </div>
+            <div className="font-bold text-zinc-300">
+              {target.network ? "Network Allowed" : "MicroVM Sealed"}
+            </div>
           </div>
         </div>
 
-        <p className="mt-5 min-h-[66px] text-[12px] leading-[1.6] text-zinc-400">{target.description}</p>
-
-        <div className="mt-5 grid grid-cols-2 gap-px border border-[#1F1F22] bg-[#1F1F22]">
-          <Meta icon={<GitBranch className="h-3.5 w-3.5" />} label="Format" value={titleCase(target.format)} />
-          <Meta icon={<FlaskConical className="h-3.5 w-3.5" />} label="Runtime" value={target.runtime} />
-          <Meta
-            icon={<ShieldCheck className="h-3.5 w-3.5" />}
-            label="Verification"
-            value={`${target.visible_test_count} visible · ${target.hidden_test_count} hidden`}
-          />
-          <Meta
-            icon={target.network ? <Network className="h-3.5 w-3.5" /> : <LockKeyhole className="h-3.5 w-3.5" />}
-            label="Network"
-            value={target.network ? "Enabled" : "Sealed"}
-          />
-        </div>
-
-        <div className="mt-4 flex min-h-[44px] flex-wrap content-start gap-1.5">
-          {target.tags.slice(0, 5).map((tag) => (
-            <span key={tag} className="border border-[#27272B] bg-[#0D0D10] px-2 py-1 font-mono text-[8px] text-zinc-500">
-              {tag}
-            </span>
+        {/* Tags */}
+        <div className="mt-4 flex flex-wrap gap-1.5">
+          {target.tags.slice(0, 4).map((tag) => (
+            <button
+              key={tag}
+              type="button"
+              onClick={() => onSelectTag(tag)}
+              className={`mono rounded border px-2 py-0.5 text-[9px] transition-colors ${
+                activeTag === tag
+                  ? "border-accent bg-accent/20 text-accent font-bold"
+                  : "border-[#1F1F22] bg-[#050508] text-zinc-500 hover:border-zinc-600 hover:text-zinc-300"
+              }`}
+            >
+              #{tag}
+            </button>
           ))}
         </div>
+      </div>
 
-        <div className="mt-auto flex items-center justify-between border-t border-[#1F1F22] pt-4">
-          <div className="font-mono text-[8px] uppercase tracking-[0.08em] text-zinc-600" title={target.manifest_hash}>
-            sha256:{compactHash(target.manifest_hash)}
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              to={`/targets/${encodeURIComponent(target.id)}`}
-              className="border border-[#2A2A2E] px-3 py-2 font-mono text-[9px] uppercase tracking-[0.09em] text-zinc-300 hover:border-zinc-500 hover:text-white"
-            >
-              Inspect
-            </Link>
-            <Link
-              to={`/battles/new?target=${encodeURIComponent(target.id)}`}
-              className="flex items-center gap-2 border border-accent bg-accent px-3 py-2 font-mono text-[9px] font-bold uppercase tracking-[0.09em] text-white hover:bg-accent-hover"
-            >
-              Run target
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
+      {/* Card Footer: Actions */}
+      <div className="mt-6 flex items-center justify-between border-t border-[#1F1F22] pt-4">
+        <span className="mono text-[9px] text-zinc-600 truncate max-w-[120px]" title={target.manifest_hash}>
+          sha256:{compactHash(target.manifest_hash)}
+        </span>
+
+        <div className="flex items-center gap-2">
+          <Link
+            to={`/targets/${encodeURIComponent(target.id)}`}
+            className="mono flex h-8 items-center gap-1.5 rounded-lg border border-[#1F1F22] bg-[#050508] px-3 text-[11px] font-bold text-zinc-300 hover:border-zinc-500 hover:text-white transition-colors"
+          >
+            <Eye className="h-3 w-3" />
+            <span>Briefing</span>
+          </Link>
+
+          <Link
+            to={`/battles/new?target=${encodeURIComponent(target.id)}`}
+            className="mono flex h-8 items-center gap-1.5 rounded-lg border border-accent bg-accent px-3.5 text-[11px] font-bold text-white shadow-[0_0_12px_rgba(255,0,160,0.3)] hover:bg-accent-hover transition-all"
+          >
+            <span>Run</span>
+            <ArrowRight className="h-3 w-3" />
+          </Link>
         </div>
       </div>
     </article>
-  );
-}
-
-function Meta({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
-  return (
-    <div className="min-h-[70px] bg-[#09090B] p-3">
-      <div className="flex items-center gap-2 font-mono text-[8px] uppercase tracking-[0.1em] text-zinc-600">
-        <span className="text-zinc-500">{icon}</span>
-        {label}
-      </div>
-      <div className="mt-2 text-[10px] leading-4 text-zinc-300">{value}</div>
-    </div>
   );
 }

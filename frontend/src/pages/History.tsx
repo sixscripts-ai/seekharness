@@ -1,27 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { api, type BattleOut, type FormatOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
   Archive,
-  ArrowRight,
   CheckCircle2,
   Clock,
-  Filter,
-  Layers,
-  Play,
   Plus,
-  Radio,
   RefreshCw,
   Search,
-  ShieldAlert,
   ShieldCheck,
-  Sparkles,
-  Swords,
   XCircle,
 } from "lucide-react";
 
-type FilterStatus = "all" | "running" | "completed" | "failed" | "saved";
+type FilterStatus = "all" | "targets" | "running" | "completed" | "failed" | "saved";
 type SortOption = "newest" | "oldest" | "duration";
 
 function formatDuration(seconds?: number | null): string {
@@ -32,19 +24,8 @@ function formatDuration(seconds?: number | null): string {
   return `${m}m ${s}s`;
 }
 
-function formatRelativeDate(isoOrMs?: string | number): string {
-  if (!isoOrMs) return "Recently";
-  const date = new Date(isoOrMs);
-  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diffSec < 60) return "Just now";
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`;
-  return date.toLocaleDateString();
-}
-
 export default function History() {
-  const { user, jwt, refreshJwt } = useAuth();
-  const navigate = useNavigate();
+  const { jwt, refreshJwt } = useAuth();
 
   const [battles, setBattles] = useState<BattleOut[]>([]);
   const [formats, setFormats] = useState<FormatOut[]>([]);
@@ -77,7 +58,9 @@ export default function History() {
                 for (const id of ids.slice(0, 30)) {
                   try {
                     loaded.push(await api.getBattle(token, id));
-                  } catch {}
+                  } catch (e) {
+                    console.debug("Failed to load battle fallback:", e);
+                  }
                 }
                 return loaded;
               })
@@ -106,6 +89,7 @@ export default function History() {
     return battles
       .filter((b) => {
         // Status filter
+        if (statusFilter === "targets" && !b.target_id) return false;
         if (statusFilter === "running" && b.status !== "running") return false;
         if (statusFilter === "completed" && b.status !== "completed")
           return false;
@@ -125,10 +109,11 @@ export default function History() {
           const q = searchQuery.toLowerCase();
           const matchId = b.id.toLowerCase().includes(q);
           const matchFormat = b.format_id.toLowerCase().includes(q);
+          const matchTarget = Boolean(b.target_id && b.target_id.toLowerCase().includes(q));
           const matchFighters = (b.model_ids || []).some((m) =>
             m.toLowerCase().includes(q),
           );
-          if (!matchId && !matchFormat && !matchFighters) return false;
+          if (!matchId && !matchFormat && !matchFighters && !matchTarget) return false;
         }
 
         return true;
@@ -153,6 +138,21 @@ export default function History() {
           <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.12)_0%,transparent_70%)]"></div>
 
           {/* Header Row */}
+          {err && (
+            <div className="relative z-10 flex items-center justify-between rounded-xl border border-red-500/30 bg-red-950/20 px-4 py-3 text-xs text-red-400">
+              <div className="flex items-center gap-2">
+                <XCircle className="h-4 w-4 shrink-0" />
+                <span>{err}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErr(null)}
+                className="text-zinc-500 hover:text-white"
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-[#1F1F22] pb-6 lg:flex-row lg:items-end">
             <div className="space-y-3">
               <div className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3.5 py-1 text-[11px] font-semibold text-accent shadow-[0_0_12px_rgba(255,0,160,0.25)]">
@@ -192,6 +192,7 @@ export default function History() {
               {(
                 [
                   { id: "all", label: "All" },
+                  { id: "targets", label: "Targets" },
                   { id: "running", label: "Running" },
                   { id: "completed", label: "Completed" },
                   { id: "failed", label: "Failed" },
@@ -344,8 +345,13 @@ export default function History() {
                             <div className="font-bold text-white text-sm">
                               {b.custom_title || b.title || (b.target_id ? `Target: ${b.target_id}` : b.format_id)}
                             </div>
-                            <div className="text-[10.5px] text-zinc-500 flex items-center gap-2 mt-0.5">
+                            <div className="text-[10.5px] text-zinc-500 flex flex-wrap items-center gap-2 mt-1">
                               <span>ID: {b.id.slice(0, 12)}…</span>
+                              {b.target_id && (
+                                <span className="rounded border border-accent/40 bg-accent/15 px-2 py-0.5 text-[9.5px] font-bold text-accent">
+                                  TARGET · {b.target_id} {b.target_version ? `v${b.target_version}` : ""}
+                                </span>
+                              )}
                               {b.saved && (
                                 <span className="text-accent font-bold">★ SAVED</span>
                               )}

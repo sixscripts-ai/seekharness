@@ -52,10 +52,12 @@ def _to_detail(bundle: TargetBundle, *, authenticated: bool) -> TargetDetailOut:
         return TargetDetailOut(
             **summary.model_dump(),
             objectives=bundle.objectives,
+            role_objectives=bundle.role_objectives or None,
         )
     return TargetDetailOut(
         **summary.model_dump(),
         objectives=bundle.objectives,
+        role_objectives=bundle.role_objectives or None,
         starter_files=sorted(bundle.starter_files.keys()),
         visible_tests=sorted(bundle.visible_test_files.keys()),
         protected_paths=bundle.workspace.protected_paths,

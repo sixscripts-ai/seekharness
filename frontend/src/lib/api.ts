@@ -278,6 +278,7 @@ export type TargetSummaryOut = {
 // full safe public representation.
 export type TargetDetailOut = TargetSummaryOut & {
   objectives: string[];
+  role_objectives?: Record<string, string[]> | null;
   starter_files: string[] | null;
   visible_tests: string[] | null;
   protected_paths: string[] | null;

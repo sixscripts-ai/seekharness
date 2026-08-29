@@ -147,26 +147,33 @@ def _create_attribute(databases, database_id, collection_id, name, type_, requir
 
 
 def ensure_schema() -> None:
+    from appwrite.exception import AppwriteException
+
     databases = db.get_databases()
     database_id = db.get_database_id()
-    for collection_id, attrs in COLLECTIONS.items():
-        _create_collection_if_missing(databases, database_id, collection_id, attrs)
-        res = databases.list_attributes(database_id, collection_id)
-        existing = {a.key for a in res.attributes}
-        for name, type_, required in attrs:
-            if name in existing:
-                continue
-            array_size = ARRAY_ATTRIBUTES.get(collection_id, {}).get(name)
-            if array_size:
-                databases.create_string_attribute(
-                    database_id,
-                    collection_id,
-                    name,
-                    array_size,
-                    required=required,
-                    array=True,
-                )
-            else:
-                _create_attribute(
-                    databases, database_id, collection_id, name, type_, required
-                )
+    try:
+        for collection_id, attrs in COLLECTIONS.items():
+            _create_collection_if_missing(databases, database_id, collection_id, attrs)
+            res = databases.list_attributes(database_id, collection_id)
+            existing = {a.key for a in res.attributes}
+            for name, type_, required in attrs:
+                if name in existing:
+                    continue
+                array_size = ARRAY_ATTRIBUTES.get(collection_id, {}).get(name)
+                if array_size:
+                    databases.create_string_attribute(
+                        database_id,
+                        collection_id,
+                        name,
+                        array_size,
+                        required=required,
+                        array=True,
+                    )
+                else:
+                    _create_attribute(
+                        databases, database_id, collection_id, name, type_, required
+                    )
+    except AppwriteException as e:
+        if "collections" in str(e).lower() or getattr(e, "code", None) == 401:
+            return
+        raise

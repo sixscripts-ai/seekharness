@@ -63,6 +63,7 @@ class TargetDetailOut(TargetSummaryOut):
     # objectives is public; the remaining evaluator-internal fields are only
     # populated for authenticated callers (see target_router.get_target).
     objectives: list[str]
+    role_objectives: dict[str, list[str]] | None = None
     starter_files: list[str] | None = None
     visible_tests: list[str] | None = None
     protected_paths: list[str] | None = None

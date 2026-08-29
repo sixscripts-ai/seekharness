@@ -275,22 +275,30 @@ export default function NewBattle() {
     refreshJwt,
   ]);
 
+  const [targetRunMode, setTargetRunMode] = useState<"solo" | "race">("race");
+
   const format = formats.find(
     (item) =>
       item.id === formatId,
   );
 
   const need = target
-    ? 2
+    ? target.format === "builder_breaker"
+      ? 2
+      : targetRunMode === "solo"
+      ? 1
+      : 2
     : format
       ? playableRoleCount(format)
       : 2;
 
   const roles = useMemo(() => {
     if (target) {
-      return target.format ===
-        "builder_breaker"
-        ? ["builder", "breaker"]
+      if (target.format === "builder_breaker") {
+        return ["builder", "breaker"];
+      }
+      return targetRunMode === "solo"
+        ? ["fighter"]
         : ["fighter 1", "fighter 2"];
     }
 
@@ -315,7 +323,7 @@ export default function NewBattle() {
       "fighter a",
       "fighter b",
     ];
-  }, [format, target]);
+  }, [format, target, targetRunMode]);
 
   useEffect(() => {
     setSelected(
@@ -627,61 +635,121 @@ export default function NewBattle() {
         </div>
       </header>
 
-      {/* 1. BATTLE MODE */}
+      {/* 1. BATTLE MODE / TARGET PREFLIGHT */}
       <div className="mx-auto max-w-[1360px] px-6 py-6">
         <SectionHeader
           index="1"
-          title={target ? "Immutable target" : "Battle mode"}
+          title={target ? "Target Preflight Summary" : "Battle mode"}
           description={
             target
-              ? "This battle is pinned to a versioned Target Library contract."
+              ? "You are about to launch a verified, immutable Target Library benchmark."
               : "Choose how you want to define this battle."
           }
         />
 
         {target ? (
-          <div className="mt-4 grid gap-px border border-border bg-border lg:grid-cols-[1.4fr_0.8fr_0.8fr]">
-            <div className="bg-surface p-5">
-              <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent">
-                target://{target.id}
+          <div className="mt-4 space-y-4">
+            {/* Target Preflight Card */}
+            <div className="rounded-2xl border border-accent/40 bg-[#09090E] p-6 shadow-xl space-y-5">
+              <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start">
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="mono rounded-full border border-accent/40 bg-accent/15 px-3 py-0.5 text-[10.5px] font-bold text-accent">
+                      TARGET: {target.id}
+                    </span>
+                    <span className="mono rounded-full border border-white/10 bg-[#050508] px-2.5 py-0.5 text-[10.5px] font-semibold text-zinc-300">
+                      v{target.version}
+                    </span>
+                    <span className="mono rounded-full border border-white/10 bg-[#050508] px-2.5 py-0.5 text-[10.5px] font-semibold text-zinc-400">
+                      {target.category}
+                    </span>
+                    <span className="mono rounded-full border border-pink-500/40 bg-pink-500/10 px-2.5 py-0.5 text-[10.5px] font-semibold text-pink-400">
+                      {target.difficulty}
+                    </span>
+                  </div>
+
+                  <h2 className="text-2xl font-extrabold text-white tracking-tight">
+                    {target.name}
+                  </h2>
+
+                  <p className="max-w-3xl text-xs leading-relaxed text-zinc-300">
+                    {target.description}
+                  </p>
+                </div>
+
+                <Link
+                  to={`/targets/${encodeURIComponent(target.id)}`}
+                  className="mono inline-flex items-center gap-1.5 self-start rounded-lg border border-[#1F1F22] bg-[#050508] px-3 py-1.5 text-xs font-bold text-zinc-300 hover:border-zinc-500 hover:text-white transition-colors"
+                >
+                  <span>View Briefing</span>
+                  <span>→</span>
+                </Link>
               </div>
-              <div className="mt-3 text-[22px] font-semibold tracking-[-0.035em]">
-                {target.name}
+
+              {/* Objectives summary */}
+              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-4 space-y-2">
+                <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
+                  Target Objectives
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {target.objectives.slice(0, 4).map((obj, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                      <span className="mono text-accent font-bold">✓</span>
+                      <span className="leading-snug">{obj}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <p className="mt-2 max-w-2xl text-[11px] leading-5 text-muted">
-                {target.description}
-              </p>
-              <Link
-                to={`/targets/${encodeURIComponent(target.id)}`}
-                className="mt-4 inline-block font-mono text-[9px] uppercase tracking-[0.1em] text-accent hover:text-accent-hover"
-              >
-                Inspect frozen contract →
-              </Link>
-            </div>
-            <div className="bg-surface p-5">
-              <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-muted">
-                Format / runtime
-              </div>
-              <div className="mt-3 font-mono text-[11px] text-foreground">
-                {titleCase(target.format)}
-              </div>
-              <div className="mt-1 font-mono text-[9px] text-muted">
-                {target.runtime}
-              </div>
-            </div>
-            <div className="bg-surface p-5">
-              <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-muted">
-                Version lock
-              </div>
-              <div className="mt-3 font-mono text-[11px] text-foreground">
-                v{target.version}
-              </div>
-              <div
-                className="mt-1 truncate font-mono text-[8px] text-muted"
-                title={target.manifest_hash}
-              >
-                sha256:{target.manifest_hash.slice(0, 16)}…
-              </div>
+
+              {/* Mode Toggle (if not Builder/Breaker) */}
+              {target.format !== "builder_breaker" ? (
+                <div className="space-y-2">
+                  <div className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Select Benchmark Execution Mode
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={() => setTargetRunMode("solo")}
+                      className={`rounded-xl border p-4 text-left transition-all ${
+                        targetRunMode === "solo"
+                          ? "border-accent bg-accent/15 shadow-[0_0_15px_rgba(255,0,160,0.25)]"
+                          : "border-[#1F1F22] bg-[#050508] hover:border-zinc-600"
+                      }`}
+                    >
+                      <div className="mono text-xs font-bold text-white flex items-center justify-between">
+                        <span>Solo Evaluation (1 Fighter)</span>
+                        {targetRunMode === "solo" && <span className="text-accent">● Active</span>}
+                      </div>
+                      <p className="mt-1 text-[11px] text-zinc-400 leading-relaxed">
+                        Single model runs with full toolbelt in an isolated microVM. Evaluated directly on pass/fail & test score.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setTargetRunMode("race")}
+                      className={`rounded-xl border p-4 text-left transition-all ${
+                        targetRunMode === "race"
+                          ? "border-accent bg-accent/15 shadow-[0_0_15px_rgba(255,0,160,0.25)]"
+                          : "border-[#1F1F22] bg-[#050508] hover:border-zinc-600"
+                      }`}
+                    >
+                      <div className="mono text-xs font-bold text-white flex items-center justify-between">
+                        <span>Benchmark Race (2 Fighters)</span>
+                        {targetRunMode === "race" && <span className="text-accent">● Active</span>}
+                      </div>
+                      <p className="mt-1 text-[11px] text-zinc-400 leading-relaxed">
+                        Two models race side-by-side on the identical target repo. First to pass all verification checks wins.
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-pink-500/30 bg-pink-500/10 p-3 mono text-xs text-pink-300">
+                  <strong>Builder vs Breaker Format:</strong> Phase 1 Builder hardens the repo; Phase 2 Breaker receives deliverables to attempt security bypass.
+                </div>
+              )}
             </div>
           </div>
         ) : (
@@ -726,10 +794,10 @@ export default function NewBattle() {
         <div className="mx-auto max-w-[1360px] px-6 py-6">
           <SectionHeader
             index="2"
-            title={target ? "Target execution plan" : "Execution format"}
+            title={target ? "Target Execution Constraints" : "Execution format"}
             description={
               target
-                ? "The target defines its format, verification path, and workspace constraints. These fields are not editable."
+                ? "The target defines its format, verification harness, and isolation policies. These parameters are immutable."
                 : "Select the arena format and role sequence."
             }
             trailing={
@@ -752,7 +820,7 @@ export default function NewBattle() {
               <LockedCell label="Difficulty" value={titleCase(target.difficulty)} />
               <LockedCell
                 label="Verification"
-                value={titleCase(target.verification_type)}
+                value={`${target.visible_test_count} visible · ${target.hidden_test_count} hidden`}
               />
             </div>
           ) : (
@@ -890,17 +958,30 @@ export default function NewBattle() {
                     </span>
 
                     <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
-                      Fighter{" "}
-                      {index + 1}
+                      {target?.format === "builder_breaker"
+                        ? (index === 0 ? "Builder Slot" : "Breaker Slot")
+                        : `Fighter ${index + 1}`}
                     </span>
                   </div>
 
-                  <div className="mt-6 min-h-[34px] text-[22px] font-semibold tracking-[-0.035em]">
+                  <div className="mt-4 min-h-[34px] text-[20px] font-bold tracking-[-0.03em] text-white">
                     {providerLabel(
                       modelId,
                       providers,
                     )}
                   </div>
+
+                  {target && (
+                    <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">
+                      {target.format === "builder_breaker"
+                        ? (index === 0
+                            ? "Phase 1: Hardens repository, passes visible checks, and delivers sealed artifacts."
+                            : "Phase 2: Receives builder deliverables and tests for security authorization bypasses.")
+                        : (need === 1
+                            ? "Solo Agent: Full toolbelt access to workspace to inspect, repair, and verify solution."
+                            : `Competitor ${index + 1}: Parallel execution in sealed microVM against test harness.`)}
+                    </p>
+                  )}
 
                   <div className="mt-1 font-mono text-[9px] uppercase tracking-[0.1em] text-muted">
                     role://
@@ -1148,7 +1229,7 @@ export default function NewBattle() {
                           level,
                         )
                       }
-                      className={`border-r border-b border-border px-2 py-2.5 font-mono text-[8px] uppercase tracking-[0.08em] odd:border-r last:border-b-0 [\&:nth-child(3)]:border-b-0 ${
+                      className={`border-r border-b border-border px-2 py-2.5 font-mono text-[8px] uppercase tracking-[0.08em] odd:border-r last:border-b-0 [&:nth-child(3)]:border-b-0 ${
                         difficulty ===
                         level
                           ? "bg-accent text-white"
