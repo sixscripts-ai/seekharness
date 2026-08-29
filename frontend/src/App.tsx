@@ -14,10 +14,14 @@ import { subscribeSystemTheme } from "@/lib/theme";
 
 function isFullWidthPath(pathname: string): boolean {
   return (
+    pathname === "/" ||
+    pathname === "/battles" ||
+    pathname === "/history" ||
     pathname === "/battles/new" ||
     pathname === "/battles/custom" ||
     pathname === "/providers" ||
     pathname === "/keys" ||
+    pathname === "/leaderboard" ||
     pathname.startsWith("/battles/")
   );
 }
@@ -26,7 +30,8 @@ function isLiveBattlePath(pathname: string): boolean {
   return (
     pathname.startsWith("/battles/") &&
     pathname !== "/battles/new" &&
-    pathname !== "/battles/custom"
+    pathname !== "/battles/custom" &&
+    pathname !== "/battles"
   );
 }
 
@@ -45,7 +50,7 @@ function AppShell() {
       <SiteHeader />
       <main
         className={[
-          fullWidth ? "px-0 py-0" : "mx-auto max-w-[1360px] px-6 py-8",
+          fullWidth ? "px-0 py-0" : "mx-auto max-w-[1560px] px-6 py-8",
           liveBattle ? "meticulous-ignore" : "",
         ]
           .filter(Boolean)
@@ -57,12 +62,13 @@ function AppShell() {
           <Route path="/signup" element={<Signup />} />
           <Route path="/providers" element={<Providers />} />
           <Route path="/keys" element={<Providers />} />
+          <Route path="/battles" element={<History />} />
+          <Route path="/history" element={<History />} />
           <Route path="/battles/new" element={<NewBattle />} />
           <Route path="/battles/custom" element={<CustomBattle />} />
           <Route path="/battles/:id" element={<LiveBattle />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
-          <Route path="/history" element={<History />} />
-          <Route path="*" element={<div className="p-8 text-center">404 — Not found</div>} />
+          <Route path="*" element={<div className="p-8 text-center text-zinc-400">404 — Not found</div>} />
         </Routes>
       </main>
     </>

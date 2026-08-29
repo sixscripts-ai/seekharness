@@ -159,3 +159,64 @@ def test_get_model_call_spec_user_provider(client, authed_user, monkeypatch):
         )
         for doc in res.documents:
             databases.delete_document(db.get_database_id(), "providers", doc.id)
+
+
+@requires_appwrite
+def test_delete_provider(client, authed_user):
+    user_id = authed_user
+    body = {
+        "name": f"to-delete-{user_id[:8]}",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-delete-me-123456",
+        "auth_style": "bearer",
+        "model_name": "gpt-4o",
+    }
+    created = client.post("/providers", json=body)
+    assert created.status_code == 200
+    pid = created.json()["id"]
+
+    # Trying to delete a host provider must return 400
+    host_del = client.delete("/providers/host:openrouter-free")
+    assert host_del.status_code == 400
+
+    # Successful delete of own custom provider
+    deleted = client.delete(f"/providers/{pid}")
+    assert deleted.status_code == 200
+    assert deleted.json()["ok"] is True
+    assert deleted.json()["id"] == pid
+
+    # Listing must no longer include the deleted provider
+    listed = client.get("/providers").json()
+    assert not any(p["id"] == pid for p in listed)
+
+    # Deleting already deleted or nonexistent returns 404
+    retry = client.delete(f"/providers/{pid}")
+    assert retry.status_code == 404
+
+
+@requires_appwrite
+def test_provider_id_health_endpoint(client, authed_user):
+    user_id = authed_user
+    body = {
+        "name": f"health-test-{user_id[:8]}",
+        "base_url": "https://example.invalid/v1",
+        "api_key": "sk-real-test-secret-123456",
+        "auth_style": "bearer",
+        "model_name": "gpt-4o",
+    }
+    created = client.post("/providers", json=body)
+    assert created.status_code == 200
+    pid = created.json()["id"]
+
+    try:
+        # Testing stored provider health executes real backend check (which gets ERROR on example.invalid)
+        resp = client.post(f"/providers/{pid}/health")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "status" in data
+        assert data["status"] in ("HEALTHY", "ERROR")
+        assert data["ok"] in (True, False)
+        assert "latency_ms" in data
+    finally:
+        client.delete(f"/providers/{pid}")
+

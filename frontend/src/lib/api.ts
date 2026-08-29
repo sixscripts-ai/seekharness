@@ -42,6 +42,22 @@ export const api = {
   providers: (token: string) => request<ProviderOut[]>("/providers", { token }),
   createProvider: (token: string, body: ProviderCreate) =>
     request<ProviderOut>("/providers", { method: "POST", body, token }),
+  deleteProvider: (token: string, id: string) =>
+    request<{ ok: boolean; id: string; name?: string }>(`/providers/${id}`, {
+      method: "DELETE",
+      token,
+    }),
+  testProviderHealth: (token: string, providerId: string) =>
+    request<{
+      ok: boolean;
+      status: "HEALTHY" | "ERROR";
+      status_code?: number;
+      latency_ms: number;
+      detail?: string | null;
+    }>(`/providers/${providerId}/health`, {
+      method: "POST",
+      token,
+    }),
   providerHealth: (
     token: string,
     body: {
@@ -140,17 +156,17 @@ export type ProviderCreate = {
 export type BattleCreate = {
   format_id: string;
   model_ids: string[];
-  arena_size: number;
-  timeout_seconds: number;
-  round_visibility: "isolated" | "open";
-  save: boolean;
+  arena_size?: number;
+  timeout_seconds?: number;
+  round_visibility?: "isolated" | "open";
+  save?: boolean;
   judge_provider_id?: string | null;
   difficulty?: "novice" | "general" | "advanced" | "expert" | null;
 };
 
 export type BattleOut = {
   $id?: string;
-  id?: string;
+  id: string;
   user_id: string;
   format_id: string;
   model_ids: string[];
@@ -171,6 +187,7 @@ export type BattleOut = {
     spec_hash?: string;
   } | null;
   spec_hash?: string | null;
+  title?: string | null;
   custom_title?: string | null;
   ranked?: boolean | null;
 };

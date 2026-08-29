@@ -1,4 +1,5 @@
 import os
+import time
 
 import httpx
 from appwrite.exception import AppwriteException
@@ -344,6 +345,35 @@ def list_providers(user_id: str = Depends(get_current_user)):
     return configured_host_providers() + items
 
 
+@router.delete("/{provider_id}")
+def delete_provider(provider_id: str, user_id: str = Depends(get_current_user)):
+    """Delete a user-registered custom provider and its encrypted credentials."""
+    if is_host_model(provider_id):
+        raise HTTPException(
+            status_code=400,
+            detail="System host providers cannot be deleted from the server. You can hide them from the interface instead.",
+        )
+    databases = db.get_databases()
+    database_id = db.get_database_id()
+    try:
+        doc = databases.get_document(database_id, "providers", provider_id)
+    except AppwriteException as exc:
+        raise HTTPException(status_code=404, detail="Provider not found") from exc
+
+    if doc.data.get("user_id") != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: You do not have permission to delete this provider",
+        )
+
+    try:
+        databases.delete_document(database_id, "providers", provider_id)
+    except AppwriteException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"ok": True, "id": provider_id, "name": doc.data.get("name")}
+
+
 def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str]:
     """Return (base_url, auth_style, api_key, model_name) for a battle model_id."""
     host = HOST_BY_ID.get(model_id)
@@ -377,6 +407,70 @@ def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str
     )
 
 
+@router.post("/{provider_id}/health")
+def provider_id_health(provider_id: str, user_id: str = Depends(get_current_user)):
+    """Test health of a stored provider (either host model or user's registered provider) by retrieving the actual stored secret."""
+    try:
+        base_url, auth_style, api_key, model_name = get_model_call_spec(
+            provider_id, user_id
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Cannot load provider credentials: {exc}"
+        ) from exc
+
+    base_url = validate_base_url(base_url)
+    headers = {}
+    if auth_style == "modal_proxy":
+        parts = [p.strip() for p in api_key.split(":")]
+        if len(parts) != 2:
+            raise HTTPException(
+                status_code=400, detail="modal_proxy key must be 'wk-...:ws-...'"
+            )
+        headers = {"Modal-Key": parts[0], "Modal-Secret": parts[1]}
+    else:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    url = base_url.rstrip("/") + "/chat/completions"
+    payload = {
+        "model": model_name or "moonshotai/Kimi-K3",
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 5,
+    }
+    t0 = time.perf_counter()
+    try:
+        resp = httpx.post(url, headers=headers, json=payload, timeout=20.0)
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "status": "ERROR",
+            "status_code": 502,
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+            "detail": f"Connection failed: {exc}",
+        }
+
+    if resp.status_code == 200:
+        return {
+            "ok": True,
+            "status": "HEALTHY",
+            "status_code": resp.status_code,
+            "latency_ms": latency_ms,
+            "detail": None,
+        }
+    else:
+        err_detail = resp.text[:200]
+        return {
+            "ok": False,
+            "status": "ERROR",
+            "status_code": resp.status_code,
+            "latency_ms": latency_ms,
+            "detail": f"Provider returned HTTP {resp.status_code}: {err_detail}",
+        }
+
+
 @router.post("/health")
 def provider_health(body: ProviderHealth, _user_id: str = Depends(get_current_user)):
     base_url = validate_base_url(body.base_url)
@@ -406,3 +500,4 @@ def provider_health(body: ProviderHealth, _user_id: str = Depends(get_current_us
             detail=f"Provider returned {resp.status_code}: {resp.text[:200]}",
         )
     return {"ok": True, "status_code": resp.status_code}
+

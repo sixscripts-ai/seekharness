@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ExternalLink, FileCode2, GitCompare, Terminal } from "lucide-react";
+import { Download, ExternalLink, FileCode2, GitCompare, Terminal } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type BattleStreamItem = {
@@ -142,92 +142,139 @@ export default function LiveExecutionPane({
     }
   }, [actions, tab]);
 
-  const prompt = `${role || "agent"}@arena:$`;
+  const prompt = `${role ? role.replace(/[^a-zA-Z0-9_-]/g, "_") : "agent"}@arena:~$`;
   const stateColor =
     status === "failed"
-      ? "text-red-400"
+      ? "text-red-400 border-red-500/30 bg-red-500/10"
       : status === "running"
-        ? "text-emerald-400"
+        ? "text-[#FF00A0] border-pink-500/40 bg-pink-500/10 shadow-[0_0_10px_rgba(255,0,160,0.2)]"
         : status === "complete"
-          ? "text-emerald-400"
-          : "text-zinc-500";
+          ? "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
+          : "text-zinc-500 border-white/10 bg-white/5";
+
+  function downloadTerminalLogs() {
+    const lines = actions
+      .map(({ item, parsed }) => {
+        if (!parsed) return "";
+        const time = timeLabel(item.t);
+        return `[${time}] ${prompt} ${parsed.command}\n${parsed.result ? parsed.result + "\n" : ""}[state: ${parsed.state} | duration: ${parsed.durationMs ?? 0}ms]\n`;
+      })
+      .join("\n");
+    const blob = new Blob([lines], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(role || "fighter").replace(/[^a-zA-Z0-9_-]/g, "_")}_${modelId.replace(/[^a-zA-Z0-9_-]/g, "_")}_logs.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function downloadArtifactFile(filename: string, content: string) {
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   return (
     <section
       className={cn(
-        "flex min-h-[560px] flex-col overflow-hidden border bg-[#030305]",
-        win ? "border-pink-500" : "border-white/10",
+        "flex min-h-[620px] flex-col overflow-hidden rounded-lg border bg-[#06040A] shadow-2xl transition-all",
+        win
+          ? "border-pink-500 shadow-[0_0_30px_rgba(255,0,160,0.25)]"
+          : "border-pink-500/20 hover:border-pink-500/40",
       )}
       aria-label={`${displayName} execution console`}
     >
-      <header className="border-b border-white/10 bg-[#08080A] px-5 py-4">
+      {/* Terminal Header */}
+      <header className="border-b border-white/[0.08] bg-[#0A0612] px-6 py-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="font-mono text-[9px] font-bold uppercase tracking-[0.16em] text-pink-400">
-              {role || "fighter"}
+            <div className="font-mono text-[10px] font-bold uppercase tracking-[0.16em] text-pink-400">
+              {role ? `[ ${role} ]` : "[ FIGHTER ]"}
             </div>
-            <div className="mt-1 truncate text-[16px] font-semibold tracking-[-0.02em] text-white">
+            <div className="mt-1 truncate text-[17px] font-bold tracking-[-0.02em] text-white font-sans">
               {displayName}
             </div>
-            <div className="mt-1 truncate font-mono text-[9px] text-zinc-600">
+            <div className="mt-1 truncate font-mono text-[10px] text-zinc-500">
               {modelId}
             </div>
           </div>
 
-          <div className="text-right font-mono">
-            <div className={cn("text-[9px] font-bold uppercase tracking-[0.13em]", stateColor)}>
-              {status === "running" ? "● executing" : status}
+          <div className="flex flex-col items-end gap-1.5 font-mono">
+            <div className={cn("inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.12em]", stateColor)}>
+              {status === "running" ? <span className="h-1.5 w-1.5 rounded-full bg-pink-400 animate-ping" /> : null}
+              {status === "running" ? "● Executing" : status}
             </div>
-            <div className="mt-2 text-[9px] uppercase tracking-[0.1em] text-zinc-600">
+            <div className="text-[10px] uppercase tracking-[0.08em] text-zinc-500">
               phase://{phase || "pending"}
             </div>
           </div>
         </div>
       </header>
 
-      <div className="flex border-b border-white/10 bg-[#060607] font-mono">
-        {([
-          ["terminal", Terminal, "Terminal"],
-          ["files", FileCode2, "Files"],
-          ["diff", GitCompare, "Diff"],
-          ["preview", ExternalLink, "Preview"],
-        ] as const).map(([value, Icon, label]) => (
+      {/* Tab bar & Quick Actions */}
+      <div className="flex items-center justify-between border-b border-white/[0.08] bg-[#040207] px-2 font-mono">
+        <div className="flex items-center">
+          {([
+            ["terminal", Terminal, "Terminal"],
+            ["files", FileCode2, `Files${fileEntries.length ? ` (${fileEntries.length})` : ""}`],
+            ["diff", GitCompare, "Diff"],
+            ["preview", ExternalLink, "Preview"],
+          ] as const).map(([value, Icon, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setTab(value)}
+              className={cn(
+                "flex h-11 items-center gap-2 border-b-2 px-5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all",
+                tab === value
+                  ? "border-pink-500 bg-pink-500/10 text-pink-400 shadow-[inset_0_-2px_0_#ff00a0]"
+                  : "border-transparent text-zinc-400 hover:border-zinc-700 hover:text-white",
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === "terminal" && actions.length > 0 && (
           <button
-            key={value}
             type="button"
-            onClick={() => setTab(value)}
-            className={cn(
-              "flex h-10 items-center gap-2 border-r border-white/10 px-4 text-[9px] font-bold uppercase tracking-[0.12em] transition-colors",
-              tab === value
-                ? "bg-pink-500/10 text-pink-400 shadow-[inset_0_-1px_0_#ff00a0]"
-                : "text-zinc-500 hover:text-white",
-            )}
+            onClick={downloadTerminalLogs}
+            title="Download terminal execution log"
+            className="mr-3 inline-flex items-center gap-1.5 rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-zinc-300 hover:border-pink-500/50 hover:bg-pink-500/10 hover:text-pink-400 transition-colors"
           >
-            <Icon className="h-3 w-3" />
-            {label}
+            <Download className="h-3 w-3" />
+            <span>Export Log</span>
           </button>
-        ))}
+        )}
       </div>
 
-      <div className="min-h-0 flex-1 bg-[#020203]">
+      {/* Viewport Canvas */}
+      <div className="min-h-0 flex-1 bg-[#020104]">
         {tab === "terminal" && (
           <div
             ref={terminalRef}
-            className="h-[468px] overflow-y-auto px-5 py-4 font-mono text-[11px] leading-6 text-zinc-300"
+            className="h-[520px] overflow-y-auto p-6 font-mono text-[11.5px] leading-relaxed text-zinc-300 selection:bg-pink-500/30"
           >
             {actions.length === 0 ? (
               <div className="grid h-full place-items-center text-center">
                 <div>
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+                  <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-zinc-500">
                     {status === "waiting" ? "Waiting for handoff" : "Waiting for execution"}
                   </div>
-                  <div className="mt-3 text-[11px] text-zinc-500">
+                  <div className="mt-2 text-[12px] text-zinc-600">
                     No runtime tool events have been emitted for this fighter yet.
                   </div>
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
+              <div className="space-y-5">
                 {actions.map(({ item, parsed }, index) => {
                   if (!parsed) return null;
                   const failed = parsed.state === "failed" || parsed.state === "error";
@@ -236,47 +283,48 @@ export default function LiveExecutionPane({
                     <div
                       key={`${parsed.toolCallId || item.t}-${index}`}
                       className={cn(
-                        "border-l pl-3",
+                        "rounded-md border-l-2 p-3 transition-colors",
                         failed
-                          ? "border-red-500/70"
+                          ? "border-red-500 bg-red-950/20"
                           : running
-                            ? "border-pink-500/70"
-                            : "border-white/10",
+                            ? "border-pink-500 bg-pink-950/20 shadow-[0_0_15px_rgba(255,0,160,0.1)]"
+                            : "border-white/10 bg-[#08050E]",
                       )}
                     >
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                        <span className="text-zinc-700">{timeLabel(item.t)}</span>
-                        <span className="text-pink-400">{prompt}</span>
-                        <span className="font-semibold text-zinc-100">{parsed.command}</span>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+                        <span className="text-zinc-500">{timeLabel(item.t)}</span>
+                        <span className="font-semibold text-pink-400">{prompt}</span>
+                        <span className="font-bold text-white">{parsed.command}</span>
                       </div>
 
                       {parsed.result && (
                         <pre
                           className={cn(
-                            "mt-1 whitespace-pre-wrap break-words font-mono text-[10.5px] leading-5",
-                            failed ? "text-red-300" : "text-zinc-400",
+                            "mt-2 whitespace-pre-wrap break-words rounded bg-black/40 p-3 font-mono text-[11px] leading-relaxed",
+                            failed ? "text-red-300" : "text-zinc-300",
                           )}
                         >
                           {parsed.result}
                         </pre>
                       )}
 
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-[9px] uppercase tracking-[0.08em]">
+                      <div className="mt-2 flex flex-wrap items-center gap-3 text-[9px] uppercase tracking-[0.1em]">
                         <span
                           className={cn(
+                            "font-bold",
                             failed
                               ? "text-red-400"
                               : running
-                                ? "text-amber-300"
+                                ? "text-pink-400 animate-pulse"
                                 : "text-emerald-400",
                           )}
                         >
-                          {running ? "● running" : failed ? "× failed" : "✓ done"}
+                          {running ? "● executing..." : failed ? "× failed" : "✓ done"}
                         </span>
-                        {parsed.turnId ? <span className="text-zinc-700">turn {parsed.turnId}</span> : null}
-                        {parsed.toolStep ? <span className="text-zinc-700">step {parsed.toolStep}</span> : null}
+                        {parsed.turnId ? <span className="text-zinc-500">turn {parsed.turnId}</span> : null}
+                        {parsed.toolStep ? <span className="text-zinc-500">step {parsed.toolStep}</span> : null}
                         {parsed.durationMs !== undefined && parsed.durationMs > 0 ? (
-                          <span className="text-zinc-700">{parsed.durationMs}ms</span>
+                          <span className="text-zinc-500">{parsed.durationMs}ms</span>
                         ) : null}
                       </div>
                     </div>
@@ -288,49 +336,65 @@ export default function LiveExecutionPane({
         )}
 
         {tab === "files" && (
-          <div className="h-[468px] overflow-y-auto p-4 font-mono text-[10px]">
+          <div className="h-[520px] overflow-y-auto p-6 font-mono text-[11px]">
             {fileEntries.length ? (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {fileEntries.map(([name, content]) => (
-                  <details key={name} className="border border-white/10 bg-[#070708]">
-                    <summary className="cursor-pointer px-3 py-2 text-zinc-200">
-                      {name}
-                      <span className="ml-2 text-zinc-600">{content.length} bytes</span>
+                  <details key={name} className="overflow-hidden rounded border border-white/10 bg-[#07050C]">
+                    <summary className="flex cursor-pointer items-center justify-between px-4 py-3 text-zinc-200 hover:bg-white/[0.02]">
+                      <div className="flex items-center gap-2">
+                        <FileCode2 className="h-3.5 w-3.5 text-pink-400" />
+                        <span className="font-semibold">{name}</span>
+                        <span className="text-zinc-500">({content.length} bytes)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          downloadArtifactFile(name, content);
+                        }}
+                        title={`Download ${name}`}
+                        className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-1 text-[9px] uppercase text-zinc-300 hover:border-pink-500 hover:text-pink-400"
+                      >
+                        <Download className="h-3 w-3" />
+                        <span>Save</span>
+                      </button>
                     </summary>
-                    <pre className="overflow-x-auto border-t border-white/10 p-3 text-zinc-400">
+                    <pre className="overflow-x-auto border-t border-white/10 bg-black/50 p-4 text-[10.5px] leading-relaxed text-zinc-300">
                       {content}
                     </pre>
                   </details>
                 ))}
               </div>
             ) : latestArtifact ? (
-              <pre className="whitespace-pre-wrap break-words text-zinc-400">{latestArtifact}</pre>
+              <pre className="whitespace-pre-wrap break-words rounded border border-white/10 bg-[#07050C] p-4 text-zinc-300">{latestArtifact}</pre>
             ) : (
-              <div className="grid h-full place-items-center text-zinc-600">No artifact snapshot emitted.</div>
+              <div className="grid h-full place-items-center text-zinc-500">No artifact snapshot emitted yet.</div>
             )}
           </div>
         )}
 
         {tab === "diff" && (
-          <div className="h-[468px] overflow-auto p-4 font-mono text-[10px] leading-5">
+          <div className="h-[520px] overflow-auto p-6 font-mono text-[11px] leading-relaxed">
             {artifacts.length < 2 ? (
-              <div className="grid h-full place-items-center text-zinc-600">
-                Diff appears after at least two artifact snapshots.
+              <div className="grid h-full place-items-center text-zinc-500">
+                Diff appears after at least two artifact snapshots are emitted.
               </div>
             ) : (
               diffRows.map((row, i) => (
                 <div
                   key={`${i}-${row.text}`}
                   className={cn(
-                    "whitespace-pre-wrap break-words px-2",
+                    "whitespace-pre-wrap break-words px-2.5 py-0.5 rounded-sm",
                     row.type === "add"
-                      ? "bg-emerald-500/5 text-emerald-300"
+                      ? "bg-emerald-500/10 text-emerald-300 font-medium"
                       : row.type === "remove"
-                        ? "bg-red-500/5 text-red-300"
-                        : "text-zinc-600",
+                        ? "bg-red-500/10 text-red-300 font-medium"
+                        : "text-zinc-500",
                   )}
                 >
-                  <span className="mr-2 select-none text-zinc-700">
+                  <span className="mr-2 select-none font-bold text-zinc-600">
                     {row.type === "add" ? "+" : row.type === "remove" ? "-" : " "}
                   </span>
                   {row.text}
@@ -341,7 +405,7 @@ export default function LiveExecutionPane({
         )}
 
         {tab === "preview" && (
-          <div className="h-[468px] bg-[#050506]">
+          <div className="h-[520px] bg-[#050308]">
             {previewUrl ? (
               <iframe
                 title={`${displayName} preview`}
@@ -351,11 +415,11 @@ export default function LiveExecutionPane({
             ) : (
               <div className="grid h-full place-items-center px-8 text-center font-mono">
                 <div>
-                  <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-600">
+                  <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-zinc-500">
                     Preview unavailable
                   </div>
-                  <div className="mt-3 max-w-[42ch] text-[10px] leading-5 text-zinc-500">
-                    A preview is shown only when the runtime emits a valid preview URL for this fighter.
+                  <div className="mt-2 max-w-[42ch] text-[11px] leading-5 text-zinc-600">
+                    A preview is shown only when the runtime emits a valid preview URL for this fighter workspace.
                   </div>
                 </div>
               </div>

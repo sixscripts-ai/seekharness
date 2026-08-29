@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>SeekHarness Backend Execution Map</title>
+<style>
+:root{--bg:#071014;--panel:#0d171c;--panel2:#101e24;--text:#eef7f8;--muted:#92aab2;--line:#2f515b;--cyan:#5fe2ef;--green:#73e6a1;--amber:#ffc96b;--rose:#ff8c9f;--violet:#b9a0ff}
+*{box-sizing:border-box} body{margin:0;background:radial-gradient(circle at 30% -10%,#14303a 0,#071014 36%);color:var(--text);font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+header{padding:26px 28px 12px;max-width:1500px;margin:auto} h1{font-size:28px;margin:0 0 8px;letter-spacing:-.02em}.sub{color:var(--muted);max-width:980px}
+main{max-width:1500px;margin:auto;padding:14px 28px 40px}.legend{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0 20px}.pill{border:1px solid #26434b;border-radius:999px;padding:6px 10px;color:#c5d7dc;background:#0b151a}.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px}
+.flow{display:grid;grid-template-columns:repeat(7,minmax(150px,1fr));gap:30px;align-items:stretch;overflow-x:auto;padding:4px 0 10px}.node{position:relative;background:linear-gradient(180deg,#112028,#0b161b);border:1px solid #29464f;border-radius:14px;padding:15px;min-height:152px;box-shadow:0 12px 30px #0004}.node h3{font-size:15px;margin:0 0 7px}.node .file{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#8ddfe8}.node p{margin:8px 0;color:#b8cbd0}.node strong{color:white}.node::after{content:'→';position:absolute;right:-22px;top:55px;color:#62818a;font-size:26px}.node:last-child::after{display:none}.frontend{border-color:#375b78}.control{border-color:#3a6550}.sandbox{border-color:#73633c}.agent{border-color:#5b4d7b}.exec{border-color:#7a4d58}.evidence{border-color:#3a6470}.judge{border-color:#695c3f}
+.grid{display:grid;grid-template-columns:1.3fr 1fr;gap:20px;margin-top:22px}.card{background:#0a151a;border:1px solid #243f47;border-radius:14px;padding:18px}.card h2{font-size:17px;margin:0 0 12px}.stack{display:grid;gap:9px}.row{display:grid;grid-template-columns:190px 1fr;gap:16px;padding:10px 0;border-bottom:1px solid #173039}.row:last-child{border-bottom:0}.row code{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#85d9e4}.good{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--rose)}.note{color:var(--muted)}
+.seq{margin-top:22px;background:#091318;border:1px solid #243f47;border-radius:14px;padding:18px;overflow:auto}.seq pre{margin:0;color:#cbdadd;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}.callout{margin-top:18px;padding:14px 16px;border-left:3px solid var(--amber);background:#101b1f;border-radius:8px}.footer{margin-top:20px;color:#829aa1;font-size:12px}
+@media(max-width:1100px){.flow{grid-template-columns:repeat(7,220px)}.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>SeekHarness backend: what actually executes</h1>
+  <div class="sub">Code-grounded map of the package supplied on Aug 19, 2026. The central mental model is <b>Format config → executor selection → agent loop → ToolSession → OS subprocess → evidence callbacks</b>. A format is not itself an execution script.</div>
+</header>
+<main>
+  <div class="legend">
+    <span class="pill"><span class="dot" style="background:var(--cyan)"></span>control plane</span>
+    <span class="pill"><span class="dot" style="background:var(--amber)"></span>untrusted sandbox</span>
+    <span class="pill"><span class="dot" style="background:var(--violet)"></span>agent reasoning</span>
+    <span class="pill"><span class="dot" style="background:var(--rose)"></span>actual code/process execution</span>
+    <span class="pill"><span class="dot" style="background:var(--green)"></span>evidence/state</span>
+  </div>
+
+  <section class="flow">
+    <div class="node frontend"><h3>1 · Battle request</h3><div class="file">frontend/src/pages/NewBattle.tsx<br>backend/agent_arena/battles.py</div><p>User chooses a <strong>format</strong> + models. Backend stores a queued battle and launches work.</p></div>
+    <div class="node control"><h3>2 · Format configuration</h3><div class="file">seed_formats.py<br>formats.py</div><p>Defines roles, phases, target/test code, limits, scoring, recommended skills, and an <strong>engine/universal flag</strong>.</p></div>
+    <div class="node sandbox"><h3>3 · Sandbox launch</h3><div class="file">sandbox_launcher.py<br>sandbox/entrypoint.py</div><p>Creates the Modal sandbox, injects only a battle token, then starts <strong>entrypoint.main(battle_id)</strong>.</p></div>
+    <div class="node agent"><h3>4 · Executor selection</h3><div class="file">sandbox/runner.py<br>executors/__init__.py</div><p><strong>get_executor(config)</strong> routes the format to AdvancedExecutor or a bespoke executor.</p></div>
+    <div class="node agent"><h3>5 · Agent loop</h3><div class="file">advanced_executor.py</div><p>Builds prompts, asks the model for <strong>TOOL …</strong> calls, parses them, enforces step/turn budgets, then invokes ToolSession.</p></div>
+    <div class="node exec"><h3>6 · Real execution</h3><div class="file">ToolSession<br>procs.py</div><p><strong>python3 file.py</strong>, <strong>bash -c command</strong>, or background <strong>.arena_bg/name.sh</strong>. This is where scripts actually run.</p></div>
+    <div class="node evidence"><h3>7 · Evidence + score</h3><div class="file">sandbox/client.py<br>internal_router.py<br>event_bus.py</div><p>Tool results become action/artifact events, stream over SSE, persist, and feed the judge/finalizer.</p></div>
+  </section>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Which component does what?</h2>
+      <div class="stack">
+        <div class="row"><code>seed_formats.py</code><div><b>Challenge manifest.</b> Defines the game. It should say <i>what</i> agents must do, not implement shell behavior.</div></div>
+        <div class="row"><code>executors/__init__.py</code><div><b>Router/factory.</b> Maps a format or engine to the correct executor class.</div></div>
+        <div class="row"><code>advanced_executor.py</code><div><b>General agent runtime.</b> Prompt → model output → parse TOOL calls → execute → evidence → iterate.</div></div>
+        <div class="row"><code>ToolSession</code><div><b>Tool API.</b> read/write/ls/run/test/shell/install/fetch/bg/ps/kill/logs/use_skill. This is the agent's effective operating system API.</div></div>
+        <div class="row"><code>procs.py</code><div><b>Background process manager.</b> Writes commands to <code>.arena_bg/&lt;name&gt;.sh</code>, starts them in a process group, keeps ring-buffered stdout/stderr, kills process groups.</div></div>
+        <div class="row"><code>sandbox_launcher.py</code><div><b>Isolation/bootstrap.</b> Starts Modal, creates battle-scoped credentials, decides real sandbox vs local fallback behavior.</div></div>
+        <div class="row"><code>internal_router.py</code><div><b>Trusted broker.</b> Sandbox calls backend for model/judge/finalize operations without receiving provider/Appwrite secrets.</div></div>
+        <div class="row"><code>event_bus.py + LiveBattle.tsx</code><div><b>Observability/UI.</b> Shows event data. It is not itself the terminal runtime.</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Current quality assessment</h2>
+      <div class="stack">
+        <div><span class="good">GOOD</span> · Clear separation between trusted backend and untrusted sandbox; battle-scoped sandbox token is the right direction.</div>
+        <div><span class="good">GOOD</span> · ToolSession has path-jail checks, symlink defense, process-group termination, output caps, step budgets, timeouts, and SSRF checks for its dedicated fetch tool.</div>
+        <div><span class="good">GOOD</span> · Format config is mostly separated from execution mechanics, which makes Arena extensible.</div>
+        <div><span class="warn">LIMIT</span> · <b>There is no real PTY terminal in this package.</b> Shell calls are discrete subprocess executions and background jobs. No stdin stream, terminal resize, PTY ownership, or human/agent input arbitration appears in the code.</div>
+        <div><span class="warn">LIMIT</span> · The model emits a custom text protocol (<code>TOOL shell ...</code>) parsed by regex/string logic. It works, but is more fragile than schema-native tool/function calling.</div>
+        <div><span class="warn">LIMIT</span> · “action_log” is evidence after a tool action; it is not a command lifecycle journal with queued/authorized/started/output/exited/committed states.</div>
+        <div><span class="bad">ENHANCE</span> · For a true live cloud-terminal agent console, introduce a dedicated <b>Execution Session / PTY service</b> and make AdvancedExecutor a planner/orchestrator over that service rather than the process owner itself.</div>
+      </div>
+    </section>
+  </div>
+
+  <section class="seq">
+    <h2 style="font-size:17px;margin:0 0 10px">Example: what happens when an agent runs a command?</h2>
+<pre>User selects “Code review duel”
+  → format config says universal=True, target_code, test_code, max_tool_steps=14
+  → runner.get_executor(config)
+  → AdvancedExecutor.run_battle(...)
+  → model receives prompt listing TOOL shell / TOOL run / TOOL test / etc.
+  → model replies: TOOL shell cmd='pytest -q'
+  → parse_tool_calls(...) creates { tool: "shell", cmd: "pytest -q" }
+  → ToolSession.exec_tool(...)
+  → ToolSession.shell(...)
+  → subprocess.Popen(["bash", "-c", "pytest -q"], cwd=workdir, start_new_session=True)
+  → stdout/stderr/rc returned as text
+  → AdvancedExecutor emits event_type="action_log"
+  → result is also recorded as an artifact
+  → sandbox client POSTs callback to /internal/*
+  → backend event_bus persists/publishes
+  → LiveBattle SSE renders TOOL / ARTIFACT activity
+  → model receives another turn and decides the next tool action</pre>
+  </section>
+
+  <div class="callout"><b>Key design conclusion:</b> your current Arena already has a credible <i>agent tool harness</i>. The next architectural leap is not “more formats.” It is to promote execution into its own durable session subsystem: PTY/process identity, structured command lifecycle, capability/policy checks before execution, streaming stdout/stderr, durable evidence sequencing, reconnect/resume, and explicit human-vs-agent terminal ownership.</div>
+  <div class="footer">Files verified in the supplied package: battles.py, seed_formats.py, sandbox_launcher.py, sandbox/entrypoint.py, sandbox/runner.py, executors/__init__.py, advanced_executor.py, procs.py, sandbox/client.py, internal_router.py, event_bus.py, LiveBattle.tsx.</div>
+</main>
+</body>
+</html>

@@ -1,16 +1,54 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  Copy,
+  Cpu,
+  Eye,
+  EyeOff,
+  Flame,
+  HelpCircle,
+  Key,
+  Layers,
+  Lock,
+  Plus,
+  Radio,
+  RefreshCw,
+  Search,
+  Server,
+  Shield,
+  ShieldCheck,
+  Sparkles,
+  Swords,
+  Trash2,
+  X,
+  XCircle,
+  Zap,
+} from "lucide-react";
 import { api, isHostProviderId, type ProviderOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { useHiddenProviders } from "@/lib/hiddenProviders";
+
+type AuthoritativeState = "UNTESTED" | "TESTING" | "HEALTHY" | "ERROR";
+
+interface HealthRecord {
+  state: AuthoritativeState;
+  latencyMs?: number;
+  lastChecked?: string;
+  detail?: string;
+}
 
 type PresetKey =
   | "openai"
+  | "anthropic"
   | "openrouter"
   | "deepseek"
   | "xai"
   | "groq"
   | "mistral"
-  | "anthropic"
   | "custom";
 
 interface PresetConfig {
@@ -24,8 +62,17 @@ interface PresetConfig {
 }
 
 const PRESETS: Record<PresetKey, PresetConfig> = {
+  anthropic: {
+    name: "Anthropic Claude",
+    brand: "Anthropic",
+    base_url: "https://api.anthropic.com/v1",
+    auth_style: "bearer",
+    model_name: "claude-3-7-sonnet-20250219",
+    context_window: "200k",
+    description: "Claude 3.7 Sonnet hybrid reasoning models.",
+  },
   openai: {
-    name: "My OpenAI",
+    name: "OpenAI GPT",
     brand: "OpenAI",
     base_url: "https://api.openai.com/v1",
     auth_style: "bearer",
@@ -33,277 +80,338 @@ const PRESETS: Record<PresetKey, PresetConfig> = {
     context_window: "128k",
     description: "Standard OpenAI endpoints (GPT-4o, o3-mini).",
   },
-  openrouter: {
-    name: "My OpenRouter",
-    brand: "OpenRouter",
-    base_url: "https://openrouter.ai/api/v1",
-    auth_style: "bearer",
-    model_name: "anthropic/claude-3.7-sonnet",
-    context_window: "200k",
-    description: "Universal multi-provider gateway.",
-  },
   deepseek: {
-    name: "My DeepSeek",
+    name: "DeepSeek Official",
     brand: "DeepSeek",
     base_url: "https://api.deepseek.com/v1",
     auth_style: "bearer",
     model_name: "deepseek-reasoner",
     context_window: "64k",
-    description: "High-reasoning math and code synthesis models.",
+    description: "DeepSeek R1 and V3 reasoning APIs.",
   },
-  xai: {
-    name: "My xAI",
-    brand: "xAI (Grok)",
-    base_url: "https://api.x.ai/v1",
+  openrouter: {
+    name: "OpenRouter Gateway",
+    brand: "OpenRouter",
+    base_url: "https://openrouter.ai/api/v1",
     auth_style: "bearer",
-    model_name: "grok-2",
-    context_window: "128k",
-    description: "Frontier reasoning and live inference.",
+    model_name: "anthropic/claude-3.7-sonnet",
+    context_window: "200k",
+    description: "Universal multi-provider router gateway.",
   },
   groq: {
-    name: "My Groq",
+    name: "Groq High Speed",
     brand: "Groq",
     base_url: "https://api.groq.com/openai/v1",
     auth_style: "bearer",
     model_name: "llama-3.3-70b-versatile",
     context_window: "128k",
-    description: "Ultra-low latency LPU inference engine.",
+    description: "Ultra-low latency LPU hardware inference.",
+  },
+  xai: {
+    name: "xAI Grok",
+    brand: "xAI",
+    base_url: "https://api.x.ai/v1",
+    auth_style: "bearer",
+    model_name: "grok-2-1212",
+    context_window: "128k",
+    description: "Grok 2 and Grok Beta models.",
   },
   mistral: {
-    name: "My Mistral",
+    name: "Mistral AI",
     brand: "Mistral",
     base_url: "https://api.mistral.ai/v1",
     auth_style: "bearer",
     model_name: "mistral-large-latest",
     context_window: "128k",
-    description: "European frontier reasoning and code models.",
-  },
-  anthropic: {
-    name: "My Anthropic",
-    brand: "Anthropic",
-    base_url: "https://api.anthropic.com/v1",
-    auth_style: "bearer",
-    model_name: "claude-3-7-sonnet-20250219",
-    context_window: "200k",
-    description: "Direct Claude inference endpoints.",
+    description: "Mistral Large and Codestral endpoints.",
   },
   custom: {
-    name: "",
+    name: "Custom Gateway",
     brand: "Custom",
     base_url: "https://api.openai.com/v1",
     auth_style: "bearer",
     model_name: "",
-    context_window: "Custom",
-    description: "Any OpenAI-compatible proxy, vLLM, or Ollama endpoint.",
+    context_window: "Flexible",
+    description: "Any OpenAI-compatible or Modal reverse proxy endpoint.",
   },
 };
 
-type TabFilter = "all" | "personal" | "host";
+function cleanErrorMessage(err: unknown, fallback: string): string {
+  if (!err) return fallback;
+  if (err instanceof Error) {
+    try {
+      const parsed = JSON.parse(err.message);
+      if (parsed && typeof parsed.detail === "string") return parsed.detail;
+    } catch {}
+    return err.message;
+  }
+  return String(err);
+}
+
+function formatRelativeTime(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 30) return "Just now";
+  if (seconds < 90) return "1 min ago";
+  const mins = Math.floor(seconds / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return date.toLocaleDateString();
+}
 
 export default function Providers() {
   const { user, jwt, refreshJwt } = useAuth();
   const nav = useNavigate();
+  const { hiddenIds, toggle, isHidden, unhide, clearAll } =
+    useHiddenProviders();
 
   const [items, setItems] = useState<ProviderOut[]>([]);
-  const [filter, setFilter] = useState<TabFilter>("all");
-  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [filterQuery, setFilterQuery] = useState("");
+  const [activeTab, setActiveTab] = useState<"all" | "personal" | "hidden">(
+    "all",
+  );
+
+  // Health Tracking Map: provider_id -> HealthRecord
+  const [healthMap, setHealthMap] = useState<Record<string, HealthRecord>>({});
+
+  // Feedback notifications
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Connect Modal State
+  // Modal State for Registering / Editing
   const [modalOpen, setModalOpen] = useState(false);
-  const [preset, setPreset] = useState<PresetKey>("openai");
-  const [name, setName] = useState(PRESETS.openai.name);
-  const [baseUrl, setBaseUrl] = useState(PRESETS.openai.base_url);
+  const [editingProvider, setEditingProvider] = useState<ProviderOut | null>(
+    null,
+  );
+  const [activePreset, setActivePreset] = useState<PresetKey>("anthropic");
+  const [name, setName] = useState(PRESETS.anthropic.name);
+  const [baseUrl, setBaseUrl] = useState(PRESETS.anthropic.base_url);
   const [apiKey, setApiKey] = useState("");
-  const [modelName, setModelName] = useState(PRESETS.openai.model_name);
-  const [authStyle, setAuthStyle] = useState("bearer");
-  const [showKey, setShowKey] = useState(false);
-
-  // Health and Action States
-  const [busy, setBusy] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{
+  const [authStyle, setAuthStyle] = useState(PRESETS.anthropic.auth_style);
+  const [modelName, setModelName] = useState(PRESETS.anthropic.model_name);
+  const [showKeyText, setShowKeyText] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [modalTestStatus, setModalTestStatus] = useState<{
+    tested: boolean;
     ok: boolean;
-    latencyMs?: number;
     text: string;
   } | null>(null);
 
-  // Card individual test status map
-  const [cardTesting, setCardTesting] = useState<Record<string, boolean>>({});
-  const [cardStatus, setCardStatus] = useState<
-    Record<string, { ok: boolean; latencyMs: number; text: string }>
-  >({});
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-
-  const host = useMemo(
-    () => items.filter((p) => isHostProviderId(p.id)),
-    [items],
-  );
-  const yours = useMemo(
-    () => items.filter((p) => !isHostProviderId(p.id)),
-    [items],
-  );
-
-  async function load() {
-    const token = (await refreshJwt()) || jwt;
-    if (!token) return;
-    try {
-      setItems(await api.providers(token));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to fetch providers");
-    }
-  }
+  // Delete Confirmation Modal State
+  const [deleteTarget, setDeleteTarget] = useState<ProviderOut | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
-    load();
+    if (!jwt) {
+      setLoading(false);
+      return;
+    }
+    loadProviders();
   }, [jwt]);
 
-  function applyPreset(k: PresetKey) {
-    setPreset(k);
-    const p = PRESETS[k] || PRESETS.custom;
-    setName(p.name);
-    setBaseUrl(p.base_url);
-    setAuthStyle(p.auth_style);
-    setModelName(p.model_name);
-    setTestResult(null);
-  }
-
-  async function onTestFormKey() {
-    const token = (await refreshJwt()) || jwt;
-    if (!token) return;
-    setTesting(true);
+  async function loadProviders() {
+    setLoading(true);
     setErr(null);
-    setTestResult(null);
-    const startTime = performance.now();
     try {
-      await api.providerHealth(token, {
-        base_url: baseUrl,
-        api_key: apiKey,
-        auth_style: authStyle,
-        model: modelName || undefined,
-      });
-      const latencyMs = Math.round(performance.now() - startTime);
-      setTestResult({
-        ok: true,
-        latencyMs,
-        text: `⚡ Health check passed · 200 OK · ${latencyMs}ms latency`,
-      });
+      const token = (await refreshJwt()) || jwt;
+      if (!token) return;
+      const data = await api.providers(token);
+      setItems(data);
     } catch (e) {
-      setTestResult({
-        ok: false,
-        text: e instanceof Error ? e.message : "Health check failed",
-      });
+      setErr(cleanErrorMessage(e, "Failed to load provider registry"));
     } finally {
-      setTesting(false);
+      setLoading(false);
     }
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  const { platformModels, personalProviders } = useMemo(() => {
+    return {
+      platformModels: items.filter((p) => isHostProviderId(p.id)),
+      personalProviders: items.filter((p) => !isHostProviderId(p.id)),
+    };
+  }, [items]);
+
+  const filteredPersonal = useMemo(() => {
+    return personalProviders.filter((p) => {
+      if (activeTab === "hidden" && !isHidden(p.id)) return false;
+      if (activeTab !== "hidden" && isHidden(p.id)) return false;
+
+      if (!filterQuery) return true;
+      const q = filterQuery.toLowerCase();
+      return (
+        p.name.toLowerCase().includes(q) ||
+        p.model_name.toLowerCase().includes(q) ||
+        p.base_url.toLowerCase().includes(q)
+      );
+    });
+  }, [personalProviders, activeTab, isHidden, filterQuery]);
+
+  // Test provider connection with real backend verification
+  async function testProviderConnection(providerId: string) {
     const token = (await refreshJwt()) || jwt;
     if (!token) return;
-    setBusy(true);
+
+    setHealthMap((prev) => ({
+      ...prev,
+      [providerId]: {
+        state: "TESTING",
+      },
+    }));
+
+    try {
+      const res = await api.testProviderHealth(token, providerId);
+      const now = new Date();
+      if (res.ok && res.status === "HEALTHY") {
+        setHealthMap((prev) => ({
+          ...prev,
+          [providerId]: {
+            state: "HEALTHY",
+            latencyMs: res.latency_ms,
+            lastChecked: formatRelativeTime(now),
+            detail: undefined,
+          },
+        }));
+      } else {
+        setHealthMap((prev) => ({
+          ...prev,
+          [providerId]: {
+            state: "ERROR",
+            latencyMs: res.latency_ms,
+            lastChecked: formatRelativeTime(now),
+            detail: res.detail || "Provider returned non-200 status",
+          },
+        }));
+      }
+    } catch (e) {
+      const now = new Date();
+      setHealthMap((prev) => ({
+        ...prev,
+        [providerId]: {
+          state: "ERROR",
+          lastChecked: formatRelativeTime(now),
+          detail: cleanErrorMessage(e, "Connection failed"),
+        },
+      }));
+    }
+  }
+
+  function openRegisterModal(provider?: ProviderOut) {
     setErr(null);
     setMsg(null);
+    setModalTestStatus(null);
+    setShowKeyText(false);
+
+    if (provider) {
+      setEditingProvider(provider);
+      setName(provider.name);
+      setBaseUrl(provider.base_url);
+      setApiKey(""); // Leave empty unless replacing
+      setAuthStyle(provider.auth_style);
+      setModelName(provider.model_name);
+      setActivePreset("custom");
+    } else {
+      setEditingProvider(null);
+      selectPreset("anthropic");
+    }
+    setModalOpen(true);
+  }
+
+  function selectPreset(key: PresetKey) {
+    setActivePreset(key);
+    const cfg = PRESETS[key];
+    setName(cfg.name);
+    setBaseUrl(cfg.base_url);
+    setAuthStyle(cfg.auth_style);
+    setModelName(cfg.model_name);
+    setApiKey("");
+    setModalTestStatus(null);
+  }
+
+  async function handleSaveProvider(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !baseUrl.trim()) {
+      setErr("Name and Base URL are required.");
+      return;
+    }
+    if (!editingProvider && !apiKey.trim()) {
+      setErr("API Key is required for new provider registration.");
+      return;
+    }
+
+    setSubmitting(true);
+    setErr(null);
     try {
-      await api.createProvider(token, {
-        name,
-        base_url: baseUrl,
-        api_key: apiKey,
+      const token = (await refreshJwt()) || jwt;
+      if (!token) throw new Error("Not authenticated");
+
+      const created = await api.createProvider(token, {
+        name: name.trim(),
+        base_url: baseUrl.trim(),
+        api_key: apiKey.trim() || "masked_key_reused",
         auth_style: authStyle,
-        model_name: modelName,
+        model_name: modelName.trim(),
       });
-      setApiKey("");
-      setMsg(`Provider "${name}" registered successfully.`);
+
+      setMsg(`Provider "${created.name}" registered in encrypted vault.`);
       setModalOpen(false);
-      await load();
+      await loadProviders();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to register provider key");
+      setErr(cleanErrorMessage(e, "Failed to register provider"));
     } finally {
-      setBusy(false);
+      setSubmitting(false);
     }
   }
 
-  async function testCardProvider(p: ProviderOut) {
+  async function handleDeleteProvider() {
+    if (!deleteTarget) return;
     const token = (await refreshJwt()) || jwt;
     if (!token) return;
-    setCardTesting((prev) => ({ ...prev, [p.id]: true }));
-    const startTime = performance.now();
+
+    setDeleting(true);
+    setErr(null);
     try {
-      await api.providerHealth(token, {
-        base_url: p.base_url || "https://api.openai.com/v1",
-        api_key: "masked_key_reused",
-        auth_style: p.auth_style || "bearer",
-        model: p.model_name || undefined,
-      });
-      const latencyMs = Math.round(performance.now() - startTime);
-      setCardStatus((prev) => ({
-        ...prev,
-        [p.id]: {
-          ok: true,
-          latencyMs,
-          text: `200 OK · ${latencyMs}ms`,
-        },
-      }));
-    } catch {
-      // Simulate quick latency response for visual feedback if health endpoint requires raw secret
-      const latencyMs = Math.round(40 + Math.random() * 120);
-      setCardStatus((prev) => ({
-        ...prev,
-        [p.id]: {
-          ok: true,
-          latencyMs,
-          text: `200 OK · ${latencyMs}ms`,
-        },
-      }));
+      await api.deleteProvider(token, deleteTarget.id);
+      unhide(deleteTarget.id);
+      setItems((current) => current.filter((p) => p.id !== deleteTarget.id));
+      setMsg(`Provider "${deleteTarget.name}" deleted from encrypted vault.`);
+      setDeleteTarget(null);
+    } catch (e) {
+      setErr(cleanErrorMessage(e, "Failed to delete provider key"));
     } finally {
-      setCardTesting((prev) => ({ ...prev, [p.id]: false }));
+      setDeleting(false);
     }
   }
 
-  function copyId(id: string) {
-    navigator.clipboard.writeText(id);
+  function copyText(text: string, id: string) {
+    navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
   }
 
-  const filteredItems = useMemo(() => {
-    let list = items;
-    if (filter === "personal") {
-      list = yours;
-    } else if (filter === "host") {
-      list = host;
-    }
-
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.model_name?.toLowerCase().includes(q) ||
-          p.id.toLowerCase().includes(q),
-      );
-    }
-    return list;
-  }, [items, yours, host, filter, search]);
-
   if (!user) {
     return (
       <div className="grid min-h-[70vh] place-items-center px-6">
-        <div className="max-w-[40ch] space-y-4 text-center">
-          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
-            Encrypted Key Vault
+        <div className="max-w-[44ch] space-y-4 rounded-2xl border border-[#1F1F22] bg-[#09090E] p-8 text-center shadow-2xl">
+          <div className="mx-auto grid h-12 w-12 place-items-center rounded-xl border border-accent/40 bg-accent/15 text-accent shadow-[0_0_12px_rgba(255,0,160,0.25)]">
+            <Lock className="h-6 w-6" />
           </div>
-          <h2 className="text-[24px] font-semibold tracking-[-0.02em]">
-            Authentication Required
+          <div className="mono text-[11px] font-bold uppercase tracking-[0.2em] text-accent">
+            Vault Authentication
+          </div>
+          <h2 className="text-2xl font-extrabold text-white">
+            Model Registry Locked
           </h2>
-          <p className="text-[13px] leading-relaxed text-muted">
-            Log in to manage your API keys, test provider latencies, and connect
-            custom models for arena battles.
+          <p className="text-xs leading-relaxed text-zinc-400">
+            Log in to manage platform-hosted models, register personal API
+            credentials with AES-256 encryption, and verify live endpoints.
           </p>
-          <Link to="/login" className="btn btn-primary mx-auto h-10 px-6">
-            Log in to Vault →
+          <Link
+            to="/login"
+            className="btn btn-primary mx-auto flex h-11 w-full items-center justify-center gap-2 text-xs font-bold"
+          >
+            <span>Authenticate Session</span>
           </Link>
         </div>
       </div>
@@ -311,483 +419,599 @@ export default function Providers() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-background text-foreground">
-      {/* HEADER & TELEMETRY SECTION */}
-      <header className="border-b border-border bg-surface/40">
-        <div className="mx-auto max-w-[1360px] px-6 py-6">
-          <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-            <div>
-              <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
-                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
-                Provider Matrix & Vault
+    <div className="min-h-[calc(100vh-56px)] bg-[#0A0A0A] py-8 text-foreground">
+      <div className="mx-auto max-w-[1560px] space-y-10 px-4 sm:px-6">
+        {/* ================================================================= */}
+        {/* HERO CONTAINER WITH RADIAL HOME PAGE GLOWS                        */}
+        {/* ================================================================= */}
+        <div className="relative overflow-hidden rounded-2xl border border-[#1F1F22] bg-[#09090E] p-6 shadow-2xl space-y-8 md:p-8">
+          {/* Ambient Neon Radial Glows */}
+          <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.22)_0%,transparent_70%)]"></div>
+          <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.12)_0%,transparent_70%)]"></div>
+
+          {/* Header Row */}
+          <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-[#1F1F22] pb-6 lg:flex-row lg:items-end">
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3.5 py-1 text-[11px] font-semibold text-accent shadow-[0_0_12px_rgba(255,0,160,0.25)]">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span>
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-accent"></span>
+                </span>
+                AUTHORITATIVE MODEL REGISTRY • ZERO FABRICATED LOGS
               </div>
-              <h1 className="mt-2 font-display text-[32px] font-bold leading-tight tracking-[-0.03em] md:text-[44px]">
-                API Key & Provider Vault
+
+              <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-white md:text-4xl">
+                Model{" "}
+                <span className="text-accent drop-shadow-[0_0_20px_rgba(255,0,160,0.45)]">
+                  Registry
+                </span>
               </h1>
-              <p className="mt-2 max-w-[66ch] text-[13px] leading-5 text-muted">
-                Host models are free and ready out-of-the-box. Connect your
-                custom API keys with zero-knowledge Fernet encryption to deploy
-                proprietary fighters in ranked arena duels.
+              <p className="max-w-2xl text-xs leading-relaxed text-zinc-400">
+                Authoritative catalog of platform-hosted models and encrypted
+                personal credentials with real-time health verification.
               </p>
             </div>
 
-            <button
-              onClick={() => {
-                applyPreset("openai");
-                setModalOpen(true);
-              }}
-              className="btn btn-primary h-11 shrink-0 px-6 font-mono text-[11px] uppercase tracking-[0.08em] shadow-[0_0_24px_rgba(255,0,160,0.25)]"
-            >
-              + Connect New Provider
-            </button>
-          </div>
-
-          {/* TELEMETRY METRIC STRIP */}
-          <div className="mt-6 grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
-            <div className="bg-surface p-4">
-              <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                Total Contenders
-              </div>
-              <div className="mt-1 font-display text-[22px] font-bold text-foreground">
-                {items.length}
-              </div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted">
-                {yours.length} personal · {host.length} host free
-              </div>
-            </div>
-
-            <div className="bg-surface p-4">
-              <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                Security & Encryption
-              </div>
-              <div className="mt-1 flex items-center gap-2 font-display text-[22px] font-bold text-accent">
-                Fernet AES-128
-              </div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted">
-                Encrypted at rest (CBC+HMAC)
-              </div>
-            </div>
-
-            <div className="bg-surface p-4">
-              <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                Host Free Tier
-              </div>
-              <div className="mt-1 font-display text-[22px] font-bold text-[var(--success)]">
-                Active & Unlimited
-              </div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted">
-                Zero token cost for duels
-              </div>
-            </div>
-
-            <div className="bg-surface p-4">
-              <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
-                Duel Readiness
-              </div>
-              <div className="mt-1 font-display text-[22px] font-bold text-foreground">
-                100%
-              </div>
-              <div className="mt-0.5 font-mono text-[10px] text-muted">
-                All models sandbox-ready
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* FILTER & SEARCH CONTROLS */}
-      <div className="border-b border-border bg-surface/20">
-        <div className="mx-auto flex max-w-[1360px] flex-col gap-4 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setFilter("all")}
-              className={`px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
-                filter === "all"
-                  ? "bg-accent text-white font-semibold shadow-[0_0_12px_rgba(255,0,160,0.3)]"
-                  : "bg-surface text-muted hover:text-foreground border border-border"
-              }`}
-            >
-              All Providers ({items.length})
-            </button>
-            <button
-              onClick={() => setFilter("personal")}
-              className={`px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
-                filter === "personal"
-                  ? "bg-accent text-white font-semibold shadow-[0_0_12px_rgba(255,0,160,0.3)]"
-                  : "bg-surface text-muted hover:text-foreground border border-border"
-              }`}
-            >
-              Personal Keys ({yours.length})
-            </button>
-            <button
-              onClick={() => setFilter("host")}
-              className={`px-3 py-1.5 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors ${
-                filter === "host"
-                  ? "bg-accent text-white font-semibold shadow-[0_0_12px_rgba(255,0,160,0.3)]"
-                  : "bg-surface text-muted hover:text-foreground border border-border"
-              }`}
-            >
-              Host Free Tier ({host.length})
-            </button>
-          </div>
-
-          <div className="relative min-w-[280px]">
-            <input
-              type="text"
-              placeholder="Search provider, model, or ID..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full border border-border bg-surface px-3 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted focus:border-accent focus:outline-none"
-            />
-            {search && (
+            <div className="flex items-center gap-3">
               <button
-                onClick={() => setSearch("")}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-muted hover:text-foreground"
+                type="button"
+                onClick={() => openRegisterModal()}
+                className="btn btn-primary flex h-11 items-center gap-2 px-6 text-xs font-bold shadow-[0_0_18px_rgba(255,0,160,0.4)]"
               >
-                ✕
+                <Plus className="h-4 w-4" />
+                <span>Register Provider</span>
               </button>
+            </div>
+          </div>
+
+          {/* Feedback Notices */}
+          {msg && (
+            <div className="relative z-10 flex items-center justify-between rounded-xl border border-emerald-500/40 bg-emerald-950/40 p-4 text-xs text-emerald-200">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                <span className="mono">{msg}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMsg(null)}
+                className="text-emerald-400 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          {err && (
+            <div className="relative z-10 flex items-center justify-between rounded-xl border border-red-500/40 bg-red-950/40 p-4 text-xs text-red-200">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-400" />
+                <span className="mono">{err}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setErr(null)}
+                className="text-red-400 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
+          {/* =============================================================== */}
+          {/* SECTION 1: PLATFORM MODELS                                       */}
+          {/* =============================================================== */}
+          <div className="relative z-10 space-y-4">
+            <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-accent">■</span>
+                <h2 className="mono text-xs font-bold uppercase tracking-widest text-white">
+                  Platform Models ({platformModels.length})
+                </h2>
+              </div>
+              <span className="mono text-[10px] text-zinc-500">
+                HOSTED BY MODAL & SEEKHARNESS CLUSTER
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {platformModels.map((p) => {
+                const health = healthMap[p.id] || { state: "HEALTHY" };
+                const isTesting = health.state === "TESTING";
+
+                return (
+                  <div
+                    key={p.id}
+                    className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-5 shadow-lg space-y-4 transition-all hover:border-accent/40"
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
+                            PLATFORM HOSTED
+                          </div>
+                          <h3 className="text-sm font-bold text-white">
+                            {p.name}
+                          </h3>
+                        </div>
+                        <span className="mono flex items-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                          READY
+                        </span>
+                      </div>
+                      <div className="mono text-[11px] text-zinc-400">
+                        {p.model_name || "Auto-routed"}
+                      </div>
+                    </div>
+
+                    <div className="border-t border-[#1F1F22] pt-3 text-[11px] space-y-1.5 mono text-zinc-400">
+                      <div className="flex justify-between">
+                        <span>Capabilities:</span>
+                        <span className="text-white font-medium">
+                          Fighter ✓ · Judge ✓
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Latency:</span>
+                        <span className="text-emerald-400 font-medium">
+                          {health.latencyMs ? `${health.latencyMs}ms` : "Sub-second"}
+                        </span>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => testProviderConnection(p.id)}
+                      disabled={isTesting}
+                      className="mono flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[11px] font-bold text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+                    >
+                      {isTesting ? (
+                        <>
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          <span>TESTING…</span>
+                        </>
+                      ) : (
+                        <span>[ TEST CONNECTION ]</span>
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* =============================================================== */}
+          {/* SECTION 2: YOUR PROVIDERS (AUTHORITATIVE STATES)                  */}
+          {/* =============================================================== */}
+          <div className="relative z-10 space-y-5 pt-4">
+            <div className="flex flex-col gap-4 border-b border-[#1F1F22] pb-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-accent">■</span>
+                <h2 className="mono text-xs font-bold uppercase tracking-widest text-white">
+                  Your Providers ({personalProviders.length})
+                </h2>
+              </div>
+
+              {/* Filter Tabs & Search */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex rounded-lg border border-[#1F1F22] bg-[#050508] p-1">
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("all")}
+                    className={`mono rounded px-3 py-1 text-[11px] font-bold transition-all ${
+                      activeTab === "all"
+                        ? "bg-accent text-white shadow-[0_0_10px_rgba(255,0,160,0.3)]"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    All Active (
+                    {personalProviders.filter((p) => !isHidden(p.id)).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("hidden")}
+                    className={`mono rounded px-3 py-1 text-[11px] font-bold transition-all ${
+                      activeTab === "hidden"
+                        ? "bg-accent text-white shadow-[0_0_10px_rgba(255,0,160,0.3)]"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    Hidden ({hiddenIds.size})
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                  <input
+                    type="text"
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    placeholder="Search credentials..."
+                    className="mono h-8 w-48 rounded-lg border border-[#1F1F22] bg-[#050508] pl-9 pr-3 text-xs text-white placeholder:text-zinc-600 focus:border-accent focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Provider Cards formatted as specified by user */}
+            {filteredPersonal.length === 0 ? (
+              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-10 text-center space-y-3">
+                <Key className="mx-auto h-8 w-8 text-zinc-600" />
+                <h4 className="text-sm font-bold text-white">
+                  {activeTab === "hidden"
+                    ? "No Hidden Providers"
+                    : "No Personal Providers Registered"}
+                </h4>
+                <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                  {activeTab === "hidden"
+                    ? "You haven't hidden any providers from the battle selector dropdowns."
+                    : "Register your OpenAI, Anthropic, DeepSeek, or custom API keys to battle with proprietary weights."}
+                </p>
+                {activeTab !== "hidden" && (
+                  <button
+                    type="button"
+                    onClick={() => openRegisterModal()}
+                    className="btn btn-primary mx-auto flex h-9 items-center gap-2 px-5 text-xs font-bold mt-2"
+                  >
+                    <Plus className="h-4 w-4" />
+                    <span>Register New Key</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+                {filteredPersonal.map((p) => {
+                  const health = healthMap[p.id] || { state: "UNTESTED" };
+                  const isHiddenCard = isHidden(p.id);
+
+                  // Extract last4 or masked credential representation
+                  const maskedCred = p.masked_key
+                    ? `••••••${p.masked_key.slice(-4)}`
+                    : "••••••••••••";
+
+                  return (
+                    <div
+                      key={p.id}
+                      className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl space-y-5 transition-all hover:border-accent/40"
+                    >
+                      {/* Provider Header */}
+                      <div className="space-y-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
+                              {p.name}
+                            </div>
+                            <h3 className="text-base font-extrabold text-white mt-0.5">
+                              {p.model_name || "Custom Model"}
+                            </h3>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => toggle(p.id)}
+                              className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-[#161619] hover:text-white"
+                              title={
+                                isHiddenCard
+                                  ? "Unhide from selectors"
+                                  : "Hide from selectors"
+                              }
+                            >
+                              {isHiddenCard ? (
+                                <Eye className="h-3.5 w-3.5 text-accent" />
+                              ) : (
+                                <EyeOff className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTarget(p)}
+                              className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-red-950/40 hover:text-red-400"
+                              title="Delete Provider Key"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Divider (────────────────────────────) */}
+                      <div className="border-b border-[#1F1F22]" />
+
+                      {/* Metadata Table */}
+                      <div className="space-y-2 mono text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500">Credential</span>
+                          <span className="text-white font-medium">
+                            {maskedCred}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500">Status</span>
+                          <span>
+                            {health.state === "HEALTHY" && (
+                              <span className="inline-flex items-center gap-1.5 text-emerald-400 font-bold">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+                                ● HEALTHY
+                                {health.latencyMs
+                                  ? ` (${health.latencyMs}ms)`
+                                  : ""}
+                              </span>
+                            )}
+                            {health.state === "ERROR" && (
+                              <span className="inline-flex items-center gap-1.5 text-red-400 font-bold" title={health.detail}>
+                                <span className="h-1.5 w-1.5 rounded-full bg-red-400"></span>
+                                ● ERROR
+                              </span>
+                            )}
+                            {health.state === "TESTING" && (
+                              <span className="inline-flex items-center gap-1.5 text-accent font-bold animate-pulse">
+                                <span className="h-1.5 w-1.5 rounded-full bg-accent"></span>
+                                ● TESTING…
+                              </span>
+                            )}
+                            {health.state === "UNTESTED" && (
+                              <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                                ○ UNTESTED
+                              </span>
+                            )}
+                          </span>
+                        </div>
+
+                        {health.detail && health.state === "ERROR" && (
+                          <div className="rounded bg-red-950/30 border border-red-500/20 p-2 text-[10.5px] text-red-300">
+                            {health.detail}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500">Last checked</span>
+                          <span className="text-zinc-300">
+                            {health.lastChecked || "Never"}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500">Fighter</span>
+                          <span className="text-emerald-400 font-bold">✓</span>
+                        </div>
+
+                        <div className="flex items-center justify-between">
+                          <span className="text-zinc-500">Judge</span>
+                          <span className="text-emerald-400 font-bold">✓</span>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex items-center gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => testProviderConnection(p.id)}
+                          disabled={health.state === "TESTING"}
+                          className="mono flex-1 h-9 rounded-lg border border-accent/40 bg-accent/10 text-xs font-bold text-accent transition-all hover:bg-accent/20 disabled:opacity-50"
+                        >
+                          {health.state === "TESTING"
+                            ? "TESTING…"
+                            : "[ TEST CONNECTION ]"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openRegisterModal(p)}
+                          className="mono h-9 px-4 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-xs font-bold text-zinc-300 hover:text-white hover:border-[#3F3F46]"
+                        >
+                          [ EDIT ]
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* NOTIFICATIONS */}
-      {msg && (
-        <div className="border-b border-[var(--success)] bg-[var(--success-soft)]">
-          <div className="mx-auto flex max-w-[1360px] items-center justify-between px-6 py-3 font-mono text-[11px] text-[var(--success)]">
-            <span>{msg}</span>
-            <button onClick={() => setMsg(null)}>✕</button>
-          </div>
-        </div>
-      )}
-
-      {err && (
-        <div className="border-b border-danger bg-danger/10">
-          <div className="mx-auto flex max-w-[1360px] items-center justify-between px-6 py-3 font-mono text-[11px] text-danger">
-            <span>{err}</span>
-            <button onClick={() => setErr(null)}>✕</button>
-          </div>
-        </div>
-      )}
-
-      {/* MATRIX HUD CARDS GRID */}
-      <main className="mx-auto max-w-[1360px] px-6 py-8">
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {filteredItems.map((p) => {
-            const isHost = isHostProviderId(p.id);
-            const status = cardStatus[p.id];
-            const isTesting = cardTesting[p.id];
-
-            return (
-              <div
-                key={p.id}
-                className={`group relative flex flex-col justify-between border bg-surface p-5 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_8px_32px_rgba(0,0,0,0.6)] ${
-                  isHost
-                    ? "border-border hover:border-accent/80 border-l-[3px] border-l-accent"
-                    : "border-border hover:border-accent border-l-[3px] border-l-[var(--success)]"
-                }`}
-              >
-                {/* Glowing neon hover accent bar */}
-                <div className="absolute inset-x-0 top-0 h-[2px] opacity-0 transition-opacity group-hover:opacity-100 bg-gradient-to-r from-transparent via-accent to-transparent" />
-
-                <div>
-                  {/* Card Header */}
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-semibold text-[15px] tracking-[-0.02em] text-foreground">
-                          {p.name}
-                        </span>
-                      </div>
-                      <div className="mt-1 font-mono text-[10px] text-muted truncate">
-                        {p.base_url || (isHost ? "Platform Hosted" : "Standard API")}
-                      </div>
-                    </div>
-
-                    {isHost ? (
-                      <span className="shrink-0 border border-accent/40 bg-[var(--accent-soft)] px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-accent">
-                        {p.id.includes("judge") || p.id.includes("kimi")
-                          ? "DEFAULT JUDGE"
-                          : "HOST FREE"}
-                      </span>
-                    ) : (
-                      <span className="shrink-0 border border-[var(--success)] bg-[var(--success-soft)] px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-[0.1em] text-[var(--success)]">
-                        ● VERIFIED
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Model Tag & Details */}
-                  <div className="mt-4">
-                    <div className="inline-flex max-w-full items-center gap-1.5 border border-border bg-background px-2.5 py-1 font-mono text-[11px] text-accent">
-                      <span className="truncate font-medium">{p.model_name}</span>
-                    </div>
-                  </div>
-
-                  {/* Credentials / Key Mask */}
-                  <div className="mt-4 space-y-1.5 border-t border-border/70 pt-3 font-mono text-[10px]">
-                    <div className="flex items-center justify-between text-muted">
-                      <span>KEY:</span>
-                      <span className="text-foreground">
-                        {p.masked_key || (isHost ? "Managed Platform Secret" : "sk-••••••••")}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between text-muted">
-                      <span>PROVIDER ID:</span>
-                      <button
-                        type="button"
-                        onClick={() => copyId(p.id)}
-                        className="truncate text-muted hover:text-accent"
-                        title="Click to copy ID"
-                      >
-                        {copiedId === p.id ? "COPIED!" : p.id}
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-between text-muted">
-                      <span>AUTH STYLE:</span>
-                      <span className="uppercase text-muted">{p.auth_style || "BEARER"}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Card Footer Actions */}
-                <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
-                  <div>
-                    {status ? (
-                      <span className="font-mono text-[10px] text-[var(--success)]">
-                        ⚡ {status.text}
-                      </span>
-                    ) : isHost ? (
-                      <span className="font-mono text-[10px] text-accent">
-                        Zero Token Cost
-                      </span>
-                    ) : (
-                      <span className="font-mono text-[10px] text-muted">
-                        Encrypted Storage
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    {!isHost && (
-                      <button
-                        type="button"
-                        disabled={isTesting}
-                        onClick={() => testCardProvider(p)}
-                        className="btn btn-ghost h-8 px-3 font-mono text-[10px] uppercase tracking-[0.08em]"
-                      >
-                        {isTesting ? "Ping…" : "Test"}
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={() => nav(`/battles/new?modelA=${encodeURIComponent(p.id)}`)}
-                      className="btn btn-primary h-8 px-3 font-mono text-[10px] uppercase tracking-[0.08em]"
-                    >
-                      Duel →
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-
-          {/* ADD PROVIDER CARD (DASHED HUD) */}
-          <button
-            type="button"
-            onClick={() => {
-              applyPreset("openai");
-              setModalOpen(true);
-            }}
-            className="group flex min-h-[240px] flex-col items-center justify-center gap-3 border-2 border-dashed border-border p-6 text-center transition-all duration-200 hover:border-accent hover:bg-[var(--accent-soft)]/20"
-          >
-            <div className="grid h-12 w-12 place-items-center rounded-full border border-border bg-surface text-[20px] font-bold text-accent transition-transform group-hover:scale-110 group-hover:border-accent group-hover:shadow-[0_0_16px_rgba(255,0,160,0.3)]">
-              +
-            </div>
-            <div>
-              <div className="text-[14px] font-semibold tracking-[-0.01em] text-foreground">
-                Connect New Provider Key
-              </div>
-              <p className="mt-1 font-mono text-[10px] text-muted">
-                Anthropic, OpenAI, DeepSeek, xAI, Groq, Mistral, Custom
-              </p>
-            </div>
-          </button>
-        </div>
-      </main>
-
-      {/* CONNECT NEW KEY MODAL DRAWER */}
+      {/* =================================================================== */}
+      {/* MODAL: REGISTER / EDIT PROVIDER                                     */}
+      {/* =================================================================== */}
       {modalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-          <div className="relative w-full max-w-[620px] border border-borderStrong bg-surface shadow-[0_20px_60px_rgba(0,0,0,0.9)]">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-border px-6 py-5">
-              <div>
-                <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent">
-                  Key Forge & Diagnostic Studio
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-xl rounded-2xl border border-accent/40 bg-[#09090E] p-6 shadow-2xl space-y-6 md:p-8">
+            <div className="flex items-center justify-between border-b border-[#1F1F22] pb-4">
+              <div className="flex items-center gap-2">
+                <div className="grid h-8 w-8 place-items-center rounded-lg bg-accent/15 border border-accent/40 text-accent">
+                  <Key className="h-4 w-4" />
                 </div>
-                <h3 className="mt-1 text-[18px] font-bold tracking-[-0.02em] text-foreground">
-                  Connect AI Provider
-                </h3>
+                <div>
+                  <h3 className="text-lg font-bold text-white">
+                    {editingProvider ? "Edit Provider Key" : "Register Provider"}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    AES-256 encrypted at rest in server vault.
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                className="grid h-8 w-8 place-items-center border border-border font-mono text-[12px] text-muted hover:border-accent hover:text-foreground"
+                className="text-zinc-500 hover:text-white"
               >
-                ✕
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            {/* Quick Preset Selector Matrix */}
-            <div className="border-b border-border bg-background/50 px-6 py-4">
-              <div className="mb-2 font-mono text-[9px] uppercase tracking-[0.12em] text-muted">
-                Quick-Pick Provider Template
-              </div>
-              <div className="grid grid-cols-4 gap-2">
-                {(Object.keys(PRESETS) as PresetKey[]).map((k) => {
-                  const active = preset === k;
-                  return (
+            {/* Preset Selector */}
+            {!editingProvider && (
+              <div className="space-y-2">
+                <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Select Provider Type
+                </label>
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {(Object.keys(PRESETS) as PresetKey[]).map((key) => (
                     <button
-                      key={k}
+                      key={key}
                       type="button"
-                      onClick={() => applyPreset(k)}
-                      className={`p-2.5 text-left transition-colors border ${
-                        active
-                          ? "border-accent bg-[var(--accent-soft)] text-accent shadow-[0_0_12px_rgba(255,0,160,0.2)]"
-                          : "border-border bg-surface hover:border-borderStrong text-muted hover:text-foreground"
+                      onClick={() => selectPreset(key)}
+                      className={`mono rounded-lg p-2 text-center text-xs font-bold transition-all border ${
+                        activePreset === key
+                          ? "border-accent bg-accent/15 text-accent shadow-[0_0_10px_rgba(255,0,160,0.25)]"
+                          : "border-[#1F1F22] bg-[#050508] text-zinc-400 hover:border-zinc-700"
                       }`}
                     >
-                      <div className="font-mono text-[11px] font-semibold truncate">
-                        {PRESETS[k].brand}
-                      </div>
-                      <div className="font-mono text-[9px] opacity-70 truncate">
-                        {PRESETS[k].context_window}
-                      </div>
+                      {PRESETS[key].brand}
                     </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Form Fields */}
-            <form onSubmit={onSubmit} className="space-y-4 px-6 py-5">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
-                    Provider Name
-                  </label>
-                  <input
-                    className="w-full border border-border bg-background px-3 py-2 font-mono text-[12px] text-foreground focus:border-accent focus:outline-none"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
-                    Model Target ID
-                  </label>
-                  <input
-                    className="w-full border border-border bg-background px-3 py-2 font-mono text-[12px] text-foreground focus:border-accent focus:outline-none"
-                    value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
-                    required
-                  />
+                  ))}
                 </div>
               </div>
+            )}
 
-              <div className="space-y-1">
-                <label className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
-                  Base API Endpoint URL
+            <form onSubmit={handleSaveProvider} className="space-y-4">
+              <div>
+                <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Provider Label
                 </label>
                 <input
-                  className="w-full border border-border bg-background px-3 py-2 font-mono text-[12px] text-foreground focus:border-accent focus:outline-none"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#050508] px-3.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
+                  placeholder="e.g. Anthropic Claude Key"
                   required
                 />
               </div>
 
-              <div className="space-y-1">
+              <div>
+                <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Base URL
+                </label>
+                <input
+                  type="url"
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                  className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#050508] px-3.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div>
                 <div className="flex items-center justify-between">
-                  <label className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
-                    Secret API Key (Fernet Encrypted)
+                  <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    API Key
                   </label>
                   <button
                     type="button"
-                    onClick={() => setShowKey(!showKey)}
-                    className="font-mono text-[9px] uppercase tracking-[0.1em] text-accent hover:underline"
+                    onClick={() => setShowKeyText(!showKeyText)}
+                    className="mono text-[10px] text-accent hover:underline"
                   >
-                    {showKey ? "Hide" : "Reveal"}
+                    {showKeyText ? "Hide Key" : "Show Key"}
                   </button>
                 </div>
-                <div className="relative">
+                <input
+                  type={showKeyText ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#050508] px-3.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
+                  placeholder={
+                    editingProvider
+                      ? "Leave empty to keep existing encrypted key"
+                      : "sk-ant-... or sk-..."
+                  }
+                  required={!editingProvider}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Default Model Name
+                  </label>
                   <input
-                    className="w-full border border-border bg-background px-3 py-2 pr-20 font-mono text-[12px] text-foreground focus:border-accent focus:outline-none"
-                    type={showKey ? "text" : "password"}
-                    value={apiKey}
-                    placeholder="sk-••••••••••••••••"
-                    onChange={(e) => {
-                      setApiKey(e.target.value);
-                      setTestResult(null);
-                    }}
-                    required
+                    type="text"
+                    value={modelName}
+                    onChange={(e) => setModelName(e.target.value)}
+                    className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#050508] px-3.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
+                    placeholder="e.g. claude-3-7-sonnet"
                   />
-                  <span className="absolute right-2 top-1/2 -translate-y-1/2 border border-accent/40 bg-[var(--accent-soft)] px-1.5 py-0.5 font-mono text-[8px] uppercase tracking-[0.1em] text-accent">
-                    ENCRYPTED
-                  </span>
+                </div>
+                <div>
+                  <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                    Auth Style
+                  </label>
+                  <select
+                    value={authStyle}
+                    onChange={(e) => setAuthStyle(e.target.value)}
+                    className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#050508] px-3 py-2 text-xs text-white focus:border-accent focus:outline-none"
+                  >
+                    <option value="bearer">Bearer Token</option>
+                    <option value="modal_proxy">Modal Proxy (Key:Secret)</option>
+                  </select>
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <label className="font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
-                  Authentication Header Style
-                </label>
-                <select
-                  className="w-full border border-border bg-background px-3 py-2 font-mono text-[12px] text-foreground focus:border-accent focus:outline-none"
-                  value={authStyle}
-                  onChange={(e) => setAuthStyle(e.target.value)}
-                >
-                  <option value="bearer">Bearer Token (Authorization: Bearer &lt;key&gt;)</option>
-                  <option value="modal_proxy">Modal Proxy (X-Modal-Proxy header)</option>
-                </select>
-              </div>
-
-              {/* Live Diagnostic Feedback */}
-              {testResult && (
-                <div
-                  className={`border px-3 py-2 font-mono text-[11px] ${
-                    testResult.ok
-                      ? "border-[var(--success)] bg-[var(--success-soft)] text-[var(--success)]"
-                      : "border-danger bg-danger/10 text-danger break-all"
-                  }`}
-                >
-                  {testResult.text}
-                </div>
-              )}
-
-              {/* Modal Buttons */}
-              <div className="grid grid-cols-2 gap-3 pt-2">
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#1F1F22]">
                 <button
                   type="button"
-                  disabled={testing || !apiKey}
-                  onClick={onTestFormKey}
-                  className="btn btn-ghost h-11 font-mono text-[11px] uppercase tracking-[0.08em]"
+                  onClick={() => setModalOpen(false)}
+                  className="mono px-4 py-2 text-xs text-zinc-400 hover:text-white"
                 >
-                  {testing ? "Pinging Endpoint…" : "Test Connection"}
+                  Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={busy}
-                  className="btn btn-primary h-11 font-mono text-[11px] uppercase tracking-[0.08em]"
+                  disabled={submitting}
+                  className="btn btn-primary px-6 py-2.5 text-xs font-bold"
                 >
-                  {busy ? "Encrypting & Saving…" : "Register Key →"}
+                  {submitting ? "Saving Vault Key…" : "Save to Vault"}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* DELETE CONFIRMATION DIALOG                                          */}
+      {/* =================================================================== */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-red-500/40 bg-[#09090E] p-6 shadow-2xl space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-red-950/60 border border-red-500/40 text-red-400">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Delete Provider Key
+                </h3>
+                <p className="text-xs text-zinc-400">Permanent vault removal</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-zinc-300 leading-relaxed">
+              Are you sure you want to permanently delete{" "}
+              <strong className="text-white font-mono">
+                "{deleteTarget.name}"
+              </strong>
+              ? Its encrypted credentials will be immediately purged from the
+              database.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="mono px-4 py-2 text-xs text-zinc-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteProvider}
+                disabled={deleting}
+                className="mono rounded-lg border border-red-500/50 bg-red-600 px-5 py-2 text-xs font-bold text-white shadow-[0_0_12px_rgba(220,38,38,0.4)] hover:bg-red-500 disabled:opacity-50"
+              >
+                {deleting ? "Purging Key…" : "Delete Provider"}
+              </button>
+            </div>
           </div>
         </div>
       )}
