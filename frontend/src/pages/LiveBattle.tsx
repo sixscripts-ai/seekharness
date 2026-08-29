@@ -346,7 +346,18 @@ export default function LiveBattle() {
     };
   }, [jwt, id, user, refreshJwt]);
 
-  const modelIds = battle?.model_ids || [];
+  const modelIds = useMemo(() => {
+    if (battle?.model_ids && battle.model_ids.length > 0) {
+      return battle.model_ids;
+    }
+    const fromEvents: string[] = [];
+    for (const item of events) {
+      if (item.model_id && !fromEvents.includes(item.model_id)) {
+        fromEvents.push(item.model_id);
+      }
+    }
+    return fromEvents;
+  }, [battle?.model_ids, events]);
   const formatRoles = useMemo(
     () => (format?.roles || []).filter((role) => role !== "judge"),
     [format?.roles],
