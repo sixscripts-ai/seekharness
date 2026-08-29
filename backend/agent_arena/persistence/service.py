@@ -47,14 +47,14 @@ def using_postgres() -> bool:
 def appwrite_read_fallback() -> bool:
     from agent_arena.config import settings
 
-    value = settings().get("APPWRITE_READ_FALLBACK", "false")
+    value = settings().get("APPWRITE_READ_FALLBACK", "true")
     return value is True or str(value).lower() in ("true", "1")
 
 
 def appwrite_dual_write() -> bool:
     from agent_arena.config import settings
 
-    value = settings().get("APPWRITE_DUAL_WRITE", "false")
+    value = settings().get("APPWRITE_DUAL_WRITE", "true")
     return value is True or str(value).lower() in ("true", "1")
 
 
