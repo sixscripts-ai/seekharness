@@ -491,11 +491,18 @@ def internal_model(
             f"model={body.model_id} slug={model} detail={str(exc.detail)[:300]!r}"
         )
         raise
+    if isinstance(resp, str):
+        return {
+            "content": resp,
+            "tool_calls": [],
+            "finish_reason": "stop",
+            "latency_ms": 0,
+        }
     return {
-        "content": resp.text,
-        "tool_calls": resp.native_tool_calls,
-        "finish_reason": resp.raw_finish_reason,
-        "latency_ms": resp.latency_ms,
+        "content": getattr(resp, "text", str(resp or "")),
+        "tool_calls": getattr(resp, "native_tool_calls", []),
+        "finish_reason": getattr(resp, "raw_finish_reason", None),
+        "latency_ms": getattr(resp, "latency_ms", 0),
     }
 
 
