@@ -490,6 +490,13 @@ export default function Providers() {
             </div>
           </div>
 
+          {loading && (
+            <div className="relative z-10 flex items-center gap-2 rounded-xl border border-[#1F1F22] bg-[#0D0D0F] p-4 text-xs text-zinc-400">
+              <RefreshCw className="h-4 w-4 animate-spin text-accent" />
+              <span className="mono">Loading model registry…</span>
+            </div>
+          )}
+
           {/* Feedback Notices */}
           {msg && (
             <div className="relative z-10 flex items-center justify-between rounded-xl border border-emerald-500/40 bg-emerald-950/40 p-4 text-xs text-emerald-200">

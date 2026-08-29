@@ -9,6 +9,8 @@ import CustomBattle from "@/pages/CustomBattle";
 import LiveBattle from "@/pages/LiveBattle";
 import Leaderboard from "@/pages/Leaderboard";
 import History from "@/pages/History";
+import Targets from "@/pages/Targets";
+import TargetDetail from "@/pages/TargetDetail";
 import { useEffect } from "react";
 import { subscribeSystemTheme } from "@/lib/theme";
 
@@ -22,6 +24,8 @@ function isFullWidthPath(pathname: string): boolean {
     pathname === "/providers" ||
     pathname === "/keys" ||
     pathname === "/leaderboard" ||
+    pathname === "/targets" ||
+    pathname.startsWith("/targets/") ||
     pathname.startsWith("/battles/")
   );
 }
@@ -68,6 +72,8 @@ function AppShell() {
           <Route path="/battles/custom" element={<CustomBattle />} />
           <Route path="/battles/:id" element={<LiveBattle />} />
           <Route path="/leaderboard" element={<Leaderboard />} />
+          <Route path="/targets" element={<Targets />} />
+          <Route path="/targets/:id" element={<TargetDetail />} />
           <Route path="*" element={<div className="p-8 text-center text-zinc-400">404 — Not found</div>} />
         </Routes>
       </main>

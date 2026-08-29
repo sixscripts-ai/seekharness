@@ -342,7 +342,7 @@ export default function History() {
                           {/* Battle & Format */}
                           <td className="py-4 px-4">
                             <div className="font-bold text-white text-sm">
-                              {b.title || b.format_id}
+                              {b.custom_title || b.title || (b.target_id ? `Target: ${b.target_id}` : b.format_id)}
                             </div>
                             <div className="text-[10.5px] text-zinc-500 flex items-center gap-2 mt-0.5">
                               <span>ID: {b.id.slice(0, 12)}…</span>

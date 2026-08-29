@@ -27,6 +27,19 @@ function safeSet(key: string, val: string | null) {
   } catch {}
 }
 
+function jwtExpiry(token: string): number | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const json = JSON.parse(
+      atob(payload.replace(/-/g, "+").replace(/_/g, "/")),
+    );
+    return typeof json.exp === "number" ? json.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
 export const useAuth = create<AuthState>((set, get) => ({
   user: null,
   jwt: safeGet("arena_jwt"),
@@ -51,6 +64,7 @@ export const useAuth = create<AuthState>((set, get) => ({
     }
   },
   refreshJwt: async () => {
+    const existing = safeGet("arena_jwt");
     try {
       const token = await createJwt();
       if (token) {
@@ -58,14 +72,23 @@ export const useAuth = create<AuthState>((set, get) => ({
         safeSet("arena_jwt", token);
         return token;
       }
-      const existing = safeGet("arena_jwt");
-      if (existing) { set({ jwt: existing }); return existing; }
-      return null;
     } catch {
-      const existing = safeGet("arena_jwt");
-      if (existing) return existing;
-      return null;
+      // fall through to the cached-token check below
     }
+    // Refresh failed: tolerate the failure only while the cached token is
+    // still valid (transient outage). An expired or unparseable token can
+    // never recover on its own, so clear it and force a fresh login instead
+    // of serving a permanently-401 token for the rest of the tab's life.
+    if (existing) {
+      const exp = jwtExpiry(existing);
+      if (exp === null || exp > Date.now() + 30_000) {
+        set({ jwt: existing });
+        return existing;
+      }
+    }
+    set({ jwt: null, user: null });
+    safeSet("arena_jwt", null);
+    return null;
   },
   login: async (email, password) => {
     const u = await awLogin(email, password);

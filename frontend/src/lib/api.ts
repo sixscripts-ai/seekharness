@@ -109,6 +109,17 @@ export const api = {
       `/battle-drafts/${id}/launch`,
       { method: "POST", body, token },
     ),
+  targets: (filters: TargetFilters = {}) => {
+    const params = new URLSearchParams();
+    if (filters.category) params.set("category", filters.category);
+    if (filters.difficulty) params.set("difficulty", filters.difficulty);
+    if (filters.format) params.set("format", filters.format);
+    if (filters.tag) params.set("tag", filters.tag);
+    const suffix = params.toString() ? `?${params}` : "";
+    return request<TargetSummaryOut[]>(`/targets${suffix}`);
+  },
+  target: (id: string, token?: string | null) =>
+    request<TargetDetailOut>(`/targets/${encodeURIComponent(id)}`, { token }),
   leaderboard: (token: string | null, format = "overall") => {
     const params = new URLSearchParams({ format });
     return request<LeaderboardRow[]>(`/leaderboard?${params}`, { token });
@@ -162,6 +173,8 @@ export type BattleCreate = {
   save?: boolean;
   judge_provider_id?: string | null;
   difficulty?: "novice" | "general" | "advanced" | "expert" | null;
+  target_id?: string | null;
+  target_version?: string | null;
 };
 
 export type BattleOut = {
@@ -190,6 +203,8 @@ export type BattleOut = {
   title?: string | null;
   custom_title?: string | null;
   ranked?: boolean | null;
+  target_id?: string | null;
+  target_version?: string | null;
 };
 
 export type BattleSpec = {
@@ -231,6 +246,52 @@ export type BattleDraftLaunch = {
   timeout_seconds: number;
   save: boolean;
   judge_provider_id?: string | null;
+};
+
+export type TargetFilters = {
+  category?: string;
+  difficulty?: string;
+  format?: string;
+  tag?: string;
+};
+
+export type TargetSummaryOut = {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  difficulty: string;
+  format: string;
+  runtime: string;
+  tags: string[];
+  version: string;
+  visible_test_count: number;
+  hidden_test_count: number;
+  handoff_required: boolean;
+  verification_type: "visible+hidden" | "hidden_only" | "visible_only" | string;
+  network: boolean;
+  manifest_hash: string;
+};
+
+// The backend gates evaluator-internal detail fields behind optional auth:
+// anonymous callers receive null for these; authenticated callers receive the
+// full safe public representation.
+export type TargetDetailOut = TargetSummaryOut & {
+  objectives: string[];
+  starter_files: string[] | null;
+  visible_tests: string[] | null;
+  protected_paths: string[] | null;
+  handoff_allowlist: string[] | null;
+  limits: {
+    max_tool_steps: number;
+    exec_timeout_seconds: number;
+  } | null;
+  safety: {
+    scope?: string;
+    real_targets?: boolean;
+    network_required?: boolean;
+    [key: string]: unknown;
+  } | null;
 };
 
 export type ArtifactOut = { phase: string; model_id: string; artifact: string };

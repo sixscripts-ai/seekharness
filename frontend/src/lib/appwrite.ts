@@ -1,7 +1,7 @@
 import { Account, Client } from "appwrite";
 
 const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT || "https://sfo.cloud.appwrite.io/v1";
-const projectId = import.meta.env.VITE_APPWRITE_PROJECT_ID || "6a6f9133001ed182210d";
+const projectId = import.meta.env.VITE_APPWRITE_PROJECT_ID || "6a92f61d001bf8be437e";
 
 export function createClient() {
   const client = new Client().setEndpoint(endpoint).setProject(projectId);

@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
-import { Plus, Swords, User, LogOut, LogIn } from "lucide-react";
+import { Plus, LogOut } from "lucide-react";
 
 const NAV_LINKS = [
   { href: "/", label: "Arena" },
   { href: "/battles", label: "Battles" },
   { href: "/providers", label: "Models" },
+  { href: "/targets", label: "Targets" },
   { href: "/leaderboard", label: "Leaderboard" },
 ];
 

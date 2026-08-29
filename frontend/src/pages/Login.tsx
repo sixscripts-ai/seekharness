@@ -10,7 +10,9 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const next = params.get("next") || "/";
+  const rawNext = params.get("next") || "/";
+  // Only allow app-internal paths; reject absolute/protocol-relative URLs.
+  const next = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/";
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();

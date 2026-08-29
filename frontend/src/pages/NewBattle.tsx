@@ -8,6 +8,7 @@ import {
   splitProviders,
   type FormatOut,
   type ProviderOut,
+  type TargetDetailOut,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import ProviderSelect from "@/components/ProviderSelect";
@@ -76,10 +77,22 @@ export default function NewBattle() {
   const requestedFormat =
     params.get("format") || "";
 
-  const requestedModels = [
-    params.get("modelA"),
-    params.get("modelB"),
-  ].filter(Boolean) as string[];
+  const requestedTarget =
+    params.get("target") || "";
+
+  const requestedModelA =
+    params.get("modelA") || "";
+
+  const requestedModelB =
+    params.get("modelB") || "";
+
+  const requestedModels = useMemo(
+    () =>
+      [requestedModelA, requestedModelB].filter(
+        Boolean,
+      ) as string[],
+    [requestedModelA, requestedModelB],
+  );
 
   const [formats, setFormats] = useState<
     FormatOut[]
@@ -87,6 +100,11 @@ export default function NewBattle() {
 
   const [providers, setProviders] =
     useState<ProviderOut[]>([]);
+
+  const [target, setTarget] =
+    useState<TargetDetailOut | null>(
+      null,
+    );
 
   const [formatId, setFormatId] =
     useState(requestedFormat);
@@ -131,9 +149,16 @@ export default function NewBattle() {
         const [
           formatRows,
           providerRows,
+          targetRow,
         ] = await Promise.all([
           api.formats(token),
           api.providers(token),
+          requestedTarget
+            ? api.target(
+                requestedTarget,
+                token,
+              )
+            : Promise.resolve(null),
         ]);
 
         const launchable =
@@ -144,6 +169,20 @@ export default function NewBattle() {
 
         setFormats(launchable);
         setProviders(providerRows);
+        setTarget(targetRow);
+
+        if (targetRow) {
+          if (
+            DIFFICULTIES.includes(
+              targetRow.difficulty as Difficulty,
+            )
+          ) {
+            setDifficulty(
+              targetRow.difficulty as Difficulty,
+            );
+          }
+          setVisibility("isolated");
+        }
 
         const requestedIsValid =
           launchable.some(
@@ -228,18 +267,33 @@ export default function NewBattle() {
         );
       }
     })();
-  }, [jwt]);
+  }, [
+    jwt,
+    requestedTarget,
+    requestedFormat,
+    requestedModels,
+    refreshJwt,
+  ]);
 
   const format = formats.find(
     (item) =>
       item.id === formatId,
   );
 
-  const need = format
-    ? playableRoleCount(format)
-    : 2;
+  const need = target
+    ? 2
+    : format
+      ? playableRoleCount(format)
+      : 2;
 
   const roles = useMemo(() => {
+    if (target) {
+      return target.format ===
+        "builder_breaker"
+        ? ["builder", "breaker"]
+        : ["fighter 1", "fighter 2"];
+    }
+
     if (!format) {
       return [
         "builder",
@@ -261,13 +315,22 @@ export default function NewBattle() {
       "fighter a",
       "fighter b",
     ];
-  }, [format]);
+  }, [format, target]);
 
   useEffect(() => {
     setSelected(
       (previous) => {
         const next =
           previous.slice(0, need);
+
+        // Do not invent placeholder fighter ids before providers load: the
+        // hardcoded fallback fills both slots with the same id, and the
+        // data-load effect then treats that duplicate pair as user-selected,
+        // which blocks readiness (uniqueFighters) forever. Leave the slots
+        // empty and let the data-load effect fill real, distinct defaults.
+        if (!providers.length) {
+          return next;
+        }
 
         const fallback =
           host[0]?.id ||
@@ -376,8 +439,12 @@ export default function NewBattle() {
         await api.createBattle(
           token,
           {
-            format_id:
-              formatId,
+            // Target battles still carry a real format_id: the backend
+            // resolves the format document first and then replaces the
+            // config with the frozen target contract.
+            format_id: target
+              ? formats[0]?.id || ""
+              : formatId,
 
             model_ids:
               selected,
@@ -389,9 +456,17 @@ export default function NewBattle() {
               timeoutSec,
 
             round_visibility:
-              visibility,
+              target ? "isolated" : visibility,
 
-            difficulty,
+            difficulty:
+              target ? undefined : difficulty,
+
+            target_id:
+              target?.id || undefined,
+
+            target_version:
+              target?.version ||
+              undefined,
             save,
 
             judge_provider_id:
@@ -453,7 +528,13 @@ export default function NewBattle() {
           </p>
 
           <Link
-            to="/login"
+            to={`/login?next=${encodeURIComponent(
+              `/battles/new${
+                params.toString()
+                  ? `?${params.toString()}`
+                  : ""
+              }`,
+            )}`}
             className="btn btn-primary mx-auto h-10 px-6"
           >
             Log in
@@ -476,7 +557,10 @@ export default function NewBattle() {
       .length;
 
   const ready =
-    Boolean(formatId) &&
+    (Boolean(formatId) ||
+      Boolean(target)) &&
+    (!requestedTarget ||
+      Boolean(target)) &&
     assigned === need &&
     uniqueFighters &&
     !busy;
@@ -507,10 +591,9 @@ export default function NewBattle() {
             </h1>
 
             <p className="mt-3 max-w-[62ch] text-[13px] leading-5 text-muted">
-              Define the arena,
-              assign the fighters,
-              set the execution
-              contract, and deploy.
+              {target
+                ? "Assign models to the frozen target roles, review the immutable execution contract, and deploy."
+                : "Define the arena, assign the fighters, set the execution contract, and deploy."}
             </p>
           </div>
 
@@ -548,11 +631,61 @@ export default function NewBattle() {
       <div className="mx-auto max-w-[1360px] px-6 py-6">
         <SectionHeader
           index="1"
-          title="Battle mode"
-          description="Choose how you want to define this battle."
+          title={target ? "Immutable target" : "Battle mode"}
+          description={
+            target
+              ? "This battle is pinned to a versioned Target Library contract."
+              : "Choose how you want to define this battle."
+          }
         />
 
-        <div className="mt-4 grid gap-px bg-border md:grid-cols-3">
+        {target ? (
+          <div className="mt-4 grid gap-px border border-border bg-border lg:grid-cols-[1.4fr_0.8fr_0.8fr]">
+            <div className="bg-surface p-5">
+              <div className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent">
+                target://{target.id}
+              </div>
+              <div className="mt-3 text-[22px] font-semibold tracking-[-0.035em]">
+                {target.name}
+              </div>
+              <p className="mt-2 max-w-2xl text-[11px] leading-5 text-muted">
+                {target.description}
+              </p>
+              <Link
+                to={`/targets/${encodeURIComponent(target.id)}`}
+                className="mt-4 inline-block font-mono text-[9px] uppercase tracking-[0.1em] text-accent hover:text-accent-hover"
+              >
+                Inspect frozen contract →
+              </Link>
+            </div>
+            <div className="bg-surface p-5">
+              <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-muted">
+                Format / runtime
+              </div>
+              <div className="mt-3 font-mono text-[11px] text-foreground">
+                {titleCase(target.format)}
+              </div>
+              <div className="mt-1 font-mono text-[9px] text-muted">
+                {target.runtime}
+              </div>
+            </div>
+            <div className="bg-surface p-5">
+              <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-muted">
+                Version lock
+              </div>
+              <div className="mt-3 font-mono text-[11px] text-foreground">
+                v{target.version}
+              </div>
+              <div
+                className="mt-1 truncate font-mono text-[8px] text-muted"
+                title={target.manifest_hash}
+              >
+                sha256:{target.manifest_hash.slice(0, 16)}…
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-px bg-border md:grid-cols-3">
           <ModeCard
             active
             eyebrow="Preset"
@@ -585,6 +718,7 @@ export default function NewBattle() {
             }
           />
         </div>
+        )}
       </div>
 
       {/* 2. EXECUTION FORMAT */}
@@ -592,19 +726,36 @@ export default function NewBattle() {
         <div className="mx-auto max-w-[1360px] px-6 py-6">
           <SectionHeader
             index="2"
-            title="Execution format"
-            description="Select the arena format and role sequence."
+            title={target ? "Target execution plan" : "Execution format"}
+            description={
+              target
+                ? "The target defines its format, verification path, and workspace constraints. These fields are not editable."
+                : "Select the arena format and role sequence."
+            }
             trailing={
-              format
-                ? `${need} fighter${
-                    need === 1
-                      ? ""
-                      : "s"
-                  }`
-                : undefined
+              target
+                ? `${target.visible_test_count} visible + ${target.hidden_test_count} evaluator checks`
+                : format
+                  ? `${need} fighter${
+                      need === 1
+                        ? ""
+                        : "s"
+                    }`
+                  : undefined
             }
           />
 
+          {target ? (
+            <div className="mt-4 grid gap-px border border-border bg-border sm:grid-cols-2 lg:grid-cols-4">
+              <LockedCell label="Format" value={titleCase(target.format)} />
+              <LockedCell label="Runtime" value={target.runtime} />
+              <LockedCell label="Difficulty" value={titleCase(target.difficulty)} />
+              <LockedCell
+                label="Verification"
+                value={titleCase(target.verification_type)}
+              />
+            </div>
+          ) : (
           <div className="mt-4 flex gap-px overflow-x-auto bg-border pb-px">
             {formats.map(
               (item) => {
@@ -683,6 +834,7 @@ export default function NewBattle() {
               },
             )}
           </div>
+          )}
         </div>
       </div>
 
@@ -976,9 +1128,15 @@ export default function NewBattle() {
             <ControlCell
               label="Difficulty"
               value={titleCase(
-                difficulty,
+                target?.difficulty ||
+                  difficulty,
               )}
             >
+              {target ? (
+                <div className="mt-3 border border-accent/30 bg-[var(--accent-soft)] px-3 py-3 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
+                  Locked by target manifest
+                </div>
+              ) : (
               <div className="mt-3 grid grid-cols-2 border border-border">
                 {DIFFICULTIES.map(
                   (level) => (
@@ -1002,18 +1160,31 @@ export default function NewBattle() {
                   ),
                 )}
               </div>
+              )}
             </ControlCell>
 
             {/* WORKSPACE ACCESS */}
             <ControlCell
               label="Workspace access"
               value={
-                visibility ===
-                "isolated"
-                  ? "Isolated"
-                  : "Open arena"
+                target
+                  ? "Isolated · locked"
+                  : visibility ===
+                      "isolated"
+                    ? "Isolated"
+                    : "Open arena"
               }
             >
+              {target ? (
+                <div className="mt-3 border border-accent/30 bg-[var(--accent-soft)] px-3 py-3">
+                  <div className="font-mono text-[8px] uppercase tracking-[0.1em] text-accent">
+                    Isolated
+                  </div>
+                  <div className="mt-1 text-[9px] leading-4 text-muted">
+                    Target Library battles preserve the frozen isolation contract.
+                  </div>
+                </div>
+              ) : (
               <div className="mt-3 grid grid-cols-2 border border-border">
                 <button
                   type="button"
@@ -1063,6 +1234,7 @@ export default function NewBattle() {
                   </div>
                 </button>
               </div>
+              )}
             </ControlCell>
           </div>
 
@@ -1118,10 +1290,12 @@ export default function NewBattle() {
                 <SummaryPill
                   ok
                   text={
-                    visibility ===
-                    "isolated"
-                      ? "Isolated workspaces"
-                      : "Open arena visibility"
+                    target
+                      ? "Target isolation locked"
+                      : visibility ===
+                          "isolated"
+                        ? "Isolated workspaces"
+                        : "Open arena visibility"
                   }
                 />
 
@@ -1171,12 +1345,16 @@ export default function NewBattle() {
           <div className="grid gap-3 sm:grid-cols-4">
             <ReadinessItem
               ok={Boolean(
-                formatId,
+                target
+                  ? formats[0]
+                  : formatId,
               )}
-              label="Format"
+              label={target ? "Target" : "Format"}
               value={
-                format?.name ||
-                "Select"
+                target
+                  ? target.name
+                  : format?.name ||
+                    "Select"
               }
             />
 
@@ -1374,6 +1552,28 @@ function SummaryPill({
       <span className="truncate">
         {text}
       </span>
+    </div>
+  );
+}
+
+function LockedCell({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="bg-surface p-4">
+      <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-muted">
+        {label}
+      </div>
+      <div className="mt-3 text-[12px] font-medium text-foreground">
+        {value}
+      </div>
+      <div className="mt-2 font-mono text-[8px] uppercase tracking-[0.1em] text-accent">
+        Manifest locked
+      </div>
     </div>
   );
 }

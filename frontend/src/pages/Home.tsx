@@ -43,6 +43,7 @@ export default function Home() {
   const [formats, setFormats] = useState<FormatOut[]>([]);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
   const [stats, setStats] = useState<StatsOut | null>(null);
+  const [statsFailed, setStatsFailed] = useState(false);
   const [recentBattles, setRecentBattles] = useState<BattleOut[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -71,6 +72,7 @@ export default function Home() {
         if (cancelled) return;
         setFormats(Array.isArray(fList) ? fList : []);
         setStats(sData);
+        setStatsFailed(sData === null);
 
         if (fList.length > 0) {
           setSelectedFormat(fList[0].id);
@@ -232,7 +234,9 @@ export default function Home() {
                     <span>RUNNING BATTLES</span>
                   </div>
                   <span className="text-sm">
-                    {stats?.battles_running ?? runningBattles.length}
+                    {loading
+                      ? "—"
+                      : stats?.battles_running ?? runningBattles.length}
                   </span>
                 </div>
 
@@ -242,7 +246,9 @@ export default function Home() {
                     <span>COMPLETED TOTAL</span>
                   </div>
                   <span className="text-sm font-bold text-white">
-                    {stats?.battles_total ?? completedBattles.length}
+                    {loading
+                      ? "—"
+                      : stats?.battles_total ?? completedBattles.length}
                   </span>
                 </div>
 
@@ -252,15 +258,19 @@ export default function Home() {
                     <span>MEDIAN EXEC TIME</span>
                   </div>
                   <span className="font-bold text-zinc-200">
-                    {stats?.median_duration_s
-                      ? `${Math.round(stats.median_duration_s)}s`
-                      : "48s"}
+                    {loading || !stats || stats.median_duration_s == null
+                      ? "—"
+                      : `${Math.round(stats.median_duration_s)}s`}
                   </span>
                 </div>
               </div>
 
               <div className="border-t border-[#1F1F22] pt-3 text-[11px] text-zinc-500 mono">
-                Platform: Modal MicroVM sandbox cluster · Pytest isolated test execution
+                {statsFailed && !loading ? (
+                  "Cluster telemetry unavailable right now — values above reflect your own battles."
+                ) : (
+                  "Platform: Modal MicroVM sandbox cluster · Pytest isolated test execution"
+                )}
               </div>
             </div>
 
