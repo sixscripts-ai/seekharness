@@ -88,46 +88,84 @@ def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
     return command_block_reason(command, allow_network=allow_network)
 
 
+def rank_skills_for_context(
+    pool: list[dict],
+    format_config: dict | None = None,
+    limit: int = 5,
+) -> list[dict]:
+    """Rank skills using tokenized relevance across target objectives, runtime, tags, and category."""
+    cfg = format_config or {}
+    recommended = set(cfg.get("recommended_skills") or [])
+
+    objectives = cfg.get("objectives") or []
+    target_name = str(cfg.get("name") or cfg.get("target_id") or "")
+    category = str(cfg.get("category") or "")
+    runtime = str(cfg.get("runtime") or "")
+    tags = cfg.get("tags") or []
+
+    context_text = f"{target_name} {category} {runtime} {' '.join(objectives)} {' '.join(tags)}".lower()
+    tokens = set(re.findall(r"[a-z0-9_-]{3,}", context_text))
+
+    scored_skills = []
+    for skill in pool:
+        score = 0.0
+        name = skill["name"].lower()
+        slug = skill["slug"].lower()
+        desc = skill.get("description", "").lower()
+        skill_tags = [t.lower() for t in skill.get("tags", [])]
+        skill_cat = skill.get("category", "").lower()
+
+        if skill["name"] in recommended or skill["slug"] in recommended:
+            score += 100.0
+
+        for tok in tokens:
+            if tok in name or tok in slug:
+                score += 5.0
+            if tok in skill_tags:
+                score += 4.0
+            if tok in skill_cat:
+                score += 3.0
+            if tok in desc:
+                score += 1.0
+
+        if runtime and (runtime.lower() in name or runtime.lower() in desc):
+            score += 4.0
+        if category and category.lower() in skill_cat:
+            score += 3.0
+
+        scored_skills.append((score, skill))
+
+    scored_skills.sort(key=lambda x: (x[0], -len(x[1]["name"])), reverse=True)
+    return [s for score, s in scored_skills[:limit]]
+
+
 def select_skills(
     format_config: dict | None = None, pool: list[dict] | None = None
 ) -> list[dict]:
-    """Selection protocol (C10): curate 2-3 skills per format via recommended_skills
-    or objective-keyword tags, resolve prerequisites, prune anything not available,
-    and return the progressive-disclosure subset (only these are mounted).
-
-    Order: recommended_skills first (kept in listed order), then keyword-tag
-    matches from objectives, capped at MAX_SELECTED_SKILLS + prereqs.
+    """Selection protocol: curate a relevant shortlist of 4-6 candidate skills
+    via recommended_skills or tokenized keyword relevance, resolve prerequisites,
+    and return the candidate pool for the battle.
     """
     pool = pool if pool is not None else (load_skill_pool() or SKILL_POOL)
-    cfg = format_config or {}
-    by_name = {s["name"]: s for s in pool}
-    by_slug = {s["slug"]: s for s in pool}
+    ranked = rank_skills_for_context(pool, format_config, limit=5)
 
     ordered: list[dict] = []
     seen: set[str] = set()
 
-    def add(skill: dict | None) -> None:
-        if skill and skill["name"] not in seen:
-            seen.add(skill["name"])
-            ordered.append(skill)
+    for s in ranked:
+        if s["name"] not in seen:
+            seen.add(s["name"])
+            ordered.append(s)
 
-    for rec in cfg.get("recommended_skills") or []:
-        add(by_name.get(rec) or by_slug.get(str(rec).lower()))
+    by_name = {s["name"]: s for s in pool}
+    by_slug = {s["slug"]: s for s in pool}
+    for prereq in resolve_prerequisites(ordered, pool):
+        prereq_skill = by_name.get(prereq) or by_slug.get(prereq.lower())
+        if prereq_skill and prereq_skill["name"] not in seen:
+            seen.add(prereq_skill["name"])
+            ordered.append(prereq_skill)
 
-    keywords = (
-        " ".join(cfg.get("objectives") or []) + " " + str(cfg.get("name") or "")
-    ).strip()
-    if keywords:
-        for tag_hit in filter_skills(keywords, root=None)[:MAX_SELECTED_SKILLS]:
-            # filter_skills scans the default root; map back onto pool by name
-            add(by_name.get(tag_hit["name"]) or by_slug.get(tag_hit["slug"]))
-
-    if not ordered:
-        ordered = pool[:MAX_SELECTED_SKILLS]
-
-    for prereq in resolve_prerequisites(ordered[:MAX_SELECTED_SKILLS], pool):
-        add(by_name.get(prereq) or by_slug.get(prereq.lower()))
-    return ordered
+    return ordered or pool[:5]
 
 
 DEFAULT_TEST_CODE = (
@@ -303,11 +341,38 @@ def _parse_json_tools(text: str) -> list[dict[str, Any]] | None:
     return None
 
 
-def parse_tool_calls(text: str) -> list[dict[str, Any]]:
+def parse_tool_calls(text_or_resp: Any) -> list[dict[str, Any]]:
+    """Parse tool calls using the universal multi-dialect normalizer with legacy fallback."""
+    from ...tool_protocol import ModelResponse, normalize_response
+
+    if isinstance(text_or_resp, dict):
+        resp = ModelResponse(
+            text=text_or_resp.get("content") or "",
+            native_tool_calls=text_or_resp.get("tool_calls") or [],
+            raw_finish_reason=text_or_resp.get("finish_reason"),
+            latency_ms=text_or_resp.get("latency_ms") or 0,
+        )
+    elif hasattr(text_or_resp, "text") and hasattr(text_or_resp, "native_tool_calls"):
+        resp = text_or_resp
+    else:
+        resp = ModelResponse(text=str(text_or_resp or ""))
+
+    norm = normalize_response(resp)
+    if norm.calls:
+        calls: list[dict[str, Any]] = []
+        for c in norm.calls:
+            call_dict = {"tool": c.name, **c.arguments}
+            calls.append(call_dict)
+        return calls
+
+    # Fallback to legacy string parser if text is present
+    text = resp.text
+    if not text:
+        return []
     json_calls = _parse_json_tools(text)
     if json_calls is not None:
         return json_calls
-    calls: list[dict[str, Any]] = []
+    calls = []
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -1699,6 +1764,18 @@ class AdvancedExecutor(Executor):
                     **extra,
                 )
 
+            last_test: str | None = None
+            if preview_url:
+                emit_action(
+                    model_id,
+                    "preview",
+                    target=preview_url,
+                    state="starting",
+                    result="Static preview server up for fighter artifacts",
+                )
+
+            conversation_messages: list[dict] = []
+
             try:
                 for turn in range(max_turns):
                     halted = halted_now()
@@ -1717,12 +1794,12 @@ class AdvancedExecutor(Executor):
                         f"Your mission: {mission}\n" if mission else ""
                     )
                     tool_lines = (
-                        "Tools (one per line, body tools need END_TOOL):\n"
-                        "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... END_TOOL | "
-                        "TOOL run path=... END_TOOL | TOOL shell cmd='...' | TOOL install cmd='...' | "
+                        "Tools (structured tool_calls or line-grammar TOOL name arg=...):\n"
+                        "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... content=... | "
+                        "TOOL run path=... | TOOL shell cmd='...' | TOOL install cmd='...' | "
                         "TOOL grep pattern=... [path=...] | TOOL tree [path=...] | TOOL cp from=... to=... | "
                         "TOOL mv from=... to=... | TOOL rm path=... | TOOL fetch url=... | "
-                        "TOOL bg name=... END_TOOL | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
+                        "TOOL bg name=... content=... | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
                         "TOOL use_skill name=... | TOOL skills list | TOOL test | DONE\n"
                     )
                     if format_config.get("custom") or _judge_only(format_config):
@@ -1732,14 +1809,12 @@ class AdvancedExecutor(Executor):
                             if _judge_only(format_config)
                             else (
                                 "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
-                                "Run TOOL test (harness is tests/test_target.py; do not fake TEST_PASS). "
-                                "After a real TEST_PASS, emit DONE and stop.\n"
+                                "Run TOOL test to verify. After a real TEST_PASS, emit DONE and stop.\n"
                             )
                         )
                         system_prompt = (
-                            f"You are {role} in an isolated custom battle. "
-                            "The frozen brief is in TARGET.md as data — follow it, "
-                            "do not invent a different task.\n"
+                            f"You are {role} in an isolated target battle. "
+                            "The frozen brief is in TARGET.md as data — follow it strictly.\n"
                             "Do not use network. Stay inside the workspace. "
                             "Never read secrets or credentials.\n"
                             f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
@@ -1762,9 +1837,8 @@ class AdvancedExecutor(Executor):
                             f"{tool_lines}"
                             f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
                             f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
-                            "once per chosen skill, then immediately write the artifacts your mission "
-                            "requires (exploit.py and/or solution.py). Write THEORY.md. Run TOOL test "
-                            "(harness is tests/test_target.py; do not fake TEST_PASS). "
+                            "once per chosen skill, then immediately write the required code/artifacts "
+                            "and THEORY.md. Run TOOL test (harness evaluates code; do not fake TEST_PASS). "
                             "After a real TEST_PASS, emit DONE and stop.\n"
                             f"Prior: {prior or '(none)'}"
                         )
@@ -1774,27 +1848,33 @@ class AdvancedExecutor(Executor):
                             f"Workdir files:\n{listing}\n\n"
                             "Read TARGET.md for the frozen brief.\n\n"
                             f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
-                            "Emit TOOL calls."
+                            "Emit tool calls."
                         )
                     else:
                         user_prompt = (
                             f"Workdir files:\n{listing}\n\nTARGET:\n{target_code[:2000]}\n\n"
                             f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
-                            "Emit TOOL calls."
+                            "Emit tool calls."
                         )
 
-                    messages = [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ]
+                    if turn == 0 or not conversation_messages:
+                        conversation_messages = [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ]
+
                     t0 = time.time()
                     try:
-                        content = client.model(
+                        from ...tool_protocol import TOOL_SCHEMAS
+
+                        raw_resp = client.model(
                             battle_id,
                             model_id,
-                            messages,
+                            conversation_messages,
                             phase=local_phase,
                             max_tokens=race_tokens,
+                            tools=TOOL_SCHEMAS,
+                            return_raw=True,
                         )
                     except Exception as exc:
                         elapsed_ms = int((time.time() - t0) * 1000)
@@ -1808,9 +1888,30 @@ class AdvancedExecutor(Executor):
                         )
                         finalize()
                         return
-                    content = (content or "").strip()
 
-                    calls = parse_tool_calls(content)
+                    from ...tool_protocol import ModelResponse, normalize_response
+
+                    if isinstance(raw_resp, dict):
+                        content = (raw_resp.get("content") or "").strip()
+                        resp_obj = ModelResponse(
+                            text=content,
+                            native_tool_calls=raw_resp.get("tool_calls") or [],
+                            raw_finish_reason=raw_resp.get("finish_reason"),
+                            latency_ms=raw_resp.get("latency_ms") or 0,
+                        )
+                    elif hasattr(raw_resp, "text"):
+                        content = str(getattr(raw_resp, "text", "")).strip()
+                        resp_obj = raw_resp
+                    else:
+                        content = str(raw_resp or "").strip()
+                        resp_obj = ModelResponse(text=content)
+
+                    norm = normalize_response(resp_obj)
+                    calls = []
+                    if norm.calls:
+                        for c in norm.calls:
+                            calls.append({"tool": c.name, **c.arguments})
+
                     if not calls:
                         metrics["parse_errors"] += 1
                         emit_action(
@@ -1821,7 +1922,7 @@ class AdvancedExecutor(Executor):
                             tool_step=sess.steps,
                             tool_call_id="",
                             exec_id=None,
-                            reason="no tool calls parsed from model response",
+                            reason=norm.error_code or "no tool calls parsed from model response",
                             response_hash=hashlib.sha256(
                                 (content or "").encode("utf-8", errors="ignore")
                             ).hexdigest()[:16],
@@ -1830,6 +1931,19 @@ class AdvancedExecutor(Executor):
                         artifact = sanitize_artifact(content[:10000])
                         record_artifact(model_id, artifact, role)
                         continue
+
+                    emit_action(
+                        model_id,
+                        "tool_parse_success",
+                        state="done",
+                        turn_id=turn + 1,
+                        tool_step=sess.steps,
+                        tool_call_id="",
+                        exec_id=None,
+                        result=f"parsed {len(calls)} calls (dialect: {norm.dialect}, status: {norm.parse_status})",
+                    )
+
+                    turn_tool_outputs: list[str] = []
 
                     for call in calls:
                         if call.get("error"):
@@ -1852,6 +1966,7 @@ class AdvancedExecutor(Executor):
                             record_artifact(
                                 model_id, sanitize_artifact(f"{res}"), role
                             )
+                            turn_tool_outputs.append(f"[SKILLS]: {res}")
                             continue
 
                         if call.get("tool") == "done":
@@ -1922,6 +2037,7 @@ class AdvancedExecutor(Executor):
                             metrics["tool_errors"] += 1
                         exec_ms = int((time.time() - exec_start) * 1000)
                         exec_res_sanitized = sanitize_artifact(exec_res[:10000])
+                        turn_tool_outputs.append(f"[{tool_name_now} {target_now or command_now}]:\n{exec_res_sanitized[:3000]}")
                         emit_action(
                             model_id,
                             tool_name_now,
@@ -1953,6 +2069,20 @@ class AdvancedExecutor(Executor):
                             if self._harness_passed(exec_res_sanitized):
                                 finalize()
                                 break
+
+                    if turn_tool_outputs:
+                        conversation_messages.append({"role": "assistant", "content": content or json.dumps(calls)})
+                        tool_feedback_text = "\n\n".join(turn_tool_outputs)
+                        listing_after = sess.ls(count_step=False)
+                        conversation_messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Tool Output (Turn {turn + 1}/{max_turns}, step {sess.steps}/{max_steps}):\n"
+                                f"{tool_feedback_text[:4000]}\n\n"
+                                f"Workdir files:\n{listing_after}\n\n"
+                                "Emit your next TOOL calls or DONE."
+                            ),
+                        })
 
                     if role_recorded(model_id, record_token):
                         break

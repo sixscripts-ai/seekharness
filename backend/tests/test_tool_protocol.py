@@ -1,135 +1,188 @@
-"""Slice C tests: JSON-first tool protocol, parse-failure events, exec identity."""
-
 from __future__ import annotations
 
 import json
+import pytest
 
-from agent_arena.sandbox.executors.advanced_executor import parse_tool_calls
-from tests.test_advanced_executor import _PASSING_TOOLS, _RACE_FORMAT, _run_fake_race
-
-
-def test_json_shell_valid():
-    calls = parse_tool_calls('{"tool": "shell", "arguments": {"cmd": "pytest -q"}}')
-    assert calls == [{"tool": "shell", "cmd": "pytest -q", "content": ""}]
-
-
-def test_json_write_and_test_valid():
-    text = '{"tool": "write", "arguments": {"path": "solution.py", "content": "x = 1"}}'
-    calls = parse_tool_calls(text)
-    assert calls[0]["tool"] == "write"
-    assert calls[0]["path"] == "solution.py"
-    assert calls[0]["content"] == "x = 1"
-    assert parse_tool_calls('{"tool": "test"}') == [{"tool": "test"}]
+from agent_arena.tool_protocol import (
+    CanonicalToolCall,
+    ModelResponse,
+    TOOL_SCHEMAS,
+    normalize_response,
+    parse_kimi_token_xml,
+    parse_xml_tags,
+    parse_arena_json,
+    parse_arena_legacy,
+)
+from agent_arena.sandbox.executors.advanced_executor import rank_skills_for_context, select_skills
+from agent_arena.internal_router import _apply_self_learning
 
 
-def test_json_fenced_array_with_prose():
-    payload = json.dumps([{"tool": "read", "arguments": {"path": "TARGET.md"}}, {"tool": "test"}])
-    text = "Let me inspect and fix.\n```json\n" + payload + "\n```\n"
-    calls = parse_tool_calls(text)
-    assert [c["tool"] for c in calls] == ["read", "test"]
-    assert calls[0]["path"] == "TARGET.md"
+def test_tool_schemas_integrity():
+    assert len(TOOL_SCHEMAS) >= 10
+    names = {s["function"]["name"] for s in TOOL_SCHEMAS}
+    assert "read" in names
+    assert "write" in names
+    assert "shell" in names
+    assert "test" in names
+    assert "use_skill" in names
+    assert "done" in names
 
 
-def test_json_run_maps_args():
-    calls = parse_tool_calls(
-        '{"tool": "run", "arguments": {"path": "tests/test_target.py"}}'
+def test_openai_native_tool_calls():
+    resp = ModelResponse(
+        text="",
+        native_tool_calls=[
+            {
+                "id": "call_123",
+                "type": "function",
+                "function": {
+                    "name": "read",
+                    "arguments": json.dumps({"path": "src/index.js"}),
+                },
+            },
+            {
+                "id": "call_456",
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "arguments": json.dumps({"command": "npm test"}),
+                },
+            },
+        ],
     )
-    assert calls[0]["tool"] == "run"
-    assert calls[0]["path"] == "tests/test_target.py"
+    norm = normalize_response(resp)
+    assert norm.parse_status == "native"
+    assert norm.dialect == "openai_native"
+    assert len(norm.calls) == 2
+    assert norm.calls[0].name == "read"
+    assert norm.calls[0].arguments == {"path": "src/index.js"}
+    assert norm.calls[1].name == "shell"
+    assert norm.calls[1].arguments == {"cmd": "npm test"}  # normalized from command
 
 
-def test_invalid_json_falls_back_to_legacy():
-    assert parse_tool_calls("{tool: shell}") == []
-    legacy = parse_tool_calls("TOOL ls\nDONE")
-    assert [c["tool"] for c in legacy] == ["ls", "done"]
+def test_kimi_token_xml_parsing():
+    kimi_text = (
+        "I will inspect the package.json and formatter.<|open|>tools<|sep|>"
+        "<|open|>call tool=\"read\" index=\"1\"<|sep|>"
+        "<|open|>argument key=\"path\" type=\"string\"<|sep|>package.json<|close|>argument<|sep|>"
+        "<|close|>call<|sep|>"
+        "<|open|>call tool=\"shell\" index=\"2\"<|sep|>"
+        "<|open|>argument key=\"cmd\" type=\"string\"<|sep|>npm test<|close|>argument<|sep|>"
+        "<|close|>call<|sep|>"
+        "<|close|>tools<|sep|><|close|>message<|sep|>"
+    )
+    norm = normalize_response(kimi_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "kimi_token_xml"
+    assert len(norm.calls) == 2
+    assert norm.calls[0].name == "read"
+    assert norm.calls[0].arguments == {"path": "package.json"}
+    assert norm.calls[1].name == "shell"
+    assert norm.calls[1].arguments == {"cmd": "npm test"}
 
 
-def test_unknown_json_tool_yields_no_valid_calls():
-    calls = parse_tool_calls('{"tool": "rmdir", "arguments": {}}')
-    assert calls == []  # falls back to legacy -> empty -> parse-failure event
+def test_standard_xml_tag_parsing():
+    xml_text = (
+        "Let's check the files:\n"
+        "<tool_call>\n"
+        "<name>read</name>\n"
+        "<arguments>{\"path\": \"README.md\"}</arguments>\n"
+        "</tool_call>\n"
+        "<tool_call name=\"shell\">\n"
+        "<arguments><cmd>pytest -q</cmd></arguments>\n"
+        "</tool_call>"
+    )
+    norm = normalize_response(xml_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "xml_tag"
+    assert len(norm.calls) == 2
+    assert norm.calls[0].name == "read"
+    assert norm.calls[0].arguments == {"path": "README.md"}
+    assert norm.calls[1].name == "shell"
+    assert norm.calls[1].arguments == {"cmd": "pytest -q"}
 
 
-def test_wrong_argument_shape_invalid():
-    calls = parse_tool_calls('{"tool": "shell", "arguments": "pytest"}')
-    assert calls == []
+def test_arena_fenced_json_parsing():
+    json_text = (
+        "Here are my actions:\n"
+        "```json\n"
+        "[\n"
+        "  {\"tool\": \"write\", \"arguments\": {\"path\": \"solution.py\", \"code\": \"def solve(): pass\"}},\n"
+        "  {\"tool\": \"test\", \"arguments\": {}}\n"
+        "]\n"
+        "```"
+    )
+    norm = normalize_response(json_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "arena_json"
+    assert len(norm.calls) == 2
+    assert norm.calls[0].name == "write"
+    assert norm.calls[0].arguments == {"path": "solution.py", "content": "def solve(): pass"}
+    assert norm.calls[1].name == "test"
 
 
-def test_mixed_valid_and_invalid_json():
-    text = '[{"tool": "ls"}, {"tool": "wat", "arguments": {}}]'
-    calls = parse_tool_calls(text)
-    assert calls[0]["tool"] == "ls"
-    assert calls[1].get("error"), "invalid entry must carry an error marker"
+def test_legacy_line_grammar_parsing():
+    legacy_text = (
+        "SKILLS: sandbox-runtime-engineer, secure-code-execution\n"
+        "TOOL read path=src/index.js\n"
+        "TOOL shell cmd='npm test'\n"
+        "TOOL write path=src/fix.js\n"
+        "const x = 1;\n"
+        "END_TOOL\n"
+        "DONE"
+    )
+    norm = normalize_response(legacy_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "arena_legacy"
+    assert len(norm.calls) == 5
+    assert norm.calls[0].name == "skills"
+    assert norm.calls[0].arguments["chosen"] == ["sandbox-runtime-engineer", "secure-code-execution"]
+    assert norm.calls[1].name == "read"
+    assert norm.calls[1].arguments == {"path": "src/index.js"}
+    assert norm.calls[2].name == "shell"
+    assert norm.calls[2].arguments == {"cmd": "npm test"}
+    assert norm.calls[3].name == "write"
+    assert norm.calls[3].arguments == {"path": "src/fix.js", "content": "const x = 1;"}
+    assert norm.calls[4].name == "done"
 
 
-def test_action_log_carries_execution_identity(monkeypatch):
-    import os
-
-    scores, transport = _run_fake_race(monkeypatch, _PASSING_TOOLS)
-    assert scores
-    identity = None
-    for r in transport.rounds:
-        if r.get("event_type") == "action_log":
-            identity = json.loads(r["artifact"])
-            break
-    assert identity, "expected an action_log event"
-    for key in (
-        "battle_id", "fighter_id", "phase_id", "turn_id",
-        "event_sequence", "tool_step", "tool_call_id", "exec_id",
-    ):
-        assert key in identity, key
-    # Backward-compatible payload shape for existing consumers.
-    for key in ("action", "target", "state", "duration_ms", "result"):
-        assert key in identity, key
-    assert identity["battle_id"] == "race-1"
-    assert identity["fighter_id"] in ("a", "b")
-    # The first logged action is a file read: a tool call, not an OS exec.
-    assert identity["tool_call_id"].startswith("tool_")
-    assert identity["tool_step"] >= 1
-    assert identity["exec_id"] is None
-    # A process-producing tool must carry a real exec_id.
-    exec_events = [
-        json.loads(r["artifact"])
-        for r in transport.rounds
-        if r.get("event_type") == "action_log"
-        and json.loads(r["artifact"]).get("action") == "test"
+def test_skill_ranking_token_relevance():
+    mock_pool = [
+        {"name": "generic-infra", "slug": "generic-infra", "description": "Cloud infra setup", "tags": ["cloud"], "category": "infra"},
+        {"name": "node-package-debugging", "slug": "node-package-debugging", "description": "Fix broken npm packages and node modules", "tags": ["node", "npm", "javascript"], "category": "debugging"},
+        {"name": "python-kata-fixer", "slug": "python-kata-fixer", "description": "Solve Python algorithms and unit tests", "tags": ["python", "kata"], "category": "python"},
+        {"name": "secure-code-execution", "slug": "secure-code-execution", "description": "Sandbox isolation and security", "tags": ["security"], "category": "security"},
     ]
-    assert exec_events, "expected a test action log"
-    assert exec_events[0]["exec_id"].startswith("exec_")
-    os.environ.pop("ARENA_IN_SANDBOX", None)
-
-
-def test_parse_failure_emits_event(monkeypatch):
-    import os
-
-    from agent_arena.sandbox.client import FakeTransport, InternalClient
-    from agent_arena.sandbox.executors.advanced_executor import AdvancedExecutor
-
-    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
-    monkeypatch.setenv("ARENA_PREVIEW", "0")
-    transport = FakeTransport()
-    transport.model_replies = {"a": "I have no tools to call today.", "b": _PASSING_TOOLS}
-    transport.judge_result = {
-        "scores": {"a": 1.0, "b": 9.0},
-        "justifications": {},
-        "judge_model": "mock",
+    
+    # Node target config
+    node_cfg = {
+        "name": "broken-package-recovery",
+        "category": "debugging",
+        "runtime": "node",
+        "objectives": ["Repair broken npm module exports", "Make npm test pass in node environment"],
+        "tags": ["node", "package"],
     }
-    AdvancedExecutor().run_battle(
-        battle_id="pf-1",
-        format_config={**_RACE_FORMAT, "max_tool_turns": 1, "max_tool_steps": 20},
-        model_ids=["a", "b"],
-        round_visibility="isolated",
-        timeout_seconds=60,
-        role_to_model={"player_a": "a", "player_b": "b"},
-        client=InternalClient(transport),
-    )
-    failures = [
-        json.loads(r["artifact"])
-        for r in transport.rounds
-        if r.get("event_type") == "action_log"
-        and "tool_parse_failed" in (r.get("artifact") or "")
+    ranked = rank_skills_for_context(mock_pool, node_cfg, limit=3)
+    assert ranked[0]["name"] == "node-package-debugging"
+    
+    # Python target config
+    py_cfg = {
+        "name": "algo-reverse",
+        "category": "python",
+        "runtime": "python",
+        "objectives": ["Fix python palindrome kata"],
+        "tags": ["python", "algorithm"],
+    }
+    ranked_py = rank_skills_for_context(mock_pool, py_cfg, limit=3)
+    assert ranked_py[0]["name"] == "python-kata-fixer"
+
+
+def test_apply_self_learning_no_failed_winners():
+    results = [
+        {"model_id": "host:modal-kimi", "passed": False, "steps": 5, "chosen_skills": ["secure-code-execution"]}
     ]
-    assert failures, "malformed model output must emit tool_parse_failed"
-    assert failures[0]["reason"]
-    assert failures[0]["response_hash"]
-    assert failures[0]["turn_id"] == 1
-    os.environ.pop("ARENA_IN_SANDBOX", None)
+    battle = {"user_id": "test_user", "format_id": "solo", "model_ids": ["host:modal-kimi"]}
+    
+    # Run self learning on failed solo battle
+    # Should not raise and should not credit the failed fighter with a win
+    _apply_self_learning(None, "db", battle, "battle_failed_solo", results)

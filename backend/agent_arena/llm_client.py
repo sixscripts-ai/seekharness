@@ -30,7 +30,13 @@ def chat_completion(
     temperature: float = 0.7,
     timeout: float = 300.0,
     response_format: dict | None = None,
-) -> str:
+    tools: list[dict] | None = None,
+    tool_choice: str | None = None,
+    return_response_obj: bool = False,
+) -> str | ModelResponse:
+    import time
+    from .tool_protocol import ModelResponse
+
     headers = build_headers(auth_style, api_key)
     base_url = validate_base_url(base_url)
     url = base_url.rstrip("/") + "/chat/completions"
@@ -42,12 +48,19 @@ def chat_completion(
     }
     if response_format is not None:
         payload["response_format"] = response_format
+    if tools is not None:
+        payload["tools"] = tools
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+
+    t0 = time.time()
     try:
         resp = httpx.post(url, headers=headers, json=payload, timeout=timeout)
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502, detail=f"LLM request failed: {exc}"
         ) from exc
+    latency_ms = int((time.time() - t0) * 1000)
     if resp.status_code != 200:
         raise HTTPException(
             status_code=502,
@@ -55,6 +68,26 @@ def chat_completion(
         )
     data = resp.json()
     try:
-        return data["choices"][0]["message"]["content"] or ""
+        choice = data["choices"][0]
+        message = choice["message"]
+        content = message.get("content") or ""
+        native_tool_calls = message.get("tool_calls") or []
+        finish_reason = choice.get("finish_reason")
     except (KeyError, IndexError, TypeError) as exc:
         raise HTTPException(status_code=502, detail="Malformed LLM response") from exc
+
+    if return_response_obj:
+        return ModelResponse(
+            text=content,
+            native_tool_calls=native_tool_calls,
+            provider=base_url,
+            model=model,
+            raw_finish_reason=finish_reason,
+            latency_ms=latency_ms,
+        )
+
+    if not content and native_tool_calls:
+        # If content is empty but native tool calls exist, serialize for string callers
+        import json
+        return json.dumps([{"tool": tc.get("function", {}).get("name"), "arguments": json.loads(tc.get("function", {}).get("arguments", "{}"))} for tc in native_tool_calls])
+    return content

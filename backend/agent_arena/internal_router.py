@@ -127,6 +127,8 @@ class ModelBody(BaseModel):
     phase: str = ""
     messages: list[dict] = Field(default_factory=list)
     max_tokens: int = 1024
+    tools: list[dict] | None = None
+    tool_choice: str | None = None
 
     @field_validator("messages")
     @classmethod
@@ -261,62 +263,68 @@ def _apply_self_learning(
         return
     from .persistence import service
 
-    sorted_res = sorted(
-        results,
-        key=lambda x: (bool(x.get("passed")), -int(x.get("steps") or 999)),
-        reverse=True,
-    )
-    winner = sorted_res[0]
+    # Only fighters that actually passed are eligible to win
+    passed_results = [r for r in results if r.get("passed")]
+    winner = None
+    if passed_results:
+        winner = min(passed_results, key=lambda x: int(x.get("steps") or 999))
+
     format_name = ""
     try:
         fmt_record = service.format_get(str(battle.get("format_id") or ""))
         format_name = str((fmt_record or {}).get("name") or "")
     except Exception:
         format_name = str(battle.get("format_id") or "")
-    try:
-        if service.using_postgres():
-            service.memory_create(
-                str(battle.get("user_id") or "system"),
-                (
-                    f"Battle {battle_id} format {format_name} "
-                    f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
-                    f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
-                    f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
-                    "Skills to beat opponent technique emerged."
-                ),
-                battle_id=battle_id,
-                model_id=str(winner.get("model_id") or ""),
-                format=format_name,
-                chosen_skills=list(winner.get("chosen_skills") or []),
-                theory=str(winner.get("theory") or ""),
-                outcome=str(winner.get("outcome") or ""),
-            )
-        else:
-            from .memory import maybe_remember
 
-            maybe_remember(
-                databases,
-                database_id,
-                insight=(
-                    f"Battle {battle_id} format {format_name} "
-                    f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
-                    f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
-                    f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
-                    "Skills to beat opponent technique emerged."
-                ),
-                battle_id=battle_id,
-                model_id=str(winner.get("model_id") or ""),
-                format_name=format_name,
-                chosen_skills=list(winner.get("chosen_skills") or []),
-                theory=str(winner.get("theory") or ""),
-                outcome=str(winner.get("outcome") or ""),
-                user_id=str(battle.get("user_id") or "system"),
-            )
-    except Exception:
-        pass
+    if winner is not None:
+        try:
+            if service.using_postgres():
+                service.memory_create(
+                    str(battle.get("user_id") or "system"),
+                    (
+                        f"Battle {battle_id} format {format_name} "
+                        f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
+                        f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
+                        f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
+                        "Skills to beat opponent technique emerged."
+                    ),
+                    battle_id=battle_id,
+                    model_id=str(winner.get("model_id") or ""),
+                    format=format_name,
+                    chosen_skills=list(winner.get("chosen_skills") or []),
+                    theory=str(winner.get("theory") or ""),
+                    outcome=str(winner.get("outcome") or ""),
+                )
+            else:
+                from .memory import maybe_remember
+
+                maybe_remember(
+                    databases,
+                    database_id,
+                    insight=(
+                        f"Battle {battle_id} format {format_name} "
+                        f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
+                        f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
+                        f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
+                        "Skills to beat opponent technique emerged."
+                    ),
+                    battle_id=battle_id,
+                    model_id=str(winner.get("model_id") or ""),
+                    format_name=format_name,
+                    chosen_skills=list(winner.get("chosen_skills") or []),
+                    theory=str(winner.get("theory") or ""),
+                    outcome=str(winner.get("outcome") or ""),
+                    user_id=str(battle.get("user_id") or "system"),
+                )
+        except Exception:
+            pass
+
     for r in results:
-        outcome = "win" if r is winner else "loss"
-        for chosen in list(r.get("chosen_skills") or [])[:5]:
+        # A fighter only wins if it passed and is the declared winner. All failed fighters record a loss.
+        outcome = "win" if (winner is not None and r is winner) else "loss"
+        # Only attribute skills that were actually loaded or chosen
+        skills_to_attribute = list(r.get("skill_reads") or r.get("chosen_skills") or [])[:5]
+        for chosen in skills_to_attribute:
             try:
                 if service.using_postgres():
                     _record_skill_outcome_pg(str(chosen), outcome)
@@ -466,13 +474,16 @@ def internal_model(
         raise HTTPException(status_code=400, detail="model not in battle")
     base, style, key, model = get_model_call_spec(body.model_id, battle["user_id"])
     try:
-        content = llm_client.chat_completion(
+        resp = llm_client.chat_completion(
             base_url=base,
             auth_style=style,
             api_key=key,
             model=model,
             messages=body.messages,
             max_tokens=body.max_tokens,
+            tools=body.tools,
+            tool_choice=body.tool_choice,
+            return_response_obj=True,
         )
     except HTTPException as exc:
         print(
@@ -480,7 +491,12 @@ def internal_model(
             f"model={body.model_id} slug={model} detail={str(exc.detail)[:300]!r}"
         )
         raise
-    return {"content": content}
+    return {
+        "content": resp.text,
+        "tool_calls": resp.native_tool_calls,
+        "finish_reason": resp.raw_finish_reason,
+        "latency_ms": resp.latency_ms,
+    }
 
 
 @router.post("/judge")

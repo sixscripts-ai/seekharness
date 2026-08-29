@@ -36,7 +36,14 @@ def _assert_egress_allowed(url: str) -> None:
     host = host.strip("[]").rstrip(".")
     try:
         addr = ipaddress.ip_address(host)
-        if not addr.is_global or addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast or addr.is_unspecified:
+        if (
+            not addr.is_global
+            or addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
             raise RuntimeError(f"Sandbox egress blocked: {host}")
         return
     except ValueError:
@@ -54,7 +61,14 @@ def _assert_egress_allowed(url: str) -> None:
                 a = ipaddress.ip_address(ip)
             except ValueError:
                 continue
-            if not a.is_global or a.is_private or a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified:
+            if (
+                not a.is_global
+                or a.is_private
+                or a.is_loopback
+                or a.is_link_local
+                or a.is_multicast
+                or a.is_unspecified
+            ):
                 raise RuntimeError(f"Sandbox egress blocked: {host} -> {ip}")
 
 
@@ -141,7 +155,9 @@ class FakeTransport:
                 content = reply.pop(0) if reply else f"[reply:{mid}]"
             else:
                 content = reply
-            return {"content": content}
+            if isinstance(content, dict):
+                return content
+            return {"content": content, "tool_calls": []}
         if path == "/internal/judge":
             return self.judge_result
         if path == "/internal/round":
@@ -163,7 +179,10 @@ class InternalClient:
         messages: list[dict],
         phase: str = "",
         max_tokens: int | None = None,
-    ) -> str:
+        tools: list[dict] | None = None,
+        tool_choice: str | None = None,
+        return_raw: bool = False,
+    ) -> str | dict:
         payload: dict[str, Any] = {
             "battle_id": battle_id,
             "model_id": model_id,
@@ -172,7 +191,13 @@ class InternalClient:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         data = self.t.post("/internal/model", payload)
+        if return_raw:
+            return data
         return data.get("content", "")
 
     def judge(
@@ -200,6 +225,9 @@ class InternalClient:
         artifact: str,
         event_type: str = "artifact",
         sequence: int | None = None,
+        tool_trace: dict | None = None,
+        verification_log: str | None = None,
+        meta: dict | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "battle_id": battle_id,
@@ -210,6 +238,12 @@ class InternalClient:
         }
         if sequence is not None:
             payload["sequence"] = sequence
+        if tool_trace is not None:
+            payload["tool_trace"] = tool_trace
+        if verification_log is not None:
+            payload["verification_log"] = verification_log
+        if meta is not None:
+            payload["meta"] = meta
         self.t.post("/internal/round", payload)
 
     def status(self, battle_id: str) -> str:
