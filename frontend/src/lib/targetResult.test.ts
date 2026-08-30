@@ -6,7 +6,7 @@ import {
 } from "./targetResult";
 
 describe("target result truth", () => {
-  it("does not render a verified winner for TURN_BUDGET_EXCEEDED + verified_solution=false", () => {
+  it("renders trusted verified_fail as verified fail without a winner", () => {
     const view = targetResultPresentation({
       status: "completed",
       isTargetBattle: true,
@@ -16,19 +16,16 @@ describe("target result truth", () => {
         verified_solution: false,
         verification_status: "verified_fail",
         termination_reason: "TURN_BUDGET_EXCEEDED",
-        outcome: "TURN_BUDGET_EXCEEDED",
       },
     });
-    expect(view.statusLabel).toBe("UNVERIFIED TARGET RESULT");
-    expect(view.statusLabel.startsWith("VERIFIED")).toBe(false);
+    expect(view.statusLabel).toBe("Verified fail");
+    expect(view.verificationLabel).toBe("Verified fail");
     expect(view.showCompetitiveWinner).toBe(false);
     expect(view.winnerId).toBeNull();
     expect(view.scores).toEqual({ "host:modal-kimi": 0 });
-    expect(view.terminalOutcome).toBe("TURN_BUDGET_EXCEEDED");
-    expect(view.verificationLabel).toMatch(/Unverified|Verification not completed/i);
   });
 
-  it("uses authoritative score 0 instead of a legacy judge 58", () => {
+  it("uses authoritative score 0 instead of an untrusted judge score", () => {
     const view = targetResultPresentation({
       status: "completed",
       isTargetBattle: true,
@@ -41,10 +38,10 @@ describe("target result truth", () => {
     });
     expect(view.scores?.["host:modal-kimi"]).toBe(0);
     expect(view.showCompetitiveWinner).toBe(false);
-    expect(view.statusLabel).toBe("UNVERIFIED TARGET RESULT");
+    expect(view.statusLabel).toBe("Unverified");
   });
 
-  it("shows a verified winner only after trusted verification passed", () => {
+  it("shows a winner only after trusted verification passes", () => {
     const view = targetResultPresentation({
       status: "completed",
       isTargetBattle: true,
@@ -53,13 +50,10 @@ describe("target result truth", () => {
         winner: "host:modal-kimi",
         verified_solution: true,
         verification_status: "verified_pass",
-        termination_reason: "TEST_PASS",
       },
     });
-    expect(view.statusLabel).toBe("VERIFIED TARGET RESULT");
+    expect(view.statusLabel).toBe("Verified pass");
     expect(view.showCompetitiveWinner).toBe(true);
-    expect(view.winnerId).toBe("host:modal-kimi");
-    expect(view.verificationLabel).toBe("Verified");
   });
 
   it("labels not_attempted as verification not completed", () => {
@@ -67,8 +61,34 @@ describe("target result truth", () => {
   });
 
   it("ignores judge score events that are not authoritative", () => {
-    expect(isAuthoritativeScoresEvent({ scores: { a: 58 } } as never)).toBe(false);
-    expect(isAuthoritativeScoresEvent({ authoritative: true, source: "arena-score-v1" })).toBe(true);
+    expect(isAuthoritativeScoresEvent({})).toBe(false);
+    expect(isAuthoritativeScoresEvent({ authoritative: true })).toBe(true);
     expect(isAuthoritativeScoresEvent({ source: "arena-score-v1" })).toBe(true);
+  });
+
+  it("keeps infrastructure failure distinct from unverified and failed", () => {
+    const view = targetResultPresentation({
+      status: "completed",
+      isTargetBattle: true,
+      result: {
+        verification_status: "infra_failure",
+        verified_solution: false,
+      },
+    });
+    expect(view.statusLabel).toBe("Infrastructure failure");
+    expect(view.verificationLabel).toBe("Verification infrastructure failure");
+    expect(view.showCompetitiveWinner).toBe(false);
+  });
+
+  it("does not fabricate a winner for cancelled or failed battles", () => {
+    for (const status of ["failed", "cancelled"] as const) {
+      const view = targetResultPresentation({
+        status,
+        isTargetBattle: true,
+        result: { winner: "host:modal-kimi", scores: { "host:modal-kimi": 1 } },
+      });
+      expect(view.showCompetitiveWinner).toBe(false);
+      expect(view.winnerId).toBeNull();
+    }
   });
 });

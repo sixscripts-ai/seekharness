@@ -106,6 +106,11 @@ from ...skills import (
     fighter_skill_graph_guidance,
     rank_skills,
 )
+from ...skill_telemetry import (
+    public_skill_file_read,
+    public_skill_tool_output,
+    skill_event_for_call,
+)
 
 
 def rank_skills_for_context(
@@ -3048,6 +3053,37 @@ class AdvancedExecutor(Executor):
                     sequence=seq["n"],
                 )
 
+        def emit_skill_activity(
+            model_id,
+            role,
+            phase_id,
+            event_type,
+            fields,
+            *,
+            success=None,
+        ):
+            with io_lock:
+                seq["n"] += 1
+                payload = {
+                    "type": event_type,
+                    "fighter_id": model_id,
+                    "fighter_slot": role,
+                    "role": role,
+                    "phase_id": phase_id or phase_name,
+                    "event_sequence": int(seq["n"]),
+                    **fields,
+                }
+                if success is not None:
+                    payload["success"] = bool(success)
+                client.round(
+                    battle_id,
+                    phase_id or phase_name,
+                    model_id,
+                    json.dumps(payload),
+                    event_type=event_type,
+                    sequence=seq["n"],
+                )
+
         def record_artifact(model_id, artifact, role, phase_id=""):
             art_phase = phase_id or phase_name
             with io_lock:
@@ -3630,7 +3666,23 @@ class AdvancedExecutor(Executor):
                             failed = not res.success
                             if failed:
                                 metrics["tool_errors"] += 1
-                            record_artifact(model_id, sanitize_artifact(str(res)), role)
+                            public_result = public_skill_tool_output(
+                                call,
+                                success=res.success,
+                                resolver=skill_resolver,
+                            )
+                            activity = skill_event_for_call(call, skill_resolver)
+                            if activity:
+                                event_type, fields = activity
+                                emit_skill_activity(
+                                    model_id,
+                                    role,
+                                    local_phase,
+                                    event_type,
+                                    fields,
+                                    success=res.success,
+                                )
+                            record_artifact(model_id, public_result, role)
                             turn_tool_outputs.append(f"[SKILLS]: {res}")
                             emit_action(
                                 model_id,
@@ -3639,7 +3691,7 @@ class AdvancedExecutor(Executor):
                                 state="done" if not failed else "failed",
                                 turn_id=turn + 1,
                                 tool_step=sess.steps,
-                                result=str(res.output)[:4000],
+                                result=public_result,
                                 role=role,
                                 workspace=work.name,
                             )
@@ -3747,6 +3799,17 @@ class AdvancedExecutor(Executor):
                             else:
                                 tracker.record_selected(skill_arg)
                                 tracker.record_load_failed(skill_arg, "unknown_skill")
+                            activity = skill_event_for_call(call, skill_resolver)
+                            if activity:
+                                event_type, fields = activity
+                                emit_skill_activity(
+                                    model_id,
+                                    role,
+                                    local_phase,
+                                    event_type,
+                                    fields,
+                                    success=tool_res.success,
+                                )
                         elif tool_name_now == "read":
                             read_path = str(call.get("path") or "")
                             if ".agents/skills" in read_path or "SKILL.md" in read_path:
@@ -3760,6 +3823,19 @@ class AdvancedExecutor(Executor):
 
                         exec_ms = int((time.time() - exec_start) * 1000)
                         exec_res_sanitized = sanitize_artifact(tool_res.output[:10000])
+                        public_exec_result = exec_res_sanitized[:4000]
+                        if tool_name_now == "use_skill":
+                            public_exec_result = public_skill_tool_output(
+                                call,
+                                success=tool_res.success,
+                                resolver=skill_resolver,
+                            )
+                        elif tool_name_now == "read":
+                            skill_read_marker = public_skill_file_read(
+                                call.get("path")
+                            )
+                            if skill_read_marker:
+                                public_exec_result = skill_read_marker
                         turn_tool_outputs.append(
                             f"[{tool_name_now} {target_now or command_now}]:\n{exec_res_sanitized[:3000]}"
                         )
@@ -3770,7 +3846,7 @@ class AdvancedExecutor(Executor):
                             command=command_now,
                             state="failed" if failed else "done",
                             duration_ms=exec_ms,
-                            result=exec_res_sanitized[:4000],
+                            result=public_exec_result,
                             turn_id=turn + 1,
                             tool_step=step_before + 1,
                             tool_call_id=tool_call_id,
@@ -3778,7 +3854,7 @@ class AdvancedExecutor(Executor):
                             role=role,
                             workspace=work.name,
                         )
-                        record_artifact(model_id, exec_res_sanitized, role)
+                        record_artifact(model_id, public_exec_result, role)
 
                         tool_name = call.get("tool")
                         run_path = str(call.get("path") or "").replace("\\", "/")

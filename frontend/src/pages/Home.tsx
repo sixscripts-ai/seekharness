@@ -1,62 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import {
   api,
   type BattleOut,
-  type FormatOut,
-  type ProviderOut,
   type StatsOut,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { useHiddenProviders } from "@/lib/hiddenProviders";
 import {
   Activity,
   ArrowRight,
   CheckCircle2,
   Cpu,
-  Flame,
-  Layers,
-  Play,
   Plus,
   Radio,
-  RefreshCw,
-  Search,
-  Shield,
-  ShieldCheck,
   Sparkles,
   Swords,
-  Trophy,
-  Zap,
 } from "lucide-react";
 
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
 export default function Home() {
-  const { user, jwt, refreshJwt } = useAuth();
-  const { isHidden } = useHiddenProviders();
-  const navigate = useNavigate();
+  const { jwt, refreshJwt } = useAuth();
 
-  const [formats, setFormats] = useState<FormatOut[]>([]);
-  const [providers, setProviders] = useState<ProviderOut[]>([]);
   const [stats, setStats] = useState<StatsOut | null>(null);
   const [statsFailed, setStatsFailed] = useState(false);
   const [recentBattles, setRecentBattles] = useState<BattleOut[]>([]);
   const [loading, setLoading] = useState(true);
-
-  // Quick Duel selected models
-  const [fighterA, setFighterA] = useState<string>("");
-  const [fighterB, setFighterB] = useState<string>("");
-  const [selectedFormat, setSelectedFormat] = useState<string>("");
-  const [launching, setLaunching] = useState(false);
-
-  const visibleProviders = useMemo(
-    () => providers.filter((p) => !isHidden(p.id)),
-    [providers, isHidden],
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -64,39 +31,17 @@ export default function Home() {
     async function loadData() {
       setLoading(true);
       try {
-        const [fList, sData] = await Promise.all([
-          api.formats(null).catch(() => []),
-          api.stats().catch(() => null),
-        ]);
+        const sData = await api.stats().catch(() => null);
 
         if (cancelled) return;
-        setFormats(Array.isArray(fList) ? fList : []);
         setStats(sData);
         setStatsFailed(sData === null);
 
-        if (fList.length > 0) {
-          setSelectedFormat(fList[0].id);
-        }
-
-        // If authenticated, load real battles & providers
         const token = (await refreshJwt()) || jwt;
         if (token) {
-          const [pList, bList] = await Promise.all([
-            api.providers(token).catch(() => []),
-            api.listBattles(token).catch(() => []),
-          ]);
-
+          const bList = await api.listBattles(token).catch(() => []);
           if (cancelled) return;
-          setProviders(pList);
-          setRecentBattles(bList);
-
-          if (pList.length >= 2) {
-            setFighterA(pList[0].id);
-            setFighterB(pList[1].id);
-          } else if (pList.length === 1) {
-            setFighterA(pList[0].id);
-            setFighterB(pList[0].id);
-          }
+          setRecentBattles(Array.isArray(bList) ? bList : []);
         }
       } catch (e) {
         console.error("Failed to load arena home data:", e);
@@ -121,39 +66,6 @@ export default function Home() {
       activeLiveBattle: running[0] || null,
     };
   }, [recentBattles]);
-
-  async function handleQuickLaunch(e: React.FormEvent) {
-    e.preventDefault();
-    if (!fighterA || !fighterB || !selectedFormat) return;
-
-    setLaunching(true);
-    try {
-      const token = (await refreshJwt()) || jwt;
-      if (!token) {
-        navigate(
-          `/battles/new?format=${encodeURIComponent(
-            selectedFormat,
-          )}&modelA=${encodeURIComponent(fighterA)}&modelB=${encodeURIComponent(
-            fighterB,
-          )}`,
-        );
-        return;
-      }
-
-      const res = await api.createBattle(token, {
-        format_id: selectedFormat,
-        model_ids: [fighterA, fighterB],
-        timeout_seconds: 600,
-        save: true,
-      });
-      navigate(`/battles/${res.id}`);
-    } catch (e) {
-      console.error("Quick duel launch error:", e);
-      navigate("/battles/new");
-    } finally {
-      setLaunching(false);
-    }
-  }
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-[#0A0A0A] py-8 text-foreground">
@@ -357,170 +269,6 @@ export default function Home() {
                   </Link>
                 </div>
               )}
-            </div>
-          </div>
-
-          {/* =============================================================== */}
-          {/* 3. RECENT VERIFIED RESULTS & DYNAMIC QUICK DUEL                  */}
-          {/* =============================================================== */}
-          <div className="relative z-10 grid grid-cols-12 gap-6 pt-4">
-            {/* Recent Verified Results (7 cols) */}
-            <div className="col-span-12 rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl lg:col-span-7 flex flex-col justify-between space-y-5">
-              <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-accent" />
-                  <h2 className="mono text-xs font-bold uppercase tracking-wider text-white">
-                    Recent Verified Results
-                  </h2>
-                </div>
-                <Link
-                  to="/leaderboard"
-                  className="mono text-[11px] text-zinc-400 hover:text-white"
-                >
-                  View Rankings →
-                </Link>
-              </div>
-
-              {completedBattles.length === 0 ? (
-                <div className="py-8 text-center space-y-2">
-                  <Trophy className="mx-auto h-7 w-7 text-zinc-600" />
-                  <p className="text-xs text-zinc-400">
-                    No verified completed battles in your current session history.
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {completedBattles.slice(0, 3).map((b) => (
-                    <Link
-                      key={b.id}
-                      to={`/battles/${b.id}`}
-                      className="block rounded-lg border border-[#1F1F22] bg-[#09090E] p-4 transition-all hover:border-accent/40"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="space-y-1">
-                          <div className="mono text-[10px] text-accent font-bold">
-                            {b.format_id}
-                          </div>
-                          <div className="text-xs font-bold text-white">
-                            {(b.model_ids || []).join("  vs  ")}
-                          </div>
-                        </div>
-                        <div className="mono text-right text-xs">
-                          <span className="text-emerald-400 font-bold">
-                            VERIFIED RESULT
-                          </span>
-                          <div className="text-[10px] text-zinc-500">
-                            Replay available →
-                          </div>
-                        </div>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
-
-              <div className="border-t border-[#1F1F22] pt-3 flex items-center justify-between mono text-[11px] text-zinc-500">
-                <span>All matches evaluated in ephemeral isolated microVMs.</span>
-                <Link to="/battles" className="text-accent hover:underline">
-                  All Archive Records
-                </Link>
-              </div>
-            </div>
-
-            {/* Dynamic Quick Duel Launcher (5 cols) */}
-            <div className="col-span-12 rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl lg:col-span-5 flex flex-col justify-between space-y-5">
-              <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
-                <div className="flex items-center gap-2">
-                  <Zap className="h-4 w-4 text-accent" />
-                  <h2 className="mono text-xs font-bold uppercase tracking-wider text-white">
-                    Quick Match Launcher
-                  </h2>
-                </div>
-                <span className="mono text-[10px] text-zinc-500">ONE-CLICK LAUNCH</span>
-              </div>
-
-              <form onSubmit={handleQuickLaunch} className="space-y-3.5">
-                <div>
-                  <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                    Format
-                  </label>
-                  <select
-                    value={selectedFormat}
-                    onChange={(e) => setSelectedFormat(e.target.value)}
-                    className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#09090E] px-3 py-2 text-xs text-white focus:border-accent focus:outline-none"
-                  >
-                    {formats.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                      Fighter A
-                    </label>
-                    <select
-                      value={fighterA}
-                      onChange={(e) => setFighterA(e.target.value)}
-                      className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#09090E] px-2.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
-                    >
-                      {visibleProviders.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                      {visibleProviders.length === 0 && (
-                        <option value="host:modal-kimi">Kimi K3 (Platform)</option>
-                      )}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
-                      Fighter B
-                    </label>
-                    <select
-                      value={fighterB}
-                      onChange={(e) => setFighterB(e.target.value)}
-                      className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#09090E] px-2.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
-                    >
-                      {visibleProviders.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                      {visibleProviders.length === 0 && (
-                        <option value="host:openrouter-free">DeepSeek R1 (Platform)</option>
-                      )}
-                    </select>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={launching}
-                  className="btn btn-primary flex h-10 w-full items-center justify-center gap-2 text-xs font-bold shadow-[0_0_14px_rgba(255,0,160,0.3)] mt-2"
-                >
-                  {launching ? (
-                    <>
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                      <span>Provisioning Sandbox…</span>
-                    </>
-                  ) : (
-                    <>
-                      <Play className="h-3.5 w-3.5" />
-                      <span>Launch Instant Match</span>
-                    </>
-                  )}
-                </button>
-              </form>
-
-              <div className="mono text-[10px] text-zinc-500 text-center">
-                Runs on unranked sandbox runtime. Replay automatically preserved.
-              </div>
             </div>
           </div>
         </div>

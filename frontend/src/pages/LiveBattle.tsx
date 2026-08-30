@@ -1,20 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import {
-  Boxes,
+  ArrowLeft,
   Check,
   ChevronDown,
-  ChevronUp,
   Copy,
   Download,
-  ExternalLink,
+  MoreHorizontal,
   RotateCcw,
   Save,
-  ShieldCheck,
   Square,
+  Target,
   XCircle,
 } from "lucide-react";
-import { Link, useParams } from "react-router-dom";
 import {
   api,
   streamBattle,
@@ -25,120 +24,67 @@ import {
   type TargetDetailOut,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import LiveExecutionPane, {
-  type BattleStreamItem,
-} from "@/components/LiveExecutionPane";
 import { cn } from "@/lib/utils";
+import { isAuthoritativeScoresEvent, targetResultPresentation } from "@/lib/targetResult";
+import ExecutionSurface from "@/components/battle/ExecutionSurface";
+import BattleInspector from "@/components/battle/BattleInspector";
+import BattleStatus from "@/components/battle/BattleStatus";
+import type { BattleStreamItem, SkillActivity } from "@/components/battle/types";
 import {
-  isAuthoritativeScoresEvent,
-  targetResultPresentation,
-} from "@/lib/targetResult";
+  mergeEvent,
+  parseAction,
+  parseJson,
+  shortModelName,
+  skillActivityFromEvent,
+  titleCase,
+} from "@/components/battle/utils";
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
-type DockTab = "activity" | "handoffs" | "evidence" | "judge";
+type InspectorTab = "activity" | "expertise" | "evidence" | "result";
 
-type ParsedAction = {
-  battle_id?: string;
-  fighter_id?: string;
-  role?: string;
-  phase_id?: string;
-  event_sequence?: number;
-  turn_id?: number;
-  tool_step?: number;
-  tool_call_id?: string;
-  exec_id?: string | null;
-  action?: string;
-  command?: string;
-  target?: string;
-  state?: string;
-  duration_ms?: number;
-  result?: string;
-  workspace?: string;
-};
-
-function parseJson(value: unknown): any | null {
-  if (value && typeof value === "object") return value;
-  if (typeof value !== "string") return null;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
+function unwrap(ev: StreamEvent): any {
+  const wrapped = ev.data as any;
+  if (wrapped && typeof wrapped === "object" && wrapped.data && typeof wrapped.data === "object") return wrapped.data;
+  return wrapped;
 }
 
-function unwrap(ev: StreamEvent) {
-  const wrapped = ev.data as any;
-  return wrapped?.data ?? wrapped;
+function eventTime(data: any): number {
+  const raw = data?.created_at ?? data?.ts ?? data?.timestamp;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return Date.now();
+  return raw < 1_000_000_000_000 ? raw * 1000 : raw;
 }
 
-function normalizeArtifact(ev: StreamEvent, fallbackPhase: string): BattleStreamItem | null {
-  const data = unwrap(ev) as any;
+function normalizeEvent(ev: StreamEvent, fallbackPhase: string): BattleStreamItem | null {
+  const data = unwrap(ev) || {};
   const wrapped = ev.data as any;
-  const raw = data?.artifact ?? wrapped?.artifact ?? data?.message ?? data;
-  const modelId = data?.model_id || data?.fighter_id || wrapped?.model_id || wrapped?.fighter_id;
-  if (!modelId) return null;
+  const modelId = data?.model_id || data?.fighter_id || wrapped?.model_id || wrapped?.fighter_id || "arena";
   const phase = data?.phase || data?.phase_id || wrapped?.phase || wrapped?.phase_id || fallbackPhase;
+  let artifact = data?.artifact ?? wrapped?.artifact ?? data?.message;
+  if (artifact === undefined) artifact = typeof data === "string" ? data : JSON.stringify(data);
+  if (typeof artifact !== "string") artifact = JSON.stringify(artifact);
   return {
-    phase: phase || "runtime",
-    model_id: modelId,
-    artifact: typeof raw === "string" ? raw : JSON.stringify(raw ?? ""),
-    t: Date.now(),
+    phase: String(phase || "runtime"),
+    model_id: String(modelId),
+    artifact,
+    t: eventTime(data),
     kind: ev.event,
+    payload: data && typeof data === "object" && !Array.isArray(data) ? data : undefined,
   };
-}
-
-function parseActionItem(item: BattleStreamItem): ParsedAction | null {
-  if (item.kind !== "action_log") return null;
-  const parsed = parseJson(item.artifact);
-  if (!parsed || typeof parsed !== "object") return null;
-  return parsed as ParsedAction;
-}
-
-function phaseStartRole(item: BattleStreamItem): string | null {
-  if (item.kind !== "phase_start") return null;
-  const parsed = parseJson(item.artifact);
-  if (parsed && typeof parsed.role === "string") return parsed.role;
-  const match = item.artifact.match(/phase_start:([^\s]+)/i);
-  return match?.[1] || null;
 }
 
 function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
-  const minutes = Math.floor(total / 60);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-}
-
-function timeLabel(t: number): string {
-  return new Date(t).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
-function titleCase(value: string) {
-  return value
-    .replace(/_/g, " ")
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-function providerName(id: string, providers: ProviderOut[]) {
-  const found = providers.find((provider) => provider.id === id);
-  if (found) return found.model_name || found.name || id;
-  if (id.startsWith("host:")) return titleCase(id.replace("host:", ""));
-  return id.length > 24 ? `${id.slice(0, 18)}…` : id;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function formatConfig(format: FormatOut | null): any {
-  if (!format?.config) return {};
+  if (!format?.config) return null;
   if (typeof format.config === "object") return format.config;
-  try {
-    return JSON.parse(format.config);
-  } catch {
-    return {};
-  }
+  return parseJson(format.config);
 }
 
 function configuredPhases(format: FormatOut | null): string[] {
@@ -146,79 +92,44 @@ function configuredPhases(format: FormatOut | null): string[] {
   const plan = cfg?.battle_plan;
   const raw = Array.isArray(plan) ? plan : Array.isArray(plan?.phases) ? plan.phases : [];
   const out = raw
-    .map((entry: any) =>
-      typeof entry === "string"
-        ? entry
-        : entry?.phase_id || entry?.id || entry?.name || entry?.phase || "",
-    )
-    .filter(Boolean)
-    .map(String);
-  return Array.from(new Set<string>(out as string[]));
+    .map((item: any) => typeof item === "string" ? item : item?.id || item?.phase || item?.name)
+    .filter((value: unknown): value is string => typeof value === "string" && Boolean(value)) as string[];
+  return [...new Set<string>(out)];
 }
 
-function displayCommand(action: ParsedAction) {
-  if (action.command?.trim()) return action.command.trim();
-  const tool = String(action.action || "event").toLowerCase();
-  const target = String(action.target || "").trim();
-  if (tool === "read") return `cat ${target}`.trim();
-  if (tool === "write") return `write ${target}`.trim();
-  if (tool === "run") return `python ${target}`.trim();
-  if (tool === "test") return target ? `pytest ${target}` : "pytest -q";
-  if (tool === "ls") return `ls ${target || "."}`;
-  if (tool === "tree") return `tree ${target || "."}`;
-  if (tool === "fetch") return `fetch ${target}`.trim();
-  return `${tool} ${target}`.trim();
-}
-
-function actionKey(item: BattleStreamItem) {
-  const action = parseActionItem(item);
-  if (!action) return `${item.kind}:${item.model_id}:${item.t}`;
-  if (action.tool_call_id) return `tool:${item.model_id}:${action.tool_call_id}`;
-  if (action.event_sequence !== undefined) return `seq:${action.event_sequence}`;
-  return `${item.model_id}:${item.phase}:${action.turn_id || 0}:${action.tool_step || 0}:${action.action || ""}`;
-}
-
-function mergeEvent(previous: BattleStreamItem[], next: BattleStreamItem) {
-  if (next.kind !== "action_log") return [...previous, next].slice(-600);
-  const key = actionKey(next);
-  const index = previous.findIndex((item) => item.kind === "action_log" && actionKey(item) === key);
-  if (index === -1) return [...previous, next].slice(-600);
-  const copy = [...previous];
-  copy[index] = next;
-  return copy.slice(-600);
+function rolesForFormat(format: FormatOut | null): string[] {
+  if (Array.isArray(format?.roles)) return format.roles;
+  const cfg = formatConfig(format);
+  return Array.isArray(cfg?.roles) ? cfg.roles.filter((value: unknown): value is string => typeof value === "string") as string[] : [];
 }
 
 export default function LiveBattle() {
   const { id } = useParams<{ id: string }>();
   const { user, jwt, refreshJwt } = useAuth();
-
   const [battle, setBattle] = useState<BattleOut | null>(null);
   const [format, setFormat] = useState<FormatOut | null>(null);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
+  const [targetDetail, setTargetDetail] = useState<TargetDetailOut | null>(null);
   const [events, setEvents] = useState<BattleStreamItem[]>([]);
   const [scores, setScores] = useState<Record<string, number> | null>(null);
   const [status, setStatus] = useState("queued");
   const [phase, setPhase] = useState("runtime");
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
-  const [dockTab, setDockTab] = useState<DockTab>("activity");
+  const [selectedModelId, setSelectedModelId] = useState("");
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("activity");
+  const [showMission, setShowMission] = useState(false);
+  const [showActions, setShowActions] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const [targetDetail, setTargetDetail] = useState<TargetDetailOut | null>(null);
-  const [showMissionDrawer, setShowMissionDrawer] = useState(false);
 
-  const sessionStartedRef = useRef(Date.now());
   const statusRef = useRef(status);
   const phaseRef = useRef(phase);
+  const sessionStartedRef = useRef(Date.now());
 
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
-
-  useEffect(() => {
-    phaseRef.current = phase;
-  }, [phase]);
+  useEffect(() => { statusRef.current = status; }, [status]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   useEffect(() => {
     if (TERMINAL_STATES.has(status)) return;
@@ -229,57 +140,50 @@ export default function LiveBattle() {
   useEffect(() => {
     if (!jwt || !id) return;
     let active = true;
-
     void (async () => {
       try {
         const token = (await refreshJwt()) || jwt;
         const [loadedBattle, loadedFormats, loadedProviders] = await Promise.all([
           api.getBattle(token, id),
-          api.formats(token),
-          api.providers(token),
+          api.formats(token).catch(() => []),
+          api.providers(token).catch(() => []),
         ]);
         if (!active) return;
-
         setBattle(loadedBattle);
         setStatus(loadedBattle.status);
+        statusRef.current = loadedBattle.status;
         setFormat(loadedFormats.find((row) => row.id === loadedBattle.format_id) || null);
         setProviders(loadedProviders);
-        if (loadedBattle.preview_urls) setPreviewUrls(loadedBattle.preview_urls);
-        if (loadedBattle.scores && Object.keys(loadedBattle.scores).length) {
-          setScores(loadedBattle.scores);
-        }
+        setScores(loadedBattle.scores && Object.keys(loadedBattle.scores).length ? loadedBattle.scores : null);
+        setPreviewUrls(loadedBattle.preview_urls || {});
+        if (loadedBattle.model_ids?.length) setSelectedModelId((current) => current || loadedBattle.model_ids[0]);
 
         if (loadedBattle.target_id) {
-          api.target(loadedBattle.target_id, token).then((t) => {
-            if (active) setTargetDetail(t);
-          }).catch(() => {});
+          void api.target(loadedBattle.target_id, token).then((detail) => {
+            if (active) setTargetDetail(detail);
+          }).catch(() => undefined);
         }
 
         try {
           const persisted = await api.artifacts(token, id);
-          if (!active || !Array.isArray(persisted) || !persisted.length) return;
-          const base = Date.now() - persisted.length;
-          setEvents((current) => {
-            if (current.length) return current;
-            return persisted.map((item, index) => ({
+          if (active && Array.isArray(persisted) && persisted.length) {
+            const base = Date.now() - persisted.length;
+            setEvents((current) => current.length ? current : persisted.map((item, index) => ({
               phase: item.phase,
               model_id: item.model_id,
               artifact: item.artifact,
               t: base + index,
               kind: "artifact",
-            }));
-          });
+            })));
+          }
         } catch {
-          // Live SSE remains authoritative when persisted artifacts are unavailable.
+          // A saved artifact snapshot is optional. Durable SSE history is loaded below.
         }
       } catch (error) {
         if (active) setErr(error instanceof Error ? error.message : "Battle failed to load");
       }
     })();
-
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [jwt, id, refreshJwt]);
 
   useEffect(() => {
@@ -288,113 +192,84 @@ export default function LiveBattle() {
     const controller = new AbortController();
 
     const connect = async (attempt = 0): Promise<void> => {
-      if (cancelled || TERMINAL_STATES.has(statusRef.current)) return;
+      if (cancelled) return;
       try {
         const token = (await refreshJwt()) || jwt;
-        await streamBattle(
-          id,
-          token,
-          (ev: StreamEvent) => {
-            if (cancelled) return;
-            const data = unwrap(ev) as any;
-            const wrapped = ev.data as any;
+        await streamBattle(id, token, (ev) => {
+          if (cancelled) return;
+          const data = unwrap(ev) || {};
 
-            if (ev.event === "battle_status" || ev.event === "done") {
-              const nextStatus = data?.status || wrapped?.status;
-              if (nextStatus) {
-                statusRef.current = nextStatus;
-                setStatus(nextStatus);
-              }
+          if (ev.event === "battle_status" || ev.event === "done") {
+            const next = data?.status;
+            if (next) {
+              statusRef.current = String(next);
+              setStatus(String(next));
             }
+          }
 
-            if (ev.event === "phase_start") {
-              const nextPhase = data?.phase || data?.phase_id || wrapped?.phase || wrapped?.phase_id;
-              if (nextPhase) {
-                phaseRef.current = nextPhase;
-                setPhase(nextPhase);
-              }
+          if (ev.event === "phase_start") {
+            const nextPhase = data?.phase || data?.phase_id;
+            if (nextPhase) {
+              phaseRef.current = String(nextPhase);
+              setPhase(String(nextPhase));
             }
+          }
 
-            if (["artifact", "transcript", "action_log", "phase_start"].includes(ev.event)) {
-              const item = normalizeArtifact(ev, phaseRef.current);
-              if (item) setEvents((previous) => mergeEvent(previous, item));
-            }
+          if (["artifact", "transcript", "action_log", "phase_start", "skill_index_browse", "skill_search", "skill_card_view", "skill_load"].includes(ev.event)) {
+            const item = normalizeEvent(ev, phaseRef.current);
+            if (item) setEvents((previous) => mergeEvent(previous, item));
+          }
 
-            if (ev.event === "verification") {
-              setBattle((current) =>
-                current
-                  ? {
-                      ...current,
-                      verification_status: data?.verification_status ?? current.verification_status,
-                      verified_solution:
-                        data?.verification_status === "verified_pass" && data?.passed === true,
-                      termination_reason:
-                        data?.executor_outcome || data?.outcome || current.termination_reason,
-                      outcome: data?.executor_outcome || data?.outcome || current.outcome,
-                    }
-                  : current,
-              );
-            }
+          if (ev.event === "verification") {
+            setBattle((current) => current ? {
+              ...current,
+              verification_status: data?.verification_status ?? current.verification_status,
+              verified_solution: data?.verification_status === "verified_pass" && data?.passed === true,
+              termination_reason: data?.executor_outcome || data?.outcome || current.termination_reason,
+              outcome: data?.executor_outcome || data?.outcome || current.outcome,
+            } : current);
+          }
 
-            if (ev.event === "scores") {
-              const payload = (data || wrapped || {}) as {
-                scores?: Record<string, number>;
-                authoritative?: boolean;
-                source?: string;
-                winner?: string | null;
-                verified_solution?: boolean;
-                verification_status?: string;
-                termination_reason?: string | null;
-              };
-              if (!isAuthoritativeScoresEvent(payload)) {
-                return;
-              }
-              if (payload.scores && typeof payload.scores === "object") {
-                setScores(payload.scores);
-              }
-              setBattle((current) =>
-                current
-                  ? {
-                      ...current,
-                      scores: payload.scores ?? current.scores,
-                      winner: payload.winner ?? current.winner,
-                      verified_solution: payload.verified_solution ?? current.verified_solution,
-                      verification_status: payload.verification_status ?? current.verification_status,
-                      termination_reason: payload.termination_reason ?? current.termination_reason,
-                      outcome: payload.termination_reason ?? current.outcome,
-                    }
-                  : current,
-              );
-            }
+          if (ev.event === "scores") {
+            const payload = data as {
+              scores?: Record<string, number>;
+              authoritative?: boolean;
+              source?: string;
+              winner?: string | null;
+              verified_solution?: boolean;
+              verification_status?: string;
+              termination_reason?: string | null;
+            };
+            if (!isAuthoritativeScoresEvent(payload)) return;
+            if (payload.scores && typeof payload.scores === "object") setScores(payload.scores);
+            setBattle((current) => current ? {
+              ...current,
+              scores: payload.scores ?? current.scores,
+              winner: payload.winner ?? current.winner,
+              verified_solution: payload.verified_solution ?? current.verified_solution,
+              verification_status: payload.verification_status ?? current.verification_status,
+              termination_reason: payload.termination_reason ?? current.termination_reason,
+              outcome: payload.termination_reason ?? current.outcome,
+            } : current);
+          }
 
-            if (ev.event === "preview") {
-              const modelId = data?.model_id || data?.fighter_id || wrapped?.model_id;
-              const url = data?.url || wrapped?.url;
-              if (modelId && url) {
-                setPreviewUrls((previous) => ({ ...previous, [modelId]: url }));
-              }
-            }
-          },
-          controller.signal,
-        );
-
-        if (!cancelled && !TERMINAL_STATES.has(statusRef.current)) {
-          await new Promise((resolve) =>
-            window.setTimeout(resolve, Math.min(1000 * 2 ** attempt, 8000)),
-          );
-          await connect(Math.min(attempt + 1, 4));
-        }
+          if (ev.event === "preview") {
+            const modelId = data?.model_id || data?.fighter_id;
+            const url = data?.url;
+            if (modelId && url) setPreviewUrls((previous) => ({ ...previous, [String(modelId)]: String(url) }));
+          }
+        }, controller.signal);
       } catch (error) {
         if (cancelled) return;
-        if (attempt < 4) {
-          await new Promise((resolve) => window.setTimeout(resolve, 1000 * 2 ** attempt));
-          await connect(attempt + 1);
-        } else if (!TERMINAL_STATES.has(statusRef.current)) {
-          setErr(error instanceof Error ? `Live stream disconnected: ${error.message}` : "Live stream disconnected");
+        if (!TERMINAL_STATES.has(statusRef.current) && attempt < 5) {
+          await new Promise((resolve) => window.setTimeout(resolve, Math.min(1000 * (attempt + 1), 5000)));
+          return connect(attempt + 1);
         }
+        if (!TERMINAL_STATES.has(statusRef.current)) setErr(error instanceof Error ? error.message : "Battle stream disconnected");
       }
     };
 
+    // Connect once even for completed battles: the stream endpoint emits its durable snapshot first.
     void connect();
     return () => {
       cancelled = true;
@@ -402,50 +277,68 @@ export default function LiveBattle() {
     };
   }, [jwt, id, user, refreshJwt]);
 
-  const modelIds = useMemo(() => {
-    if (battle?.model_ids && battle.model_ids.length > 0) {
-      return battle.model_ids;
-    }
-    const fromEvents: string[] = [];
-    for (const item of events) {
-      if (item.model_id && !fromEvents.includes(item.model_id)) {
-        fromEvents.push(item.model_id);
-      }
-    }
-    return fromEvents;
-  }, [battle?.model_ids, events]);
-  const formatRoles = useMemo(
-    () => (format?.roles || []).filter((role) => role !== "judge"),
-    [format?.roles],
-  );
+  const providerNames = useMemo(() => new Map(providers.map((provider) => [provider.id, provider.name || provider.model_name])), [providers]);
+  const modelName = (modelId: string) => providerNames.get(modelId) || shortModelName(modelId);
 
+  const modelIds = useMemo(() => {
+    const ids = [...(battle?.model_ids || [])];
+    for (const event of events) if (event.model_id && event.model_id !== "arena" && !ids.includes(event.model_id)) ids.push(event.model_id);
+    return ids;
+  }, [battle?.model_ids, events]);
+
+  useEffect(() => {
+    if (!selectedModelId && modelIds.length) setSelectedModelId(modelIds[0]);
+    if (selectedModelId && !modelIds.includes(selectedModelId) && modelIds.length) setSelectedModelId(modelIds[0]);
+  }, [modelIds, selectedModelId]);
+
+  const formatRoles = useMemo(() => rolesForFormat(format), [format]);
   const runtimeRoles = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of events) {
-      const role = phaseStartRole(item);
-      if (role) map.set(item.model_id, role);
-      const action = parseActionItem(item);
-      if (action?.role) map.set(item.model_id, action.role);
+      if (item.kind === "phase_start") {
+        const payload = item.payload || parseJson(item.artifact) || {};
+        const role = payload.role;
+        if (typeof role === "string" && item.model_id !== "arena") map.set(item.model_id, role);
+      }
+      const action = parseAction(item);
+      const payload = parseJson(item.artifact);
+      const role = payload?.role || payload?.fighter_role;
+      if (action && typeof role === "string") map.set(item.model_id, role);
     }
     return map;
   }, [events]);
-
-  const roleForModel = (modelId: string, index: number) =>
-    runtimeRoles.get(modelId) || formatRoles[index] || `fighter ${index + 1}`;
+  const roleForModel = (modelId: string, index: number) => runtimeRoles.get(modelId) || formatRoles[index] || `Fighter ${index + 1}`;
 
   const histories = useMemo(() => {
     const map = new Map<string, BattleStreamItem[]>();
+    for (const modelId of modelIds) map.set(modelId, []);
     for (const item of events) {
       if (!map.has(item.model_id)) map.set(item.model_id, []);
-      map.get(item.model_id)!.push(item);
+      map.get(item.model_id)?.push(item);
+    }
+    return map;
+  }, [events, modelIds]);
+
+  const skillActivity = useMemo(() => events.map(skillActivityFromEvent).filter((item): item is SkillActivity => Boolean(item)), [events]);
+
+  const latestActionByModel = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof parseAction>>();
+    for (const item of events) {
+      const parsed = parseAction(item);
+      if (parsed) map.set(item.model_id, parsed);
     }
     return map;
   }, [events]);
 
-  const actionEvents = useMemo(
-    () => events.filter((item) => item.kind === "action_log"),
-    [events],
-  );
+  function fighterState(modelId: string): "waiting" | "starting" | "running" | "complete" | "failed" {
+    const latest = latestActionByModel.get(modelId);
+    if (status === "failed" || status === "cancelled") return "failed";
+    if (status === "completed") return "complete";
+    if (!latest) return status === "running" ? "starting" : "waiting";
+    if (latest.state === "failed" || latest.state === "error") return "failed";
+    if (latest.state === "running" || latest.state === "starting") return "running";
+    return status === "running" ? "running" : "waiting";
+  }
 
   const expectedPhases = useMemo(() => configuredPhases(format), [format]);
   const observedPhases = useMemo(() => {
@@ -454,575 +347,248 @@ export default function LiveBattle() {
     if (phase && !out.includes(phase)) out.push(phase);
     return out;
   }, [events, phase]);
-
   const pipeline = expectedPhases.length ? expectedPhases : observedPhases.length ? observedPhases : [phase];
   const currentPhaseIndex = Math.max(0, pipeline.indexOf(phase));
 
-  const latestActionByModel = useMemo(() => {
-    const map = new Map<string, ParsedAction>();
-    for (const item of actionEvents) {
-      const parsed = parseActionItem(item);
-      if (parsed) map.set(item.model_id, parsed);
-    }
-    return map;
-  }, [actionEvents]);
+  const resultView = useMemo(() => targetResultPresentation({
+    status,
+    isTargetBattle: Boolean(battle?.target_id),
+    result: {
+      scores: scores || battle?.scores,
+      winner: battle?.winner,
+      verified_solution: battle?.verified_solution,
+      verification_status: battle?.verification_status,
+      termination_reason: battle?.termination_reason,
+      outcome: battle?.outcome,
+    },
+  }), [status, battle, scores]);
 
-  const latestModelWithAction = actionEvents[actionEvents.length - 1]?.model_id || null;
+  const firstEventTime = useMemo(() => events.length ? Math.min(...events.map((item) => item.t)) : sessionStartedRef.current, [events]);
+  const elapsed = formatElapsed(now - firstEventTime);
 
-  function fighterStatus(modelId: string): "waiting" | "starting" | "running" | "complete" | "failed" {
-    const latest = latestActionByModel.get(modelId);
-    if (status === "failed" && latestModelWithAction === modelId) return "failed";
-    if (status === "completed") return "complete";
-    if (latest?.state === "failed" || latest?.state === "error") return "failed";
-    if (latest?.state === "running" || latest?.state === "starting") return "running";
-    const modelEvents = histories.get(modelId) || [];
-    if (!modelEvents.length) return "waiting";
-    if (latestModelWithAction === modelId && !TERMINAL_STATES.has(status)) return "running";
-    return latestModelWithAction && latestModelWithAction !== modelId ? "complete" : "starting";
-  }
-
-  const resultView = useMemo(
-    () =>
-      targetResultPresentation({
-        status,
-        isTargetBattle: Boolean(battle?.target_id),
-        result: {
-          scores,
-          winner: battle?.winner ?? null,
-          verified_solution: battle?.verified_solution ?? null,
-          verification_status: battle?.verification_status ?? null,
-          termination_reason: battle?.termination_reason ?? null,
-          outcome: battle?.outcome ?? null,
-        },
-      }),
-    [status, battle, scores],
-  );
-  const scoreWinner = resultView.showCompetitiveWinner ? resultView.winnerId : null;
-
-  const startAt = events[0]?.t || sessionStartedRef.current;
-  const elapsed = formatElapsed(now - startAt);
-
-  const handoffEvents = useMemo(
-    () =>
-      actionEvents.filter((item) => {
-        const parsed = parseActionItem(item);
-        const action = String(parsed?.action || "").toLowerCase();
-        return action.includes("handoff") || action.includes("snapshot") || action.includes("workspace_destroy");
-      }),
-    [actionEvents],
-  );
-
-  async function cancel() {
-    if (!jwt || !id) return;
+  async function cancelBattle() {
+    if (!id) return;
     setBusy("cancel");
     try {
       const token = (await refreshJwt()) || jwt;
+      if (!token) return;
       await api.cancelBattle(token, id);
       statusRef.current = "cancelled";
       setStatus("cancelled");
     } catch (error) {
-      setErr(error instanceof Error ? error.message : "Cancel failed");
-    } finally {
-      setBusy(null);
-    }
+      setErr(error instanceof Error ? error.message : "Failed to cancel battle");
+    } finally { setBusy(null); }
   }
 
-  async function save() {
-    if (!jwt || !id) return;
+  async function saveBattle() {
+    if (!id) return;
     setBusy("save");
     try {
       const token = (await refreshJwt()) || jwt;
+      if (!token) return;
       await api.saveBattle(token, id);
-      setBattle((current) => (current ? { ...current, saved: true } : current));
+      setBattle((current) => current ? { ...current, saved: true } : current);
     } catch (error) {
-      setErr(error instanceof Error ? error.message : "Save failed");
-    } finally {
-      setBusy(null);
-    }
+      setErr(error instanceof Error ? error.message : "Failed to save battle");
+    } finally { setBusy(null); }
   }
 
   async function copyBattleId() {
     if (!id) return;
     await navigator.clipboard.writeText(id);
-    setCopiedId(true);
-    window.setTimeout(() => setCopiedId(false), 1200);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1300);
   }
 
-  function downloadBattleReplay() {
-    const payload = {
-      battle_id: id,
-      title,
-      format_id: battle?.format_id,
-      status,
-      difficulty: battle?.difficulty,
-      round_visibility: battle?.round_visibility,
-      spec_hash: battle?.spec_hash || battle?.battle_config?.spec_hash,
-      models: modelIds.map((m, idx) => ({
-        model_id: m,
-        role: roleForModel(m, idx),
-        display_name: providerName(m, providers),
-      })),
-      scores,
-      events,
-    };
+  function downloadReplay() {
+    const payload = { battle, status, phase, scores, events };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `seekharness_battle_${id || "replay"}_${Date.now()}.json`;
-    a.click();
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `seekharness_battle_${id || "replay"}.json`;
+    anchor.click();
     URL.revokeObjectURL(url);
   }
 
   if (!user) {
     return (
-      <div className="grid min-h-[70vh] place-items-center px-6">
-        <div className="max-w-[36ch] space-y-3 text-center">
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-pink-400">Stream locked</div>
-          <p className="text-[14px] text-zinc-400">This battle is private. Log in to watch the live execution stream.</p>
-          <Link to="/login" className="btn btn-primary mx-auto h-10 px-6">Log in</Link>
+      <div className="grid min-h-[calc(100vh-56px)] place-items-center bg-[#07080a] px-6">
+        <div className="max-w-[34ch] text-center">
+          <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">Private execution</div>
+          <p className="mt-3 text-[13px] leading-6 text-zinc-400">Log in to inspect this battle and its execution stream.</p>
+          <Link to="/login" className="mt-5 inline-flex h-9 items-center rounded-md bg-zinc-100 px-4 text-[11px] font-semibold text-zinc-950">Log in</Link>
         </div>
       </div>
     );
   }
 
   const isTargetBattle = Boolean(battle?.target_id);
-  const title = isTargetBattle
-    ? (targetDetail?.name ? `Target: ${targetDetail.name}` : `Target: ${battle?.target_id}`)
-    : (battle?.custom_title || titleCase(battle?.format_id || "Live battle"));
+  const title = targetDetail?.name || battle?.custom_title || battle?.title || (battle?.target_id ? titleCase(battle.target_id) : titleCase(battle?.format_id || "Battle"));
+  const dualDesktop = modelIds.length === 2;
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#040207] text-white">
-      {/* Top Banner */}
-      <section className="border-b border-pink-500/20 bg-[#08050E]/90 backdrop-blur-md">
-        <div className="mx-auto max-w-[1760px] px-6 py-5">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-3">
-                <h1 className="truncate text-[22px] font-bold tracking-[-0.03em] md:text-[26px] text-white font-sans">{title}</h1>
+    <div className="battle-live bg-[#07080a] text-zinc-100">
+      <header className="battle-command-bar">
+        <div className="flex min-w-0 items-center gap-3">
+          <Link to="/battles" className="battle-icon-button" title="Back to battles"><ArrowLeft className="h-4 w-4" /></Link>
+          <div className="min-w-0 border-l border-white/[0.07] pl-3">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <h1 className="truncate text-[14px] font-semibold tracking-[-0.02em] text-zinc-100">{title}</h1>
+              <BattleStatus status={status} verificationStatus={battle?.verification_status} compact />
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[8px] uppercase tracking-[0.1em] text-zinc-700">
+              <span className="truncate">{format?.name || titleCase(battle?.format_id || "battle")}</span>
+              {!TERMINAL_STATES.has(status) ? <><span>·</span><span>{elapsed}</span></> : null}
+              {battle?.target_version ? <><span>·</span><span>v{battle.target_version}</span></> : null}
+            </div>
+          </div>
+        </div>
 
-                {isTargetBattle && (
-                  <Link
-                    to={`/targets/${encodeURIComponent(battle?.target_id || "")}`}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/15 px-3 py-1 font-mono text-[9.5px] font-bold uppercase tracking-wider text-accent shadow-[0_0_10px_rgba(255,0,160,0.25)] hover:bg-accent hover:text-white transition-all"
-                  >
-                    <Boxes className="h-3 w-3" />
-                    <span>Target Briefing</span>
-                    <ExternalLink className="h-2.5 w-2.5" />
-                  </Link>
-                )}
-
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[9.5px] font-bold uppercase tracking-[0.14em]",
-                    status === "running"
-                      ? "border-pink-500/40 bg-pink-500/10 text-pink-400 shadow-[0_0_12px_rgba(255,0,160,0.3)]"
-                      : resultView.statusTone === "verified"
-                      ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.25)]"
-                      : resultView.statusTone === "unverified"
-                      ? "border-amber-500/40 bg-amber-950/40 text-amber-400"
-                      : "border-white/10 bg-white/5 text-zinc-400",
-                  )}
-                >
-                  {status === "running" ? (
-                    <span className="h-1.5 w-1.5 rounded-full bg-pink-400 animate-ping" />
-                  ) : null}
-                  {status === "completed" ? (
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                  ) : null}
-                  {resultView.statusLabel}
-                </span>
-              </div>
-
-              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 font-mono text-[10px] text-zinc-500">
-                <button type="button" onClick={copyBattleId} className="inline-flex items-center gap-1.5 hover:text-pink-400 transition-colors">
-                  {copiedId ? <Check className="h-3 w-3 text-pink-400" /> : <Copy className="h-3 w-3" />}
-                  <span>{id}</span>
-                </button>
-                <span>mode://{battle?.round_visibility || "isolated"}</span>
-                <span>{elapsed} elapsed</span>
-                {battle?.target_version ? (
-                  <span className="text-accent">v{battle.target_version}</span>
-                ) : battle?.difficulty ? (
-                  <span className="text-pink-400/80">{battle.difficulty}</span>
+        <div className="flex items-center gap-1.5">
+          {isTargetBattle && battle?.target_id ? (
+            <Link to={`/targets/${encodeURIComponent(battle.target_id)}`} className="battle-text-button hidden md:inline-flex">
+              <Target className="h-3.5 w-3.5" /> Briefing
+            </Link>
+          ) : null}
+          {!TERMINAL_STATES.has(status) ? (
+            <button type="button" onClick={cancelBattle} disabled={busy === "cancel"} className="battle-text-button text-rose-300 hover:text-rose-200">
+              <Square className="h-3 w-3" /> Stop
+            </button>
+          ) : null}
+          <div className="relative">
+            <button type="button" onClick={() => setShowActions((value) => !value)} className="battle-icon-button" title="Battle actions">
+              <MoreHorizontal className="h-4 w-4" />
+            </button>
+            {showActions ? (
+              <div className="battle-actions-menu">
+                <button type="button" onClick={copyBattleId}>{copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />} {copied ? "Copied" : "Copy battle ID"}</button>
+                <button type="button" onClick={downloadReplay}><Download className="h-3.5 w-3.5" /> Export replay</button>
+                <button type="button" onClick={saveBattle} disabled={busy === "save" || Boolean(battle?.saved)}><Save className="h-3.5 w-3.5" /> {battle?.saved ? "Saved" : "Save battle"}</button>
+                {isTargetBattle && battle?.target_id ? (
+                  <Link to={`/battles/new?target=${encodeURIComponent(battle.target_id)}`}><RotateCcw className="h-3.5 w-3.5" /> Rerun target</Link>
                 ) : null}
               </div>
-            </div>
-
-            {/* Action Bar */}
-            <div className="flex flex-wrap items-center gap-2.5">
-              {isTargetBattle && (
-                <Link
-                  to={`/battles/new?target=${encodeURIComponent(battle?.target_id || "")}`}
-                  className="btn h-9 border border-accent/50 bg-accent/15 px-4 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-accent hover:bg-accent hover:text-white transition-all shadow-sm flex items-center gap-1.5"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  <span>Rerun Target</span>
-                </Link>
-              )}
-              <button
-                type="button"
-                onClick={downloadBattleReplay}
-                className="btn h-9 border border-pink-500/30 bg-[#0E0918] px-4 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-zinc-200 hover:border-pink-500 hover:bg-pink-500/10 hover:text-pink-400 transition-all shadow-sm"
-                title="Download complete telemetry and event replay as JSON"
-              >
-                <Download className="mr-2 inline h-3.5 w-3.5" />
-                Export JSON
-              </button>
-              <button
-                type="button"
-                onClick={save}
-                disabled={busy === "save" || !!battle?.saved}
-                className="btn h-9 border border-white/10 bg-[#0E0918] px-4 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-zinc-300 hover:border-pink-500 hover:text-pink-400 disabled:opacity-40 transition-all"
-              >
-                <Save className="mr-2 inline h-3.5 w-3.5" />
-                {battle?.saved ? "Saved" : "Save replay"}
-              </button>
-              <button
-                type="button"
-                onClick={cancel}
-                disabled={busy === "cancel" || TERMINAL_STATES.has(status)}
-                className="btn h-9 border border-red-500/40 bg-red-500/10 px-4 font-mono text-[9.5px] font-bold uppercase tracking-[0.12em] text-red-400 hover:bg-red-500/20 disabled:opacity-40 transition-all"
-              >
-                <Square className="mr-2 inline h-3 w-3" /> Halt
-              </button>
-            </div>
-          </div>
-
-          {/* Phase Pipeline */}
-          <div className="mt-5 flex items-center gap-0 overflow-x-auto border-t border-white/[0.08] pt-4 font-mono">
-            {pipeline.map((item, index) => {
-              const active = item === phase;
-              const done = index < currentPhaseIndex || (TERMINAL_STATES.has(status) && index <= currentPhaseIndex);
-              return (
-                <div key={`${item}-${index}`} className="flex min-w-[140px] flex-1 items-center last:flex-none">
-                  <div className="min-w-[100px]">
-                    <div className={cn(
-                      "text-[9px] font-bold uppercase tracking-[0.14em] transition-colors",
-                      active ? "text-pink-400 drop-shadow-[0_0_8px_rgba(255,0,160,0.5)]" : done ? "text-emerald-400" : "text-zinc-600",
-                    )}>
-                      {done ? "✓ " : active ? "● " : ""}{titleCase(item)}
-                    </div>
-                  </div>
-                  {index < pipeline.length - 1 ? (
-                    <div className={cn("mx-3 h-0.5 min-w-8 flex-1 rounded-full", done ? "bg-emerald-500/40" : active ? "bg-pink-500" : "bg-white/10")} />
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Target Mission Drawer */}
-          {isTargetBattle && targetDetail && (
-            <div className="mt-4 rounded-xl border border-white/[0.08] bg-[#050508] p-3 text-xs mono">
-              <div className="flex items-center justify-between">
-                <button
-                  type="button"
-                  onClick={() => setShowMissionDrawer(!showMissionDrawer)}
-                  className="flex items-center gap-2 font-bold text-accent hover:text-white transition-colors"
-                >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  <span>CHALLENGE OBJECTIVES ({targetDetail.objectives.length})</span>
-                  {showMissionDrawer ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                </button>
-                <span className="text-[10px] text-zinc-500">
-                  {targetDetail.category} · {targetDetail.runtime} · {targetDetail.difficulty}
-                </span>
-              </div>
-              {showMissionDrawer && (
-                <div className="mt-3 grid gap-2 border-t border-white/[0.08] pt-3 text-zinc-300 sm:grid-cols-2">
-                  {targetDetail.objectives.map((obj, idx) => (
-                    <div key={idx} className="flex items-start gap-2">
-                      <span className="text-accent font-bold">✓</span>
-                      <span className="leading-snug">{obj}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Official Completed Verdict Banner */}
-      {status === "completed" && (
-        <div className="mx-auto max-w-[1760px] px-6 pt-6">
-          <div className={cn(
-            "rounded-xl border bg-[#09090E] p-6 shadow-2xl space-y-4",
-            resultView.statusTone === "verified" ? "border-emerald-500/40" : "border-amber-500/40",
-          )}>
-            <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
-              <div className="flex items-center gap-2">
-                <span className={cn(
-                  "h-2 w-2 rounded-full",
-                  resultView.statusTone === "verified" ? "bg-emerald-400" : "bg-amber-400",
-                )} />
-                <span className={cn(
-                  "mono text-xs font-bold uppercase tracking-wider",
-                  resultView.statusTone === "verified" ? "text-emerald-400" : "text-amber-400",
-                )}>
-                  {isTargetBattle
-                    ? `${resultView.statusTone === "verified" ? "TARGET BENCHMARK VERDICT" : "UNVERIFIED TARGET RESULT"} · ${targetDetail?.name || battle?.target_id} (v${battle?.target_version || "1.0.0"})`
-                    : "OFFICIAL MATCH VERDICT · VERIFIED REPLAY"}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                {isTargetBattle && (
-                  <Link
-                    to={`/battles/new?target=${encodeURIComponent(battle?.target_id || "")}`}
-                    className="mono inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent px-3 py-1 text-xs font-bold text-white shadow-[0_0_10px_rgba(255,0,160,0.3)] hover:bg-accent-hover transition-all"
-                  >
-                    <RotateCcw className="h-3 w-3" />
-                    <span>Rerun Target</span>
-                  </Link>
-                )}
-                <span className="mono text-[10px] text-zinc-500 hidden sm:inline">
-                  ISOLATED MODAL MICROVM HARNESS
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-              {modelIds.slice(0, 2).map((mId, idx) => {
-                const isWinner = Boolean(scoreWinner && scoreWinner === mId);
-                const displayScores = resultView.scores || scores;
-                const hasScore = Boolean(displayScores && mId in displayScores);
-                const rawScore = hasScore && displayScores ? displayScores[mId] : null;
-                const role = roleForModel(mId, idx);
-
-                return (
-                  <div
-                    key={mId}
-                    className={`rounded-lg border p-4 space-y-2 mono ${
-                      isWinner
-                        ? "border-emerald-500/40 bg-emerald-950/20"
-                        : "border-[#1F1F22] bg-[#050508]"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="text-[10px] font-bold text-accent uppercase">
-                          {role}
-                        </div>
-                        <h4 className="text-base font-extrabold text-white">
-                          {providerName(mId, providers)}
-                        </h4>
-                      </div>
-                      <div className="text-right">
-                        {hasScore ? (
-                          <div className={cn(
-                            "text-2xl font-black",
-                            isWinner ? "text-emerald-400" : "text-zinc-200",
-                          )}>
-                            {rawScore}
-                          </div>
-                        ) : (
-                          <div className="text-xs font-semibold text-zinc-500 uppercase">
-                            Completed
-                          </div>
-                        )}
-                        {isWinner && (
-                          <span className="text-[10px] font-bold text-accent">
-                            ★ WINNER
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="border-t border-[#1F1F22] pt-2 text-[11px] text-zinc-400 space-y-1">
-                      <div className="flex items-center justify-between text-[10.5px]">
-                        <span className="text-zinc-500">Status:</span>
-                        <span className="text-zinc-300 font-semibold uppercase">{status}</span>
-                      </div>
-                      {isTargetBattle ? (
-                        <>
-                          <div className="flex items-center justify-between text-[10.5px]">
-                            <span className="text-zinc-500">Verification:</span>
-                            <span className="text-zinc-300 font-semibold">
-                              {resultView.verificationLabel || "Unverified"}
-                            </span>
-                          </div>
-                          {resultView.terminalOutcome ? (
-                            <div className="flex items-center justify-between text-[10.5px]">
-                              <span className="text-zinc-500">Outcome:</span>
-                              <span className="text-zinc-300 font-semibold uppercase">
-                                {resultView.terminalOutcome}
-                              </span>
-                            </div>
-                          ) : null}
-                        </>
-                      ) : (
-                        <div className="flex items-center justify-between text-[10.5px]">
-                          <span className="text-zinc-500">Execution:</span>
-                          <span className="text-zinc-300">Isolated MicroVM</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            ) : null}
           </div>
         </div>
-      )}
+      </header>
 
-      {err && (
-        <div className="border-b border-red-500/40 bg-red-950/30">
-          <div className="mx-auto flex max-w-[1760px] items-start gap-3 px-6 py-3 font-mono text-[11px] text-red-300">
-            <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-            <span className="min-w-0 flex-1 break-words">{err}</span>
-            <button type="button" onClick={() => setErr(null)} className="text-zinc-500 hover:text-white">dismiss</button>
-          </div>
+      {err ? (
+        <div className="flex items-start gap-3 border-b border-rose-400/20 bg-rose-400/[0.05] px-5 py-2.5 text-[10px] text-rose-200">
+          <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 break-words">{err}</span>
+          <button type="button" onClick={() => setErr(null)} className="text-zinc-600 hover:text-zinc-300">dismiss</button>
         </div>
-      )}
+      ) : null}
 
-      {/* Main Expansive Grid */}
-      <main className="mx-auto max-w-[1760px] p-4 md:p-6">
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-          {modelIds.map((modelId, index) => {
-            const history = histories.get(modelId) || [];
-            const artifacts = history.filter((item) => item.kind === "artifact");
-            const role = roleForModel(modelId, index);
+      <div className="battle-context-strip">
+        <div className="flex min-w-0 items-center gap-4 overflow-x-auto">
+          <span className="shrink-0 font-mono text-[8px] font-semibold uppercase tracking-[0.14em] text-zinc-700">Phase</span>
+          {pipeline.map((item, index) => {
+            const active = item === phase;
+            const done = index < currentPhaseIndex || (TERMINAL_STATES.has(status) && index <= currentPhaseIndex);
             return (
-              <LiveExecutionPane
-                key={modelId}
-                modelId={modelId}
-                displayName={providerName(modelId, providers)}
-                role={role}
-                status={fighterStatus(modelId)}
-                phase={history[history.length - 1]?.phase || phase}
-                events={history}
-                artifacts={artifacts}
-                previewUrl={previewUrls[modelId]}
-                win={status === "completed" && Boolean(scoreWinner && scoreWinner === modelId)}
-              />
+              <div key={`${item}-${index}`} className="flex shrink-0 items-center gap-2">
+                <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-fuchsia-400" : done ? "bg-emerald-400/70" : "bg-zinc-800")} />
+                <span className={cn("font-mono text-[9px]", active ? "text-zinc-200" : done ? "text-zinc-500" : "text-zinc-700")}>{titleCase(item)}</span>
+                {index < pipeline.length - 1 ? <span className="h-px w-5 bg-white/[0.07]" /> : null}
+              </div>
             );
           })}
         </div>
 
-        {/* Bottom Dock Drawer */}
-        <section className="mt-5 overflow-hidden rounded-lg border border-pink-500/20 bg-[#08050E] shadow-2xl">
-          <div className="flex overflow-x-auto border-b border-white/[0.08] bg-[#0A0612] font-mono">
-            {([
-              ["activity", `Activity Stream (${actionEvents.length})`],
-              ["handoffs", `Handoffs (${handoffEvents.length})`],
-              ["evidence", "Evidence & Telemetry"],
-              ["judge", "Judge Scorecard"],
-            ] as const).map(([tabKey, label]) => (
-              <button
-                key={tabKey}
-                type="button"
-                onClick={() => setDockTab(tabKey as DockTab)}
-                className={cn(
-                  "flex h-11 items-center border-r border-white/[0.08] px-6 text-[10px] font-bold uppercase tracking-[0.14em] transition-all",
-                  dockTab === tabKey
-                    ? "bg-pink-500/10 text-pink-400 shadow-[inset_0_-2px_0_#ff00a0]"
-                    : "text-zinc-500 hover:bg-white/[0.02] hover:text-white",
-                )}
-              >
-                {label}
-              </button>
+        {targetDetail?.objectives?.length ? (
+          <button type="button" onClick={() => setShowMission((value) => !value)} className="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.11em] text-zinc-600 hover:text-zinc-300 md:flex">
+            Mission <ChevronDown className={cn("h-3 w-3 transition", showMission && "rotate-180")} />
+          </button>
+        ) : null}
+      </div>
+
+      {showMission && targetDetail?.objectives?.length ? (
+        <div className="border-b border-white/[0.06] bg-[#090a0c] px-5 py-3">
+          <div className="mx-auto flex max-w-[1500px] flex-wrap gap-x-8 gap-y-2">
+            {targetDetail.objectives.map((objective, index) => (
+              <div key={`${objective}-${index}`} className="flex max-w-[46ch] items-start gap-2 text-[10px] leading-5 text-zinc-500">
+                <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-zinc-700" /><span>{objective}</span>
+              </div>
             ))}
           </div>
+        </div>
+      ) : null}
 
-          {dockTab === "activity" && (
-            <div className="max-h-[300px] overflow-y-auto font-mono text-[10px]">
-              {actionEvents.length ? (
-                [...actionEvents].reverse().map((item, index) => {
-                  const action = parseActionItem(item);
-                  if (!action) return null;
-                  const failed = action.state === "failed" || action.state === "error";
-                  const running = action.state === "running" || action.state === "starting";
-                  return (
-                    <div
-                      key={`${actionKey(item)}-${index}`}
-                      className="grid grid-cols-[80px_130px_100px_minmax(0,1fr)_90px] items-center gap-4 border-b border-white/[0.04] px-6 py-3 hover:bg-white/[0.02] transition-colors"
-                    >
-                      <span className="text-zinc-500">{timeLabel(item.t)}</span>
-                      <span className="truncate font-semibold text-pink-400">
-                        {titleCase(runtimeRoles.get(item.model_id) || providerName(item.model_id, providers))}
-                      </span>
-                      <span className="font-bold text-zinc-300">{String(action.action || "event").toUpperCase()}</span>
-                      <span className="truncate text-zinc-300 font-mono">{displayCommand(action)}</span>
-                      <span className={cn("text-right font-bold", failed ? "text-red-400" : running ? "text-pink-400 animate-pulse" : "text-emerald-400")}>
-                        {running ? "● running" : failed ? "× failed" : action.duration_ms ? `${action.duration_ms}ms` : "✓ done"}
-                      </span>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="px-6 py-10 text-zinc-500 text-center font-mono text-[11px]">
-                  Waiting for authoritative runtime tool activity…
-                </div>
-              )}
-            </div>
-          )}
+      {modelIds.length > 1 ? (
+        <div className="battle-fighter-switcher xl:hidden">
+          {modelIds.map((modelId, index) => (
+            <button key={modelId} type="button" onClick={() => setSelectedModelId(modelId)} className={cn("battle-fighter-switch", selectedModelId === modelId && "battle-fighter-switch-active")}>
+              <span>{modelName(modelId)}</span><span>{roleForModel(modelId, index)}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
-          {dockTab === "handoffs" && (
-            <div className="p-6 font-mono text-[11px]">
-              {handoffEvents.length ? (
-                <div className="space-y-3">
-                  {handoffEvents.map((item, index) => {
-                    const action = parseActionItem(item);
-                    return (
-                      <div key={`${actionKey(item)}-${index}`} className="flex flex-wrap items-center gap-4 rounded border border-white/10 bg-[#0A0612] px-5 py-3.5">
-                        <span className="text-zinc-500">{timeLabel(item.t)}</span>
-                        <span className="font-bold text-pink-400">{String(action?.action || "handoff").toUpperCase()}</span>
-                        <span className="text-zinc-200">{action?.target || action?.result || "Runtime handoff event"}</span>
-                        <span className="ml-auto font-bold text-emerald-400">{action?.state || "done"}</span>
-                      </div>
-                    );
-                  })}
+      <main className="battle-stage">
+        <div className="battle-stage-arena">
+          <div className={cn("battle-stage-grid", dualDesktop && "battle-stage-grid-dual")}>
+            {modelIds.map((modelId, index) => {
+              const history = histories.get(modelId) || [];
+              const artifacts = history.filter((item) => item.kind === "artifact");
+              const skills = skillActivity.filter((item) => item.modelId === modelId);
+              const hideWhenCompact = modelIds.length > 1 && selectedModelId !== modelId;
+              return (
+                <div key={modelId} className={cn("battle-stage-slot", hideWhenCompact && "hidden xl:block", modelIds.length > 2 && hideWhenCompact && "xl:hidden")}>
+                  <ExecutionSurface
+                    modelId={modelId}
+                    displayName={modelName(modelId)}
+                    role={roleForModel(modelId, index)}
+                    state={fighterState(modelId)}
+                    phase={history[history.length - 1]?.phase || phase}
+                    events={history}
+                    artifacts={artifacts}
+                    skillActivity={skills}
+                    previewUrl={previewUrls[modelId]}
+                    focused={selectedModelId === modelId}
+                    onFocus={() => setSelectedModelId(modelId)}
+                  />
                 </div>
-              ) : (
-                <div className="text-zinc-500 text-center py-6">
-                  No structured handoff event has been emitted yet. This panel stays empty rather than reconstructing one from assumptions.
-                </div>
-              )}
-            </div>
-          )}
+              );
+            })}
 
-          {dockTab === "evidence" && (
-            <div className="grid gap-px bg-white/10 sm:grid-cols-2 lg:grid-cols-4">
-              <EvidenceCell label="Tool events" value={String(actionEvents.length)} />
-              <EvidenceCell label="Artifact snapshots" value={String(events.filter((item) => item.kind === "artifact").length)} />
-              <EvidenceCell label="Failed tools" value={String(actionEvents.filter((item) => {
-                const a = parseActionItem(item);
-                return a?.state === "failed" || a?.state === "error";
-              }).length)} />
-              <EvidenceCell label="Spec hash" value={battle?.spec_hash || battle?.battle_config?.spec_hash || "not emitted"} mono />
-            </div>
-          )}
+            {!modelIds.length ? (
+              <div className="flex min-h-[520px] items-center justify-center bg-[#08090b] text-center">
+                <div>
+                  <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-zinc-700">Waiting for fighters</div>
+                  <p className="mt-2 text-[11px] text-zinc-700">No execution slot has been reported yet.</p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
 
-          {dockTab === "judge" && (
-            <div className="p-6 font-mono">
-              {scores && Object.keys(scores).length ? (
-                <div className="grid gap-4 md:grid-cols-2">
-                  {modelIds.map((modelId) => (
-                    <div key={modelId} className="rounded border border-white/10 bg-[#0A0612] p-6">
-                      <div className="text-[10px] uppercase tracking-[0.14em] text-zinc-500">{providerName(modelId, providers)}</div>
-                      <div className="mt-2 text-[36px] font-bold tracking-[-0.05em] text-pink-400">{scores[modelId] ?? "—"}</div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-[11px] text-zinc-500 text-center py-6">
-                  Authoritative scores appear only after trusted finalization. Judge hints are not displayed here.
-                </div>
-              )}
-            </div>
-          )}
-        </section>
+        {battle ? (
+          <BattleInspector
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
+            battle={battle}
+            status={status}
+            modelIds={modelIds}
+            modelName={modelName}
+            events={events}
+            skillActivity={skillActivity}
+            selectedModelId={selectedModelId || modelIds[0] || ""}
+            resultView={resultView}
+          />
+        ) : (
+          <div className="battle-inspector" />
+        )}
       </main>
-    </div>
-  );
-}
 
-function EvidenceCell({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="bg-[#08050E] p-6">
-      <div className="font-mono text-[9px] font-bold uppercase tracking-[0.14em] text-zinc-500">{label}</div>
-      <div className={cn("mt-2 truncate text-[17px] font-semibold text-zinc-100", mono && "font-mono text-[12px] text-pink-400")}>{value}</div>
+      {resultView.statusTone === "verified" && resultView.winnerId ? (
+        <div className="battle-result-toast">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          <span className="text-zinc-500">Verified winner</span>
+          <span className="font-medium text-zinc-100">{modelName(resultView.winnerId)}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

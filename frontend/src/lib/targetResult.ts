@@ -18,7 +18,7 @@ export type AuthoritativeBattleResult = {
 
 export type TargetResultView = {
   statusLabel: string;
-  statusTone: "live" | "verified" | "unverified" | "other";
+  statusTone: "live" | "verified" | "failed" | "unverified" | "other";
   showCompetitiveWinner: boolean;
   winnerId: string | null;
   scores: Record<string, number> | null;
@@ -31,11 +31,13 @@ function isVerifiedPass(result: AuthoritativeBattleResult): boolean {
 }
 
 export function verificationLabel(status?: VerificationStatus | null, verifiedSolution?: boolean | null): string {
-  if (verifiedSolution === true || status === "verified_pass") return "Verified";
-  if (status === "verified_fail") return "Unverified";
+  if (verifiedSolution === true || status === "verified_pass") return "Verified pass";
+  if (status === "verified_fail") return "Verified fail";
   if (status === "infra_failure") return "Verification infrastructure failure";
+  if (status === "policy_invalid") return "Policy invalid";
   if (status === "not_attempted") return "Verification not completed";
-  return "Unverified";
+  if (status === "unverified") return "Unverified";
+  return status ? status.replace(/[_-]+/g, " ") : "Unverified";
 }
 
 export function isAuthoritativeScoresEvent(data: {
@@ -55,12 +57,12 @@ export function targetResultPresentation(input: {
   const scores = input.result.scores && Object.keys(input.result.scores).length
     ? input.result.scores
     : null;
-  const terminal =
-    input.result.termination_reason || input.result.outcome || null;
+  const terminal = input.result.termination_reason || input.result.outcome || null;
+  const verification = input.result.verification_status || null;
 
-  if (input.status === "running") {
+  if (input.status === "running" || input.status === "queued") {
     return {
-      statusLabel: "● Live Execution",
+      statusLabel: input.status === "running" ? "Live execution" : "Queued",
       statusTone: "live",
       showCompetitiveWinner: false,
       winnerId: null,
@@ -72,8 +74,8 @@ export function targetResultPresentation(input: {
 
   if (input.status !== "completed") {
     return {
-      statusLabel: input.status,
-      statusTone: "other",
+      statusLabel: input.status.replace(/[_-]+/g, " "),
+      statusTone: input.status === "failed" ? "failed" : "other",
       showCompetitiveWinner: false,
       winnerId: null,
       scores,
@@ -84,8 +86,8 @@ export function targetResultPresentation(input: {
 
   if (!input.isTargetBattle) {
     return {
-      statusLabel: "REPLAY · VERIFIED RESULT",
-      statusTone: "verified",
+      statusLabel: "Completed",
+      statusTone: "other",
       showCompetitiveWinner: Boolean(input.result.winner),
       winnerId: input.result.winner || null,
       scores,
@@ -96,23 +98,47 @@ export function targetResultPresentation(input: {
 
   if (verified) {
     return {
-      statusLabel: "VERIFIED TARGET RESULT",
+      statusLabel: "Verified pass",
       statusTone: "verified",
       showCompetitiveWinner: Boolean(input.result.winner),
       winnerId: input.result.winner || null,
       scores,
-      verificationLabel: "Verified",
+      verificationLabel: "Verified pass",
+      terminalOutcome: terminal,
+    };
+  }
+
+  if (verification === "verified_fail") {
+    return {
+      statusLabel: "Verified fail",
+      statusTone: "failed",
+      showCompetitiveWinner: false,
+      winnerId: null,
+      scores,
+      verificationLabel: "Verified fail",
+      terminalOutcome: terminal,
+    };
+  }
+
+  if (verification === "infra_failure") {
+    return {
+      statusLabel: "Infrastructure failure",
+      statusTone: "failed",
+      showCompetitiveWinner: false,
+      winnerId: null,
+      scores,
+      verificationLabel: "Verification infrastructure failure",
       terminalOutcome: terminal,
     };
   }
 
   return {
-    statusLabel: "UNVERIFIED TARGET RESULT",
+    statusLabel: "Unverified",
     statusTone: "unverified",
     showCompetitiveWinner: false,
     winnerId: null,
     scores,
-    verificationLabel: verificationLabel(input.result.verification_status, input.result.verified_solution),
+    verificationLabel: verificationLabel(verification, input.result.verified_solution),
     terminalOutcome: terminal,
   };
 }
