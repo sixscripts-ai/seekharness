@@ -216,9 +216,11 @@ def test_audit_3_rounds_authoritative_selection_rule(monkeypatch):
     assert len(results) == 1
     selected = results[0]
     assert selected["model_id"] == "mod-x"
-    assert selected["outcome"] == "TEST_PASS"
-    assert selected["passed"] is True
-    assert selected["steps"] == 4
+    assert selected["outcome"] == "UNTRUSTED_EXECUTION"
+    assert selected["passed"] is False
+    assert selected.get("_trusted") is False
+    assert "steps" not in selected
+    assert "artifact_checks" not in selected
 
 
 def test_audit_4_completion_ordering_invariant(audit_session):

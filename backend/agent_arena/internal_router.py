@@ -281,49 +281,6 @@ def _persist_trusted_verification(
 
 
 
-def _finalize_scores(battle_id: str, scores: dict, source: str = "judged") -> bool:
-    """Persist score docs for a finished battle. Idempotent per battle."""
-    from .persistence import service
-
-    if service.scores_exist(battle_id):
-        return False
-    for mid, value in scores.items():
-        service.score_upsert(
-            battle_id,
-            mid,
-            float(value),
-            judge_model="arena-deterministic" if source != "judged" else "host-judge",
-            justification=source,
-        )
-    return True
-
-
-def _parse_executor_results(databases, database_id: str, battle_id: str) -> list[dict]:
-    """Load EXECUTOR_RESULT payloads from durable battle_events."""
-    out: list[dict] = []
-    try:
-        from .persistence import service
-
-        events = service.events_load(battle_id)
-    except Exception:
-        return out
-    for event in events:
-        if not isinstance(event, dict) or event.get("type") != "result":
-            continue
-        artifact = str((event.get("data") or {}).get("artifact") or "")
-        marker = "EXECUTOR_RESULT:"
-        if marker not in artifact:
-            continue
-        raw = artifact.split(marker, 1)[1].strip()
-        try:
-            result = json.loads(raw)
-        except Exception:
-            continue
-        if isinstance(result, dict):
-            out.append(result)
-    return out
-
-
 def _record_skill_outcome_pg(skill_name: str, outcome: str, tier: str = "general") -> None:
     """Mirror skills_registry.record_outcome against the Postgres backend."""
     from . import elo
@@ -696,6 +653,11 @@ def internal_round(
     ):
         raise HTTPException(status_code=400, detail="model not in battle")
     artifact = sanitize_artifact(body.artifact)
+    if TRUSTED_VERIFICATION_MARKER.rstrip(":") in artifact:
+        raise HTTPException(
+            status_code=400,
+            detail="trusted verification cannot be submitted via /round",
+        )
     from .persistence import service
 
     service.round_create(body.battle_id, body.phase, body.model_id, artifact)

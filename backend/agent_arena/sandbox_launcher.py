@@ -237,39 +237,24 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
             status_check=status_check,
             on_status=on_status,
         )
-        if scores:
-            _finalize_scores(databases, database_id, battle_id, battle, scores)
-            if battle.get("status") != "completed":
-                _set_status(databases, database_id, battle_id, "completed")
+        _finalize_scores(databases, database_id, battle_id, battle, scores)
     except Exception:
         _set_status(databases, database_id, battle_id, "failed")
 
 
 def _finalize_scores(databases, database_id, battle_id, battle, scores) -> None:
-    if not scores:
-        return
-    from .persistence import service
+    """Local/in-process completion goes through centralized finalize_battle.
 
-    for mid, value in scores.items():
-        service.score_upsert(
-            battle_id,
-            mid,
-            float(value),
-            judge_model="host-judge",
-            justification="judged",
-        )
-    try:
-        from .custom_battles import is_ranked_battle, resolve_battle_config
+    Loop/judge scores are untrusted hints only. They cannot write Elo or
+    authoritative BattleResult rows.
+    """
+    del databases, database_id, battle
+    from .finalization import finalize_battle
 
-        cfg = resolve_battle_config(battle, {})
-        if is_ranked_battle(battle, cfg):
-            service.leaderboard_apply_result(
-                battle.get("format_id", ""),
-                list(battle.get("model_ids") or []),
-                scores,
-            )
-    except Exception:
-        pass
+    finalize_battle(
+        battle_id,
+        caller_scores=scores if scores else None,
+    )
 
 
 def try_spawn_modal_sandbox(battle_id: str) -> str:

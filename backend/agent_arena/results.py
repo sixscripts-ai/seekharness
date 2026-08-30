@@ -13,6 +13,14 @@ from typing import Any
 TRUSTED_VERIFICATION_MARKER = "TRUSTED_VERIFICATION:"
 EXECUTOR_RESULT_MARKER = "EXECUTOR_RESULT:"
 
+# Sandbox EXECUTOR_RESULT may report that execution happened. It must not
+# encode pass/fail/score authority. Backend rewrite uses this marker.
+UNTRUSTED_EXECUTION = "UNTRUSTED_EXECUTION"
+
+# Fail-closed: sandbox telemetry may keep only identity. Structural and
+# score-like fields cannot influence competitive ranking.
+_UNTRUSTED_KEEP = frozenset({"model_id", "role", "phase", "battle_id"})
+
 INFRA_OUTCOMES = frozenset(
     {
         "PROVIDER_ERROR",
@@ -119,6 +127,21 @@ def normalize_participant_identity(
     return (str(battle_id), norm_phase, norm_role, norm_model)
 
 
+def sanitize_untrusted_executor_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep only identity from sandbox EXECUTOR_RESULT.
+
+    Pass/fail, scores, artifacts, steps, errors, infra claims, and unknown
+    keys are discarded. The backend records UNTRUSTED_EXECUTION only.
+    """
+    raw = dict(payload or {})
+    item = {key: raw[key] for key in _UNTRUSTED_KEEP if key in raw}
+    item["outcome"] = UNTRUSTED_EXECUTION
+    item["passed"] = False
+    item["verification_status"] = "unverified"
+    item["_trusted"] = False
+    return item
+
+
 def is_infra_outcome(outcome: str | None) -> bool:
     """True when the outcome is infrastructure, not a learnable model result."""
     norm = str(outcome or "").strip().upper()
@@ -152,7 +175,17 @@ def is_learnable_model_outcome(outcome: str | None) -> bool:
 def participant_status_from_outcome(outcome: str | None, *, passed: bool = False) -> str:
     """Map a termination/outcome marker to a participant lifecycle status."""
     out = str(outcome or "").upper()
-    if out in ("TEST_PASS", "TEST_FAIL", "JUDGE_ONLY", "PASS", "FAIL", "WIN", "LOSS"):
+    if out in (
+        "TEST_PASS",
+        "TEST_FAIL",
+        "JUDGE_ONLY",
+        "PASS",
+        "FAIL",
+        "WIN",
+        "LOSS",
+        UNTRUSTED_EXECUTION,
+        "COMPLETED",
+    ):
         return "completed"
     if "BUDGET" in out or out == "TIMEOUT" or "TIMEOUT" in out:
         return "timeout"

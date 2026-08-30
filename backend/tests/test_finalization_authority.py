@@ -33,6 +33,7 @@ def test_trusted_results_produce_deterministic_scores_not_caller():
             "passed": True,
             "steps": 3,
             "artifact_checks": {"present": ["solution.py"], "missing": []},
+            "_trusted": True,
         },
         {
             "model_id": "model-b",
@@ -42,6 +43,7 @@ def test_trusted_results_produce_deterministic_scores_not_caller():
             "passed": False,
             "steps": 8,
             "artifact_checks": {"present": ["solution.py"], "missing": []},
+            "_trusted": True,
         },
     ]
     scores, source, error, summary, decision = derive_trusted_scores(

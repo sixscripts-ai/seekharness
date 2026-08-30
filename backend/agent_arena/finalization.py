@@ -32,10 +32,12 @@ from .persistence.session import session_scope
 from .results import (
     EXECUTOR_RESULT_MARKER,
     TRUSTED_VERIFICATION_MARKER,
+    UNTRUSTED_EXECUTION,
     is_infra_outcome,
     is_learnable_model_outcome,
     normalize_participant_identity,
     participant_status_from_outcome,
+    sanitize_untrusted_executor_payload,
 )
 from .scoring import decide_winner, deterministic_scores
 
@@ -70,9 +72,18 @@ def derive_trusted_scores(
         return None, "", INCOMPLETE_EVIDENCE, None, None
     if expected and len(results) < len(expected):
         return None, "", INCOMPLETE_EVIDENCE, None, None
+    trusted_rows = [r for r in results if r.get("_trusted")]
+    if not trusted_rows:
+        ids = expected or [
+            str(r.get("model_id") or "") for r in results if str(r.get("model_id") or "")
+        ]
+        diagnostic = {mid: 0.0 for mid in ids if mid}
+        if not diagnostic:
+            return None, "", INCOMPLETE_EVIDENCE, None, None
+        return diagnostic, "untrusted-diagnostic", None, None, None
     summary = build_battle_evidence(
         battle_id,
-        results,
+        trusted_rows,
         fmt_cfg,
         judge_scores=None,
         format_id=format_id,
@@ -89,15 +100,44 @@ def _already_finalized_payload(
     status: str,
     results: list | None = None,
     scores: dict | None = None,
+    score_rows: list | None = None,
 ) -> dict[str, Any]:
     return {
         "ok": True,
         "status": status,
         "already_finalized": True,
-        "authoritative": status == "completed",
+        "authoritative": _stored_completion_is_authoritative(
+            status, results or [], score_rows or []
+        ),
         "results": results or [],
         "scores": scores or {},
     }
+
+
+def _stored_completion_is_authoritative(
+    status: str, results: list, score_rows: list
+) -> bool:
+    if status != "completed":
+        return False
+    verifs = [
+        str(
+            item.get("verification_status")
+            if isinstance(item, dict)
+            else getattr(item, "verification_status", "")
+        )
+        for item in (results or [])
+    ]
+    if any(v in {"verified_pass", "verified_fail"} for v in verifs):
+        return True
+    justifications = []
+    for item in score_rows or []:
+        if isinstance(item, dict):
+            justifications.append(str(item.get("justification") or ""))
+        else:
+            justifications.append(str(getattr(item, "justification", "") or ""))
+    if justifications:
+        return any("arena-score-v1" in j for j in justifications)
+    return False
 
 
 def _retryable_incomplete_payload(status: str, error: str | None = None) -> dict[str, Any]:
@@ -181,7 +221,7 @@ def _merge_trusted_authority(
 ) -> list[dict]:
     """Sandbox EXECUTOR_RESULT is telemetry only. Trusted verifier owns pass/fail."""
     if not require_trusted:
-        return telemetry
+        return [sanitize_untrusted_executor_payload(item) for item in telemetry]
     if not trusted:
         return []
 
@@ -298,7 +338,9 @@ def _extract_results_from_sources(
         )
         key = (phase, role, model_id)
         seq = int(r.get("sequence") or idx)
-        item = {**payload, "phase": phase, "role": role, "model_id": model_id}
+        item = sanitize_untrusted_executor_payload(
+            {**payload, "phase": phase, "role": role, "model_id": model_id}
+        )
         candidates_by_identity.setdefault(key, []).append((seq, item))
 
     if not candidates_by_identity:
@@ -318,7 +360,9 @@ def _extract_results_from_sources(
                     model_id=str(payload.get("model_id") or ""),
                 )
                 key = (phase, role, model_id)
-                item = {**payload, "phase": phase, "role": role, "model_id": model_id}
+                item = sanitize_untrusted_executor_payload(
+                    {**payload, "phase": phase, "role": role, "model_id": model_id}
+                )
                 candidates_by_identity.setdefault(key, []).append((idx, item))
         except Exception:
             pass
@@ -327,9 +371,8 @@ def _extract_results_from_sources(
     for key, cand_list in candidates_by_identity.items():
         def _score_cand(entry: tuple[int, dict]) -> tuple[int, int]:
             seq, p = entry
-            outcome = str(p.get("outcome") or "")
-            prio = 3 if outcome == "TEST_PASS" else (2 if outcome == "TEST_FAIL" else 1)
-            return (seq, prio)
+            # Sequence only. Sandbox TEST_PASS/TEST_FAIL must not win selection.
+            return (seq, 0)
 
         best_cand = max(cand_list, key=_score_cand)[1]
         out.append(best_cand)
@@ -348,7 +391,12 @@ def _resolve_results_for_finalize(
     database_id: str,
 ) -> list[dict]:
     if override_results is not None:
-        return list(override_results)
+        tagged = []
+        for row in override_results:
+            item = dict(row)
+            item["_trusted"] = True
+            tagged.append(item)
+        return tagged
     telemetry = _extract_results_from_sources(
         battle_id, databases, database_id, session=session
     )
@@ -420,6 +468,7 @@ def finalize_battle(
                         for r in res_rows
                     ],
                     scores={s.model_id: s.score for s in score_rows},
+                    score_rows=score_rows,
                 )
 
             if battle_row.status not in ACTIVE_FINALIZE_STATUSES:
@@ -499,23 +548,41 @@ def finalize_battle(
                     r_payload.get("outcome")
                     or ("TEST_PASS" if passed else "TEST_FAIL")
                 )
+                if not r_payload.get("_trusted"):
+                    sc = 0.0
+                    passed = False
+                    term_reason = UNTRUSTED_EXECUTION
                 part_status = participant_status_from_outcome(
                     term_reason, passed=passed
                 )
+                stored_vs = str(r_payload.get("verification_status") or "")
                 if is_infra_outcome(term_reason):
                     verif_status = "infra_failure"
                     passed = False
+                elif stored_vs in {
+                    "unverified",
+                    "verified_pass",
+                    "verified_fail",
+                    "infra_failure",
+                }:
+                    verif_status = stored_vs
+                    if stored_vs == "unverified":
+                        passed = False
                 else:
                     verif_status = "verified_pass" if passed else "verified_fail"
-                art_checks = r_payload.get("artifact_checks") or {}
-                artifact_refs = list(art_checks.get("present") or [])
-                metrics = {
-                    "steps": r_payload.get("steps", 0),
-                    "turns": r_payload.get("turns", 0),
-                    "duration_ms": r_payload.get("duration_ms", 0),
-                    "tool_errors": r_payload.get("tool_errors", 0),
-                    "parse_errors": r_payload.get("parse_errors", 0),
-                }
+                if r_payload.get("_trusted"):
+                    art_checks = r_payload.get("artifact_checks") or {}
+                    artifact_refs = list(art_checks.get("present") or [])
+                    metrics = {
+                        "steps": r_payload.get("steps", 0),
+                        "turns": r_payload.get("turns", 0),
+                        "duration_ms": r_payload.get("duration_ms", 0),
+                        "tool_errors": r_payload.get("tool_errors", 0),
+                        "parse_errors": r_payload.get("parse_errors", 0),
+                    }
+                else:
+                    artifact_refs = []
+                    metrics = {}
                 repositories.results.result_upsert(
                     session,
                     battle_id=battle_id,
@@ -544,7 +611,7 @@ def finalize_battle(
                     justification=f"Finalized via {score_source}",
                 )
 
-            learnable = all(
+            learnable = score_source == "arena-score-v1" and all(
                 is_learnable_model_outcome(str(r.get("outcome") or "")) for r in results
             )
             if is_ranked_battle(battle_dict, fmt_cfg) and learnable:
@@ -564,9 +631,11 @@ def finalize_battle(
 
         current_status = str(battle_dict.get("status") or "")
         if is_terminal_battle_status(current_status):
+            score_rows = service.scores_list(battle_id)
             return _already_finalized_payload(
                 status=current_status,
-                scores={s["model_id"]: s["score"] for s in service.scores_list(battle_id)},
+                scores={s["model_id"]: s["score"] for s in score_rows},
+                score_rows=score_rows,
             )
         if current_status not in ACTIVE_FINALIZE_STATUSES:
             return _already_finalized_payload(status=current_status)
@@ -616,7 +685,7 @@ def finalize_battle(
                 judge_model=score_judge,
                 justification=f"Finalized via {score_source}",
             )
-        learnable = all(
+        learnable = score_source == "arena-score-v1" and all(
             is_learnable_model_outcome(str(r.get("outcome") or "")) for r in results
         )
         if is_ranked_battle(battle_dict, fmt_cfg) and learnable:
@@ -638,7 +707,7 @@ def finalize_battle(
             battle_id,
             {"type": "evidence_summary", "data": {**evidence_summary, "decision": decision}},
         )
-    if status == "completed" and effective_scores:
+    if status == "completed" and effective_scores and score_source == "arena-score-v1":
         event_bus.publish(battle_id, {"type": "scores", "data": {"scores": effective_scores}})
     event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": status}})
 
@@ -646,7 +715,7 @@ def finalize_battle(
         "ok": True,
         "status": status,
         "already_finalized": False,
-        "authoritative": bool(effective_scores) and status == "completed",
+        "authoritative": status == "completed" and score_source == "arena-score-v1",
         "scores": effective_scores,
     }
     if finalize_error:

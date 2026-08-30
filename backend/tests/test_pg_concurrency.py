@@ -49,6 +49,22 @@ def _payload(mid: str, role: str, passed: bool, steps: int, skills: list[str] | 
     return "EXECUTOR_RESULT: " + json.dumps(body)
 
 
+def _trusted_override(
+    mid: str, role: str, passed: bool, steps: int, skills: list[str] | None = None
+) -> dict:
+    return {
+        "model_id": mid,
+        "role": role,
+        "phase": "race",
+        "outcome": "TEST_PASS" if passed else "TEST_FAIL",
+        "passed": passed,
+        "steps": steps,
+        "skill_reads": skills or [],
+        "artifact_checks": {"present": ["solution.py"], "missing": []},
+        "theory": "keep the ping function correct",
+    }
+
+
 @pytest.fixture(scope="module")
 def pg_engine():
     if not postgres_tests_enabled():
@@ -192,6 +208,29 @@ def _assert_completed_exactly_once(session, bid: str, model_ids: list[str], skil
     assert len(memories) == 1
 
 
+def _assert_untrusted_completion(session, bid: str, model_ids: list[str], skill: str) -> None:
+    """Sandbox EXECUTOR_RESULT may complete a battle; it must not learn."""
+    row = session.get(Battle, bid)
+    assert row.status == "completed"
+    assert row.finalized_at is not None
+    results = repositories.results.results_list_by_battle(session, bid)
+    assert len(results) == 2
+    assert {r.model_id for r in results} == set(model_ids)
+    assert all(r.verification_status == "unverified" for r in results)
+    scores = repositories.scores.score_list(session, bid)
+    assert len(scores) == 2
+    assert {s.score for s in scores} == {0.0}
+    assert all("untrusted-diagnostic" in str(s.justification or "") for s in scores)
+    assert (
+        session.scalars(
+            select(LeaderboardEntry).where(LeaderboardEntry.model_id.in_(model_ids))
+        ).first()
+        is None
+    )
+    assert session.get(SkillRecord, skill) is None
+    assert list(session.scalars(select(Memory).where(Memory.battle_id == bid))) == []
+
+
 def _add_race_rounds(session, bid: str, mid_a: str, mid_b: str, skill: str) -> None:
     session.add(
         Round(
@@ -226,9 +265,14 @@ def test_c1_duplicate_concurrent_finalize(pg_bound):
 
     start = threading.Barrier(2)
 
+    overrides = [
+        _trusted_override("model-a", "player_a", True, 3, ["shared-skill"]),
+        _trusted_override("model-b", "player_b", False, 9, ["shared-skill"]),
+    ]
+
     def _run():
         start.wait(timeout=10)
-        return finalize_battle(bid)
+        return finalize_battle(bid, override_results=overrides)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         f1 = pool.submit(_run)
@@ -297,8 +341,22 @@ def test_c2_concurrent_elo_two_battles_same_model(pg_bound):
     fin._apply_leaderboard_elo_pg = _elo_overlap
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            f1 = pool.submit(finalize_battle, id_a)
-            f2 = pool.submit(finalize_battle, id_b)
+            f1 = pool.submit(
+                finalize_battle,
+                id_a,
+                override_results=[
+                    _trusted_override("model-x", "player_a", True, 2),
+                    _trusted_override("model-y", "player_b", False, 7),
+                ],
+            )
+            f2 = pool.submit(
+                finalize_battle,
+                id_b,
+                override_results=[
+                    _trusted_override("model-x", "player_a", True, 2),
+                    _trusted_override("model-z", "player_b", False, 7),
+                ],
+            )
             assert f1.result()["status"] == "completed"
             assert f2.result()["status"] == "completed"
     finally:
@@ -357,8 +415,22 @@ def test_c3_missing_leaderboard_rows_race_safe(pg_bound):
     fin._apply_leaderboard_elo_pg = _elo_overlap
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            f1 = pool.submit(finalize_battle, id_a)
-            f2 = pool.submit(finalize_battle, id_b)
+            f1 = pool.submit(
+                finalize_battle,
+                id_a,
+                override_results=[
+                    _trusted_override(m_new, "player_a", True, 2),
+                    _trusted_override(opp1, "player_b", False, 8),
+                ],
+            )
+            f2 = pool.submit(
+                finalize_battle,
+                id_b,
+                override_results=[
+                    _trusted_override(m_new, "player_a", True, 2),
+                    _trusted_override(opp2, "player_b", False, 8),
+                ],
+            )
             f1.result()
             f2.result()
     finally:
@@ -411,8 +483,22 @@ def test_c4_concurrent_skill_learning(pg_bound):
     fin._apply_self_learning_pg = _learn_overlap
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            f1 = pool.submit(finalize_battle, id_a)
-            f2 = pool.submit(finalize_battle, id_b)
+            f1 = pool.submit(
+                finalize_battle,
+                id_a,
+                override_results=[
+                    _trusted_override("m-skill-a1", "player_a", True, 2, [skill]),
+                    _trusted_override("m-skill-a2", "player_b", False, 9, [skill]),
+                ],
+            )
+            f2 = pool.submit(
+                finalize_battle,
+                id_b,
+                override_results=[
+                    _trusted_override("m-skill-b1", "player_a", True, 2, [skill]),
+                    _trusted_override("m-skill-b2", "player_b", False, 9, [skill]),
+                ],
+            )
             assert f1.result()["status"] == "completed"
             assert f2.result()["status"] == "completed"
     finally:
@@ -452,8 +538,12 @@ def test_c5_rollback_then_retry_exactly_once(pg_bound, monkeypatch):
         return real_learn(session, battle, results)
 
     monkeypatch.setattr(fin, "_apply_self_learning_pg", _maybe_boom)
+    c5_overrides = [
+        _trusted_override("mod-a", "player_a", True, 3, ["skill-rollback"]),
+        _trusted_override("mod-b", "player_b", False, 8, ["skill-rollback"]),
+    ]
     with pytest.raises(RuntimeError, match="injected failure"):
-        finalize_battle(bid)
+        finalize_battle(bid, override_results=c5_overrides)
 
     with factory() as session:
         row = session.get(Battle, bid)
@@ -470,7 +560,7 @@ def test_c5_rollback_then_retry_exactly_once(pg_bound, monkeypatch):
             is None
         )
 
-    retry = finalize_battle(bid)
+    retry = finalize_battle(bid, override_results=c5_overrides)
     assert retry["status"] == "completed"
     assert retry.get("already_finalized") is False
     assert calls["n"] == 2
@@ -590,16 +680,16 @@ def test_c7_uncommitted_evidence_overlaps_finalize(pg_bound):
     assert first.get("retryable") is not True
     assert first.get("already_finalized") is False
     assert first["status"] == "completed"
-    assert first.get("authoritative") is True
+    assert first.get("authoritative") is False
 
     with factory() as session:
-        _assert_completed_exactly_once(session, bid, [mid_a, mid_b], skill)
+        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
 
     replay = finalize_battle(bid)
     assert replay.get("already_finalized") is True
     assert replay["status"] == "completed"
     with factory() as session:
-        _assert_completed_exactly_once(session, bid, [mid_a, mid_b], skill)
+        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
 
 
 def test_c7_finalize_first_writer_blocks_then_retryable(pg_bound):
@@ -678,12 +768,12 @@ def test_c7_finalize_first_writer_blocks_then_retryable(pg_bound):
     second = finalize_battle(bid)
     assert second["status"] == "completed"
     assert second.get("already_finalized") is False
-    assert second.get("authoritative") is True
+    assert second.get("authoritative") is False
     with factory() as session:
-        _assert_completed_exactly_once(session, bid, [mid_a, mid_b], skill)
+        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
 
     replay = finalize_battle(bid)
     assert replay.get("already_finalized") is True
     assert replay["status"] == "completed"
     with factory() as session:
-        _assert_completed_exactly_once(session, bid, [mid_a, mid_b], skill)
+        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)

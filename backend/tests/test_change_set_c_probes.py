@@ -263,8 +263,9 @@ def test_probe_e_event_ordering(monkeypatch):
     res = finalize_battle(battle_id, caller_status="completed")
     assert res["ok"] is True
     assert res["status"] == "completed"
+    assert res.get("authoritative") is False
     assert "m-alpha" in stored_scores
-    assert stored_scores["m-alpha"] > stored_scores["m-beta"]
+    assert stored_scores["m-alpha"] == stored_scores["m-beta"] == 0.0
 
 
 def test_probe_f_target_scope():
