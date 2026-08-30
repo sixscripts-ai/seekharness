@@ -9,19 +9,20 @@ import pytest
 
 from agent_arena.sandbox.executors.advanced_executor import ToolSession
 from agent_arena.target_library import (
+    TargetSecurityError,
     load_target_bundle,
     materialize_fighter_visible_library,
     rel_is_fighter_public,
     relpath_is_private_evaluator,
 )
 from agent_arena.target_verifier import verify_target_submission
-from agent_arena.target_verifier import verify_target_submission
+from tests.eval_fixtures import point_evaluators, write_private_evaluator
 
 PRIVATE_MARKER = "PRIVATE_MARKER_evaluator_isolation_xyz"
 REFERENCE_MARKER = "PRIVATE_REFERENCE_SOLUTION_abc"
 
 
-def _write_synth_target(root: Path) -> Path:
+def _write_synth_target(root: Path, eval_root: Path | None = None) -> Path:
     tid = "synth-isolation"
     target = root / tid
     (target / "starter").mkdir(parents=True)
@@ -83,6 +84,23 @@ safety:
     (target / "oracle" / "answer.txt").write_text("ORACLE_PRIVATE_xyz", encoding="utf-8")
     (target / "evaluators").mkdir()
     (target / "evaluators" / "hidden_eval.py").write_text("assert False\n", encoding="utf-8")
+    if eval_root is not None:
+        write_private_evaluator(
+            eval_root,
+            tid,
+            hidden={
+                "SECRET.txt": PRIVATE_MARKER,
+                "test_hidden.py": (
+                    "from pathlib import Path\n\n"
+                    "def test_secret():\n"
+                    f"    assert Path('tests/hidden/SECRET.txt').read_text() == {PRIVATE_MARKER!r}\n"
+                ),
+            },
+            reference={
+                "app.py": f"def ping():\n    return 'pong'\n# {REFERENCE_MARKER}\n",
+                "SECRET_REF.txt": REFERENCE_MARKER,
+            },
+        )
     return target
 
 
@@ -194,7 +212,9 @@ def test_d_reference_solution_absent_from_fighter_python(tmp_path: Path):
 def test_e_trusted_verifier_reads_private_evaluator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ARENA_VERIFIER_ALLOW_INPROCESS", "1")
     library = tmp_path / "library"
-    target = _write_synth_target(library)
+    eval_root = tmp_path / "evaluators"
+    target = _write_synth_target(library, eval_root)
+    point_evaluators(monkeypatch, eval_root)
     public = tmp_path / "public"
     materialize_fighter_visible_library(library, public)
     bundle = load_target_bundle(target)
@@ -226,9 +246,11 @@ def test_unknown_private_directories_are_denied(tmp_path: Path):
     assert (root / "target.yaml").is_file()
 
 
-def test_symlink_escapes_are_not_copied(tmp_path: Path):
+def test_symlink_escapes_are_not_copied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     library = tmp_path / "library"
-    target = _write_synth_target(library)
+    eval_root = tmp_path / "evaluators"
+    target = _write_synth_target(library, eval_root)
+    point_evaluators(monkeypatch, eval_root)
     bundle = load_target_bundle(target)
     assert PRIVATE_MARKER in bundle.hidden_test_files["SECRET.txt"].decode("utf-8")
     starter = target / "starter"
@@ -244,11 +266,9 @@ def test_symlink_escapes_are_not_copied(tmp_path: Path):
     except OSError:
         pytest.skip("Symlinks not supported on filesystem")
     public = tmp_path / "public"
-    materialize_fighter_visible_library(library, public)
-    dest = public / "synth-isolation" / "starter"
-    assert not (dest / "leak_hidden.txt").exists()
-    assert not (dest / "chained.txt").exists()
-    assert not (dest / "outside.txt").exists()
+    with pytest.raises(TargetSecurityError, match="symlink"):
+        materialize_fighter_visible_library(library, public)
+    dest = public / "synth-isolation"
     combined = ""
     if dest.exists():
         for p in dest.rglob("*"):
@@ -256,3 +276,6 @@ def test_symlink_escapes_are_not_copied(tmp_path: Path):
                 combined += p.read_text(encoding="utf-8", errors="ignore")
     assert PRIVATE_MARKER not in combined
     assert "OUTSIDE_SECRET" not in combined
+    assert not (dest / "starter" / "leak_hidden.txt").exists()
+    assert not (dest / "starter" / "chained.txt").exists()
+    assert not (dest / "starter" / "outside.txt").exists()

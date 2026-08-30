@@ -13,9 +13,10 @@ targets/library/<target_id>/
 ├── target.yaml          # Canonical YAML specification
 ├── README.md            # Mission brief and description
 ├── starter/             # Base repository materialized for the agent
-├── tests/
-│   ├── visible/         # Tests mounted in workspace for agent feedback
-│   └── hidden/          # Evaluator-only tests (never exposed to agent)
+└── tests/visible/       # Tests mounted in workspace for agent feedback
+
+targets/evaluators/<target_id>/   # private; gitignored except .gitkeep
+├── tests/hidden/        # Evaluator-only tests
 └── reference/           # Gold-standard reference solution
 ```
 
@@ -69,7 +70,7 @@ To prevent benchmark tampering and reward hacking:
 
 1. **Strict File Partitioning**:
    - `starter_files` and `visible_test_files` are copied into `work_{role}`.
-   - `hidden_test_files` and `reference_files` are held in backend memory and never written to the agent's filesystem.
+   - `hidden_test_files` and `reference_files` load only from `$ARENA_EVALUATOR_DIR/<id>` or `targets/evaluators/<id>`, stay in backend memory, and are never written to the agent's filesystem.
 2. **Path Traversal Guards**:
    - All manifest paths and file requests are validated against regex `^[A-Za-z0-9_.*-][A-Za-z0-9_./*-]*$`.
    - Any path with `..`, leading `/`, or symlink pointing outside target root raises `TargetSecurityError`.
@@ -80,6 +81,10 @@ To prevent benchmark tampering and reward hacking:
    - `manifest_hash`: SHA-256 of `target.yaml`.
    - `starter_hash`: Deterministic tree hash of starter files.
    - `hidden_hash`: Deterministic tree hash of hidden test suite.
+5. **Private Evaluator Delivery (production)**:
+   - Evaluator packages ship in the named Modal Volume `arena-evaluators`, never baked into an image and never attached to a fighter sandbox.
+   - The trusted backend function mounts it read-only at `/opt/arena-evaluators` and is the only place `ARENA_EVALUATOR_DIR` is set.
+   - Because that mount is readable by path regardless of environment, target battles refuse same-host runners (`run_in_process`, `ARENA_USE_MOCK`) whenever private evaluator storage is present, and must use the isolated sandbox.
 
 ---
 

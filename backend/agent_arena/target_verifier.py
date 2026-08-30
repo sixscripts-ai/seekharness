@@ -270,6 +270,19 @@ def verify_target_submission(
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(data)
 
+        # 5. Mount extra trusted fixtures (breaker harness, etc.). Never fighter-visible.
+        for rel_path, data in (bundle.private_fixture_files or {}).items():
+            clean_rel = str(rel_path).replace("\\", "/").strip()
+            if not clean_rel or ".." in clean_rel.split("/"):
+                continue
+            dest = (work / clean_rel).resolve()
+            try:
+                dest.relative_to(work)
+            except ValueError:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+
         # Make shell scripts executable if any
         for script in work.rglob("*.sh"):
             script.chmod(0o755)
@@ -433,24 +446,36 @@ def verify_builder_breaker_submission(
             raw_bytes = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
             dest.write_bytes(raw_bytes)
 
+        for rel_path, data in (bundle.private_fixture_files or {}).items():
+            clean_rel = str(rel_path).replace("\\", "/").strip()
+            if not clean_rel or ".." in clean_rel.split("/"):
+                continue
+            dest = (work / clean_rel).resolve()
+            try:
+                dest.relative_to(work)
+            except ValueError:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+
         for script in work.rglob("*.sh"):
             script.chmod(0o755)
 
         ini_path = _write_arena_pytest_harness(work)
         env = _build_hardened_env(work, extra_env)
 
-        # Check for breaker test harness
+        # Fighter-submitted exploits win. Trusted breaker_harness.py is a
+        # private fixture/contract, not automatically the runner.
         breaker_cmd = ""
-        if (work / "tests" / "breaker_harness.py").is_file():
-            breaker_cmd = "pytest tests/breaker_harness.py"
-        elif (work / "exploit.py").is_file():
+        if (work / "exploit.py").is_file():
             breaker_cmd = "python3 exploit.py"
         elif (work / "exploit.sh").is_file():
             breaker_cmd = "bash exploit.sh"
         elif (work / "tests" / "test_exploit.py").is_file():
             breaker_cmd = "pytest tests/test_exploit.py"
+        elif (work / "tests" / "breaker_harness.py").is_file():
+            breaker_cmd = "pytest tests/breaker_harness.py"
         else:
-            # Fall back to visible test check
             breaker_cmd = bundle.verification.visible_command
 
         if breaker_cmd:

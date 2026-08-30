@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+from tests.eval_fixtures import write_private_evaluator
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,18 +75,19 @@ def _make_valid_bundle(
         for k, v in manifest_overrides.items():
             manifest[k] = v
     (bundle_dir / "target.yaml").write_text(yaml.safe_dump(manifest), encoding="utf-8")
-    # starter / visible / hidden / reference
-    for sub in ["starter", "tests/visible", "tests/hidden", "reference"]:
+    for sub in ["starter", "tests/visible"]:
         d = bundle_dir / sub
         d.mkdir(parents=True, exist_ok=True)
         (d / ".gitkeep").write_text("")
     (bundle_dir / "tests" / "visible" / "test_visible.py").write_text(
         "def test_ok(): assert True\n"
     )
-    (bundle_dir / "tests" / "hidden" / "test_hidden.py").write_text(
-        "def test_ok(): assert True\n"
-    )
     (bundle_dir / "starter" / "app.py").write_text("x=1\n")
+    write_private_evaluator(
+        tmp / "evaluators",
+        target_id,
+        hidden={"test_hidden.py": "def test_ok(): assert True\n"},
+    )
     return bundle_dir
 
 
@@ -93,7 +97,12 @@ def _cli(*args: str, library_root: Path | None = None) -> subprocess.CompletedPr
     if library_root is not None:
         cmd += ["--library-root", str(library_root)]
     cmd += list(args)
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=str(BACKEND_ROOT))
+    env = os.environ.copy()
+    if library_root is not None:
+        env["ARENA_EVALUATOR_DIR"] = str(Path(library_root) / "evaluators")
+    return subprocess.run(
+        cmd, capture_output=True, text=True, cwd=str(BACKEND_ROOT), env=env
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -289,9 +298,40 @@ def test_scaffold_creates_files(tmp_path: Path):
     assert (dest / "target.yaml").is_file()
     assert (dest / "starter").is_dir()
     assert (dest / "tests" / "visible").is_dir()
+    assert not (dest / "tests" / "hidden").exists()
+    assert not (dest / "reference").exists()
+    assert (tmp_path / "evaluators" / "scaffolded" / "tests" / "hidden").is_dir()
     # validate the scaffolded bundle
     result2 = _cli("validate", "scaffolded", library_root=tmp_path)
     assert result2.returncode == 0
+
+
+def test_scaffold_refuses_evaluator_dest_inside_public_library(tmp_path: Path):
+    """Scaffolding must not write hidden tests / reference into a public tree."""
+    library = tmp_path / "library-like"
+    dest = library / "inside-target"
+    result = _cli(
+        "scaffold", "inside-target", "--dest", str(dest), library_root=library
+    )
+    assert result.returncode == 2
+    assert "inside the public target tree" in result.stderr
+    assert not (library / "evaluators").exists()
+    assert not (dest / "tests" / "hidden").exists()
+
+
+def test_scaffold_places_evaluator_package_beside_named_library(tmp_path: Path):
+    library = tmp_path / "targets" / "library"
+    library.mkdir(parents=True)
+    dest = library / "sibling-target"
+    result = _cli(
+        "scaffold", "sibling-target", "--dest", str(dest), library_root=library
+    )
+    assert result.returncode == 0
+    assert (
+        tmp_path / "targets" / "evaluators" / "sibling-target" / "tests" / "hidden"
+    ).is_dir()
+    assert not (dest / "tests" / "hidden").exists()
+    assert not (dest / "reference").exists()
 
 
 def test_scaffold_refuses_overwrite_without_force(tmp_path: Path):

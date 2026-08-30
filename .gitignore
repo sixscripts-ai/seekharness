@@ -30,3 +30,14 @@ data/
 .wip-*
 *.zip
 backend/scripts/out/
+
+# Private evaluator packages (hidden tests, reference, fixtures).
+# Track only the placeholder; never commit per-target evaluator trees.
+targets/evaluators/**
+!targets/evaluators/.gitkeep
+targets/**/evaluators/**
+
+# Evaluator-private material must never re-enter the public target library.
+targets/library/**/tests/hidden/**
+targets/library/**/reference/**
+targets/library/**/tests/breaker_harness.py

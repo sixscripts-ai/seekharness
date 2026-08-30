@@ -114,6 +114,30 @@ def run_battle(battle_id: str) -> None:
         from .custom_battles import is_ranked_battle, resolve_battle_config
 
         cfg = resolve_battle_config(battle, fmt_cfg)
+        from .fighter_isolation import (
+            FighterIsolationError,
+            assert_isolated_fighter_execution,
+            battle_target_id,
+        )
+
+        try:
+            assert_isolated_fighter_execution(
+                battle_target_id(battle, cfg), mode="mock"
+            )
+        except FighterIsolationError as exc:
+            reason = str(exc)
+            service.battle_update(
+                battle_id, {"status": "failed", "failure_reason": reason}
+            )
+            event_bus.publish(battle_id, {"type": "error", "data": {"message": reason}})
+            event_bus.publish(
+                battle_id,
+                {
+                    "type": "battle_status",
+                    "data": {"status": "failed", "reason": reason},
+                },
+            )
+            return
         phases = _iter_phases(cfg)
         artifacts: list[dict] = []
         for phase_name, participants in phases:

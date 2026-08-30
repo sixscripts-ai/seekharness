@@ -34,6 +34,7 @@ from .target_library import (
     TargetSecurityError,
     get_default_library_root,
     load_target_bundle,
+    private_evaluator_dir,
     validate_safe_relative_path,
 )
 
@@ -378,16 +379,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 warnings.append(
                     f"[{tid}] visible tests directory '{b.workspace.visible_tests_dir}' missing"
                 )
+        overlay = private_evaluator_dir(tid)
         if not b.hidden_test_files:
-            hid_dir = d / b.workspace.hidden_tests_dir
-            if not hid_dir.is_dir():
+            hid_dir = (overlay / "tests" / "hidden") if overlay is not None else None
+            if hid_dir is None or not hid_dir.is_dir():
                 warnings.append(
-                    f"[{tid}] hidden tests directory '{b.workspace.hidden_tests_dir}' missing"
+                    f"[{tid}] private evaluator hidden tests missing "
+                    f"(targets/evaluators/{tid}/tests/hidden or $ARENA_EVALUATOR_DIR)"
                 )
-        if not (d / b.workspace.reference_dir).is_dir():
-            # reference optional? Warn at info level
+        if overlay is None or not (overlay / "reference").is_dir():
             infos.append(
-                f"[{tid}] reference directory '{b.workspace.reference_dir}' missing (optional)"
+                f"[{tid}] private evaluator reference directory missing (optional)"
             )
 
         # 5. Manifest hash – always computed; check against any stored catalog?
@@ -575,6 +577,50 @@ FORMAT_CHOICES = sorted(KNOWN_FORMATS)
 RUNTIME_CHOICES = sorted(KNOWN_RUNTIMES)
 
 
+def _resolve_evaluator_dest(
+    target_id: str, dest: Path, library_root: Path | None
+) -> Path:
+    """Private evaluator package next to the public library, never inside it."""
+    if library_root is not None:
+        root = library_root.resolve()
+        if root.name == "library":
+            return (root.parent / "evaluators" / target_id).resolve()
+        return (root / "evaluators" / target_id).resolve()
+    if dest.parent.name == "library" or dest.parent.name == "drafts":
+        return (dest.parent.parent / "evaluators" / target_id).resolve()
+    return (dest.parent / "evaluators" / target_id).resolve()
+
+
+def _is_within(path: Path, parent: Path) -> bool:
+    path = path.resolve()
+    parent = parent.resolve()
+    return path == parent or parent in path.parents
+
+
+def evaluator_dest_rejection(
+    eval_dest: Path, dest: Path, library_root: Path | None
+) -> str | None:
+    """Reject an evaluator destination that lands inside a public tree.
+
+    Private hidden tests and reference solutions written under the public
+    target package (or any `targets/library` tree) would be publishable, so
+    scaffolding must refuse instead of relying on ignore rules alone.
+    """
+    public_roots = [dest, get_default_library_root()]
+    if library_root is not None:
+        public_roots.append(library_root)
+    for public in public_roots:
+        try:
+            if _is_within(eval_dest, public):
+                return (
+                    f"evaluator package destination '{eval_dest}' is inside the "
+                    f"public target tree '{public}'"
+                )
+        except OSError:
+            continue
+    return None
+
+
 def _resolve_scaffold_dest(
     target_id: str, dest_arg: str | None, library_root: Path | None
 ) -> Path:
@@ -654,7 +700,12 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
         description=f"TODO: describe {target_id}",
     )
 
-    # minimal starter/README/tests/reference placeholders
+    eval_dest = _resolve_evaluator_dest(target_id, dest, root_override)
+    rejection = evaluator_dest_rejection(eval_dest, dest, root_override)
+    if rejection:
+        print(f"ERROR: {rejection}", file=sys.stderr)
+        return 2
+    # Public package: starter + visible tests only.
     planned: list[tuple[Path, str]] = [
         (dest / "target.yaml", manifest_text),
         (
@@ -667,8 +718,10 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
         ),
         (dest / "starter" / ".gitkeep", ""),
         (dest / "tests" / "visible" / ".gitkeep", ""),
-        (dest / "tests" / "hidden" / ".gitkeep", ""),
-        (dest / "reference" / ".gitkeep", ""),
+    ]
+    eval_planned: list[tuple[Path, str]] = [
+        (eval_dest / "reference" / ".gitkeep", ""),
+        (eval_dest / "tests" / "hidden" / ".gitkeep", ""),
     ]
     # Add a tiny visible test placeholder so verification has something
     if runtime.startswith("python"):
@@ -678,9 +731,9 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
                 "def test_placeholder():\n    assert True\n",
             )
         )
-        planned.append(
+        eval_planned.append(
             (
-                dest / "tests" / "hidden" / "test_hidden.py",
+                eval_dest / "tests" / "hidden" / "test_hidden.py",
                 "def test_hidden_placeholder():\n    assert True\n",
             )
         )
@@ -691,33 +744,42 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
                 "import assert from 'node:assert/strict';\nimport test from 'node:test';\ntest('placeholder', () => assert.equal(1,1));\n",
             )
         )
-        planned.append(
+        eval_planned.append(
             (
-                dest / "tests" / "hidden" / "edge.test.js",
+                eval_dest / "tests" / "hidden" / "edge.test.js",
                 "import assert from 'node:assert/strict';\nimport test from 'node:test';\ntest('hidden placeholder', () => assert.equal(1,1));\n",
             )
         )
 
+    def _rel(path: Path) -> str:
+        if path.is_relative_to(dest):
+            return str(path.relative_to(dest))
+        return str(path)
+
+    all_planned = planned + eval_planned
     if getattr(args, "dry_run", False):
         if getattr(args, "json", False):
             _print_json(
                 {
                     "target_id": target_id,
                     "dest": str(dest),
-                    "files": [str(p.relative_to(dest)) for p, _ in planned],
+                    "evaluator_dest": str(eval_dest),
+                    "files": [_rel(p) for p, _ in all_planned],
                     "dry_run": True,
                 }
             )
         else:
             print(f"Would create {target_id} at {dest}:")
             for p, _ in planned:
-                print(f"  {p.relative_to(dest) if p.is_relative_to(dest) else p}")
+                print(f"  {_rel(p)}")
+            print(f"Would create evaluator package at {eval_dest}:")
+            for p, _ in eval_planned:
+                print(f"  {_rel(p)}")
         return 0
 
     # actually write
-    for p, content in planned:
+    for p, content in all_planned:
         p.parent.mkdir(parents=True, exist_ok=True)
-        # if force and file exists, overwrite; else create
         p.write_text(content, encoding="utf-8")
 
     if getattr(args, "json", False):
@@ -725,13 +787,17 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
             {
                 "target_id": target_id,
                 "dest": str(dest),
-                "files": [str(p.relative_to(dest)) for p, _ in planned],
+                "evaluator_dest": str(eval_dest),
+                "files": [_rel(p) for p, _ in all_planned],
             }
         )
     else:
         print(f"Created {target_id} at {dest}")
         for p, _ in planned:
-            print(f"  {p.relative_to(dest) if p.is_relative_to(dest) else p}")
+            print(f"  {_rel(p)}")
+        print(f"Created evaluator package at {eval_dest}")
+        for p, _ in eval_planned:
+            print(f"  {_rel(p)}")
         print(
             f"\nNext: edit target.yaml / starter, then run:  python -m agent_arena.targets_cli validate {target_id}"
         )
@@ -832,14 +898,9 @@ def cmd_test(args: argparse.Namespace) -> int:
                 )
         return 1
 
-    # 2. manifest validates (already did) – also check required files exist
-    for sub in [
-        b.workspace.starter_dir,
-        b.workspace.visible_tests_dir,
-        b.workspace.hidden_tests_dir,
-    ]:
+    # 2. public workspace dirs + private evaluator hidden tests
+    for sub in [b.workspace.starter_dir, b.workspace.visible_tests_dir]:
         exists = (target_dir / sub).is_dir()
-        # starter is important; visible/hidden are warnings if absent but not hard fail for test
         if sub == b.workspace.starter_dir:
             add(f"starter dir '{sub}' exists", exists, "" if exists else "missing")
         else:
@@ -848,6 +909,13 @@ def cmd_test(args: argparse.Namespace) -> int:
                 exists,
                 "" if exists else "missing (optional)",
             )
+    overlay = private_evaluator_dir(b.id)
+    hid_ok = bool(overlay is not None and b.hidden_test_files)
+    add(
+        "private evaluator hidden tests",
+        hid_ok,
+        "" if hid_ok else "missing evaluator package or hidden tests",
+    )
 
     # 3. verifier can initialize – check commands are not blocked
     for label, cmd in [

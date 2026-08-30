@@ -20,6 +20,7 @@ from agent_arena.target_library import (
     load_target_bundle,
 )
 from agent_arena.target_verifier import verify_target_submission
+from tests.eval_fixtures import point_evaluators, write_solo_reference_target
 
 LIBRARY_ROOT = Path(__file__).resolve().parents[2] / "targets" / "library"
 
@@ -147,6 +148,7 @@ def test_compile_target_to_battle_config():
     assert cfg["id"] == "authentication-gate"
     assert cfg["target_id"] == "authentication-gate"
     assert cfg["target_version"] == "1.0.0"
+    assert cfg["ranked"] is False
     assert cfg["manifest_hash"] == bundle.manifest_hash
     assert cfg["roles"] == ["builder", "breaker"]
     assert "builder" in cfg["role_missions"]
@@ -174,12 +176,22 @@ def test_compile_target_to_battle_config():
     assert "fighter_2" in solo_2_cfg["role_missions"]
 
 
-def test_trusted_verifier_on_reference_solution():
-    registry = get_target_library(LIBRARY_ROOT)
-    bundle = registry.get_target("readme-lied")
-    assert bundle is not None
+def test_trusted_verifier_on_reference_solution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A reference solution passes visible + hidden through a private overlay.
 
-    # Verifying reference solution passes
+    Real reference solutions are private, so this uses a synthetic target whose
+    starter fails verification and whose overlay reference passes it.
+    """
+    library = tmp_path / "library"
+    eval_root = tmp_path / "evaluators"
+    target = write_solo_reference_target(library, eval_root)
+    point_evaluators(monkeypatch, eval_root)
+
+    bundle = load_target_bundle(target)
+    assert bundle.reference_files
+
     evidence = verify_target_submission(
         bundle,
         bundle.reference_files,
@@ -191,6 +203,15 @@ def test_trusted_verifier_on_reference_solution():
     assert evidence.hidden_passed is True
     assert evidence.visible_exit_code == 0
     assert evidence.hidden_exit_code == 0
+
+    # The unfixed starter must fail the same verification.
+    starter_evidence = verify_target_submission(
+        bundle,
+        bundle.starter_files,
+        run_visible=True,
+        run_hidden=True,
+    )
+    assert starter_evidence.passed is False
 
 
 @pytest.mark.integration
@@ -261,4 +282,3 @@ def test_target_battle_creation_solo_and_builder_breaker_contracts(client):
         assert len(battle_bb["model_ids"]) == 2
     finally:
         app.dependency_overrides.pop(get_current_user, None)
-

@@ -119,3 +119,42 @@ def client():
     from agent_arena.main import app
 
     return TestClient(app)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def synthetic_evaluator_root(tmp_path_factory: pytest.TempPathFactory):
+    """Point the whole hermetic session at synthetic private evaluator packages.
+
+    A clean public clone has no `targets/evaluators/<id>` tree, and tests must
+    never read the real one. Individual tests still override
+    `ARENA_EVALUATOR_DIR` via monkeypatch to exercise fail-closed paths.
+    """
+    if _integration_enabled():
+        yield None
+        return
+
+    from tests.eval_fixtures import write_synthetic_evaluator_overlays
+
+    eval_root = tmp_path_factory.mktemp("arena-synthetic-evaluators")
+    write_synthetic_evaluator_overlays(_REPO_ROOT / "targets" / "library", eval_root)
+    previous = os.environ.get("ARENA_EVALUATOR_DIR")
+    os.environ["ARENA_EVALUATOR_DIR"] = str(eval_root)
+    try:
+        yield eval_root
+    finally:
+        if previous is None:
+            os.environ.pop("ARENA_EVALUATOR_DIR", None)
+        else:
+            os.environ["ARENA_EVALUATOR_DIR"] = previous
+
+
+@pytest.fixture(autouse=True)
+def _isolate_target_library_cache():
+    """Keep a temp library root from leaking into later tests via the registry."""
+    yield
+    try:
+        from tests.eval_fixtures import reset_target_library_cache
+
+        reset_target_library_cache()
+    except Exception:
+        pass

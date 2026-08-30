@@ -66,7 +66,22 @@ def create_battle(
     background: BackgroundTasks,
     user_id: str = Depends(get_current_user),
 ):
+    import os
+
+    from .fighter_isolation import (
+        FighterIsolationError,
+        assert_isolated_fighter_execution,
+    )
     from .persistence import service
+
+    use_mock = os.environ.get("ARENA_USE_MOCK") == "1"
+    if use_mock:
+        # Refuse before persisting: a target battle must not be queued onto a
+        # same-host runner while evaluator material is mounted here.
+        try:
+            assert_isolated_fighter_execution(body.target_id or "", mode="mock")
+        except FighterIsolationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     battle = service.battle_create(
         user_id,
@@ -83,9 +98,7 @@ def create_battle(
     )
     battle_id = battle["id"]
     # Prefer real sandbox runner; mock_runner remains for ARENA_USE_MOCK=1
-    import os
-
-    if os.environ.get("ARENA_USE_MOCK") == "1":
+    if use_mock:
         background.add_task(mock_runner.run_battle, battle_id)
     else:
         background.add_task(sandbox_launcher.start_battle, battle_id)

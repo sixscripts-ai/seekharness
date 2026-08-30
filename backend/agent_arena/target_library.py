@@ -1,9 +1,11 @@
 """Target Library v1: multi-file target bundle loader, registry, and security model.
 
-Loads target packages from `targets/library/<target_id>/` and validates:
+Loads public target packages from `targets/library/<target_id>/` and validates:
 1. Valid YAML manifest (`target.yaml`) conforming to specification.
 2. Path traversal & partition separation prevention (rejects `..`, absolute paths, symlink escapes).
-3. Evaluator separation (hidden tests and reference overlays are never exposed to fighters).
+3. Evaluator separation: hidden tests and reference overlays load ONLY from
+   `private_evaluator_dir()` (`$ARENA_EVALUATOR_DIR/<id>` or
+   `targets/evaluators/<id>`). Public library copies are ignored.
 4. Deterministic hashing for manifest, starter bundle, and hidden test bundle.
 5. Authoritative TARGET.md, role_missions, and battle plan compilation.
 """
@@ -124,6 +126,7 @@ class TargetBundle:
     hidden_test_files: dict[str, bytes] = field(repr=False)
     reference_files: dict[str, bytes] = field(repr=False)
     raw_manifest: dict[str, Any] = field(repr=False)
+    private_fixture_files: dict[str, bytes] = field(default_factory=dict, repr=False)
 
 
 def _validate_safe_relative_path(rel_path: str, context: str = "") -> str:
@@ -332,19 +335,27 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
         flat_objectives = [str(raw_objectives)]
         role_objectives["fighter"] = flat_objectives
 
-    # Read distinct file partitions
+    # Public partitions only. Hidden/reference/fixtures never load from the library tree.
     starter_files = _read_directory_files(target_dir, starter_dir_name)
     visible_test_files = _read_directory_files(target_dir, visible_tests_dir_name)
-    hidden_test_files = _read_directory_files(target_dir, hidden_tests_dir_name)
-    reference_files = _read_directory_files(target_dir, reference_dir_name)
+    hidden_test_files: dict[str, bytes] = {}
+    reference_files: dict[str, bytes] = {}
+    private_fixture_files: dict[str, bytes] = {}
     overlay = private_evaluator_dir(target_id)
     if overlay is not None:
-        overlay_hidden = _read_directory_files(overlay, "tests/hidden")
-        overlay_reference = _read_directory_files(overlay, "reference")
-        if overlay_hidden:
-            hidden_test_files = overlay_hidden
-        if overlay_reference:
-            reference_files = overlay_reference
+        hidden_test_files = _read_directory_files(overlay, "tests/hidden")
+        reference_files = _read_directory_files(overlay, "reference")
+        private_fixture_files = _read_overlay_fixtures(overlay)
+    if target_requires_private_evaluator(verification_cfg):
+        if overlay is None:
+            raise TargetSecurityError(
+                f"target '{target_id}' requires a private evaluator package "
+                f"($ARENA_EVALUATOR_DIR/{target_id} or targets/evaluators/{target_id})"
+            )
+        if not hidden_test_files:
+            raise TargetSecurityError(
+                f"target '{target_id}' private evaluator package has no hidden tests"
+            )
 
     # Compute deterministic hashes
     manifest_hash = hashlib.sha256(raw_manifest_text.encode("utf-8")).hexdigest()
@@ -377,6 +388,7 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
         visible_test_files=visible_test_files,
         hidden_test_files=hidden_test_files,
         reference_files=reference_files,
+        private_fixture_files=private_fixture_files,
         raw_manifest=raw,
     )
 
@@ -594,6 +606,7 @@ def compile_target_to_battle_config(
         "environment": {
             "network": bundle.network,
         },
+        "ranked": target_ranked_eligible(bundle.id, bundle.version),
         "battle_plan": {
             "plan_id": f"target-plan-{bundle.id}",
             "phases": phases,
@@ -658,6 +671,116 @@ def rel_is_fighter_public(rel: str, roots: tuple[str, ...], root_files: frozense
     return False
 
 
+def target_requires_private_evaluator(
+    verification: TargetVerificationConfig | dict | None,
+) -> bool:
+    """True when the target must have a private hidden-test package."""
+    if isinstance(verification, TargetVerificationConfig):
+        return bool(verification.hidden_command.strip())
+    if isinstance(verification, dict):
+        return bool(str(verification.get("hidden_command") or "").strip())
+    return False
+
+
+# Production trusted-backend mount. Isolation must see this even when an
+# ambient ARENA_EVALUATOR_DIR points somewhere else.
+PRODUCTION_EVALUATOR_MOUNT = Path("/opt/arena-evaluators")
+
+# Historical public-library targets whose hidden/reference bodies already
+# existed in git history. They remain executable and verifiable, but they
+# cannot affect ranked competition until a rotated identity is allowlisted.
+COMPROMISED_LIBRARY_TARGET_IDS = frozenset(
+    {
+        "authentication-gate",
+        "broken-package-recovery",
+        "makefile-from-hell",
+        "migration-disaster",
+        "poisoned-instructions",
+        "readme-lied",
+        "red-herring-repository",
+        "session-replay-defense",
+        "sql-login-service",
+        "tinyshop",
+    }
+)
+
+# Explicit (target_id, version) pairs that may update Elo / leaderboard /
+# competitive skill learning. Empty on purpose: do not enable the current
+# compromised revisions. Operators add a rotated pair after publishing a
+# new private evaluator set that is not in public git history.
+RANKED_TARGET_ALLOWLIST: frozenset[tuple[str, str]] = frozenset()
+
+
+def target_ranked_eligible(
+    target_id: str | None, target_version: str | None = None
+) -> bool:
+    """True only for an explicitly allowlisted rotated target identity."""
+    tid = str(target_id or "").strip()
+    version = str(target_version or "").strip()
+    if not tid or not version:
+        return False
+    if tid in COMPROMISED_LIBRARY_TARGET_IDS and (
+        tid,
+        version,
+    ) not in RANKED_TARGET_ALLOWLIST:
+        return False
+    return (tid, version) in RANKED_TARGET_ALLOWLIST
+
+
+def fighter_visible_battle_config(cfg: dict | None) -> dict:
+    """Copy a battle config with evaluator-private fields removed.
+
+    Trusted verification keeps hidden_hash / hidden_command on the backend.
+    Fighters receive only public mission, starter, and visible-test commands.
+    """
+    import copy
+
+    public = copy.deepcopy(cfg) if isinstance(cfg, dict) else {}
+    public.pop("hidden_hash", None)
+    public.pop("hidden_test_files", None)
+    public.pop("reference_files", None)
+    public.pop("private_fixture_files", None)
+    verification = public.get("verification")
+    if isinstance(verification, dict):
+        verification.pop("hidden_command", None)
+        public["verification"] = verification
+    return public
+
+
+def default_evaluator_root() -> Path:
+    """Preferred evaluator root for *loading* a target overlay.
+
+    Lookup stays env-first with no repo fallback when the env var is set.
+    Isolation uses `evaluator_storage_roots()` so a mismatched env cannot
+    hide the production mount.
+    """
+    env_root = os.environ.get("ARENA_EVALUATOR_DIR")
+    if env_root:
+        return Path(env_root)
+    return Path(__file__).resolve().parents[2] / "targets" / "evaluators"
+
+
+def evaluator_storage_roots() -> list[Path]:
+    """Filesystem roots that may hold private evaluator packages on this host."""
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(path: Path) -> None:
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(path)
+
+    env_root = os.environ.get("ARENA_EVALUATOR_DIR")
+    if env_root:
+        _add(Path(env_root))
+    _add(PRODUCTION_EVALUATOR_MOUNT)
+    if not env_root:
+        _add(Path(__file__).resolve().parents[2] / "targets" / "evaluators")
+    return roots
+
+
 def relpath_is_private_evaluator(rel: str) -> bool:
     """True when a path is hidden-verifier or reference material.
 
@@ -676,12 +799,32 @@ def relpath_is_private_evaluator(rel: str) -> bool:
     return False
 
 
+def _read_overlay_fixtures(overlay: Path) -> dict[str, bytes]:
+    """Trusted extra files (breaker harness, fixtures) excluding hidden/reference."""
+    files: dict[str, bytes] = {}
+    overlay = overlay.resolve()
+    if not overlay.is_dir():
+        return files
+    for p in sorted(overlay.rglob("*")):
+        if "__pycache__" in p.parts or p.suffix in {".pyc", ".pyo"}:
+            continue
+        if p.is_symlink() or not p.is_file():
+            continue
+        if p.name == ".gitkeep":
+            continue
+        rel = p.relative_to(overlay).as_posix()
+        if relpath_is_private_evaluator(rel):
+            continue
+        files[rel] = p.read_bytes()
+    return files
+
+
 def private_evaluator_dir(target_id: str) -> Path | None:
     """Optional overlay root for private evaluator packages (not fighter-mounted).
 
     Lookup order:
-    1. $ARENA_EVALUATOR_DIR/<target_id>
-    2. repo targets/evaluators/<target_id>
+    1. $ARENA_EVALUATOR_DIR/<target_id> when the env var is set (no repo fallback)
+    2. repo targets/evaluators/<target_id> when the env var is unset
     """
     tid = str(target_id or "").strip()
     if not tid:
@@ -691,10 +834,66 @@ def private_evaluator_dir(target_id: str) -> Path | None:
         candidate = Path(env_root) / tid
         if candidate.is_dir():
             return candidate.resolve()
+        return None
     repo = Path(__file__).resolve().parents[2] / "targets" / "evaluators" / tid
     if repo.is_dir():
         return repo.resolve()
     return None
+
+
+def _root_has_evaluator_packages(root: Path) -> bool | None:
+    """True/False when inspectable; None when the root cannot be trusted-denied."""
+    try:
+        if not root.exists():
+            return False
+        if not root.is_dir():
+            return False
+    except OSError:
+        return None
+    try:
+        resolved = root.resolve()
+    except OSError:
+        resolved = root
+    try:
+        production = PRODUCTION_EVALUATOR_MOUNT.resolve()
+    except OSError:
+        production = PRODUCTION_EVALUATOR_MOUNT
+    # A production mount directory is itself the isolation signal, even if
+    # the volume is empty or an env override points elsewhere.
+    if root == PRODUCTION_EVALUATOR_MOUNT or resolved == production:
+        return True
+    try:
+        for entry in root.iterdir():
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
+                return True
+    except OSError:
+        return None
+    return False
+
+
+def private_evaluator_storage_present() -> bool:
+    """True when this host can read private evaluator material.
+
+    Presence is a filesystem question, not an environment question. An ambient
+    `ARENA_EVALUATOR_DIR` override must not hide `/opt/arena-evaluators`.
+    Unreadable configured/production roots fail closed.
+    """
+    env_root = os.environ.get("ARENA_EVALUATOR_DIR")
+    for root in evaluator_storage_roots():
+        try:
+            present = _root_has_evaluator_packages(root)
+        except OSError:
+            present = None
+        if present is True:
+            return True
+        if present is None:
+            is_production = root == PRODUCTION_EVALUATOR_MOUNT
+            is_configured = bool(env_root) and Path(env_root) == root
+            if is_production or is_configured:
+                return True
+    return False
 
 
 def get_trusted_library_root() -> Path:
@@ -709,15 +908,50 @@ def get_trusted_library_root() -> Path:
     return _get_default_library_root()
 
 
+def _assert_safe_public_file(path: Path, rel: str) -> None:
+    """Fail closed on symlink or multi-link files in the public package."""
+    if path.is_symlink():
+        raise TargetSecurityError(
+            f"symlink '{rel}' is not allowed in a fighter-visible package"
+        )
+    try:
+        st = path.lstat()
+    except OSError as exc:
+        raise TargetSecurityError(
+            f"cannot inspect '{rel}' for fighter materialization: {exc}"
+        ) from exc
+    if getattr(st, "st_nlink", 1) > 1:
+        raise TargetSecurityError(
+            f"hardlinked file '{rel}' is unsafe for fighter materialization"
+        )
+
+
+def _public_symlink_escape(path: Path, target_dir: Path) -> str | None:
+    """Return a relative path if `path` or an ancestor under the target is a symlink."""
+    current = path
+    while True:
+        if current.is_symlink():
+            try:
+                return current.relative_to(target_dir).as_posix()
+            except ValueError:
+                return str(current)
+        if current == target_dir:
+            return None
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
 def materialize_fighter_visible_library(src_root: Path, dest_root: Path) -> Path:
     """Copy only explicitly public target files into dest_root.
 
     Public roots come from the target manifest (starter + visible tests) plus
-    a small set of root docs. Unknown directories are denied. Symlinks are
-    never copied; a resolved link must already live inside an allowlisted
-    public root as a regular file to appear. Hidden/reference material stays
-    on the trusted host library for the verifier.
+    a small set of root docs. Unknown directories are denied. A symlink target
+    root, a symlink file/directory, or a hardlinked public file fails closed
+    so the fighter never receives aliased private content.
     """
+    import os
     import shutil
 
     src_root = Path(src_root)
@@ -726,27 +960,70 @@ def materialize_fighter_visible_library(src_root: Path, dest_root: Path) -> Path
     if not src_root.is_dir():
         return dest_root
     for target_dir in sorted(src_root.iterdir()):
-        if not target_dir.is_dir() or target_dir.name.startswith("."):
+        if target_dir.name.startswith("."):
             continue
+        if not target_dir.is_dir():
+            continue
+        if target_dir.is_symlink():
+            raise TargetSecurityError(
+                f"target root '{target_dir.name}' is a symlink"
+            )
         if not (target_dir / "target.yaml").is_file():
             continue
         workspace = _workspace_from_manifest_file(target_dir / "target.yaml")
         roots, root_files = fighter_public_allowlist(workspace)
         dest_target = dest_root / target_dir.name
-        for path in sorted(target_dir.rglob("*")):
-            if path.is_dir():
+        planned: list[tuple[Path, str]] = []
+        for dirpath, dirnames, filenames in os.walk(target_dir, followlinks=False):
+            current = Path(dirpath)
+            escaped = _public_symlink_escape(current, target_dir)
+            if escaped:
+                rel = current.relative_to(target_dir).as_posix() if current != target_dir else escaped
+                if rel_is_fighter_public(rel, roots, root_files) or any(
+                    rel_is_fighter_public(f"{rel}/{name}", roots, root_files)
+                    for name in (*dirnames, *filenames)
+                ):
+                    raise TargetSecurityError(
+                        f"symlink '{escaped}' is not allowed in a fighter-visible package"
+                    )
+                dirnames.clear()
                 continue
-            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
-                continue
-            # Reject every symlink. Do not follow into hidden/reference/outside.
-            if path.is_symlink():
-                continue
-            rel = path.relative_to(target_dir).as_posix()
-            if relpath_is_private_evaluator(rel):
-                continue
-            if not rel_is_fighter_public(rel, roots, root_files):
-                continue
-            dest = dest_target / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, dest, follow_symlinks=False)
+            for name in list(dirnames):
+                child = current / name
+                rel = child.relative_to(target_dir).as_posix()
+                if child.is_symlink() and (
+                    rel_is_fighter_public(rel, roots, root_files)
+                    or rel_is_fighter_public(f"{rel}/x", roots, root_files)
+                ):
+                    raise TargetSecurityError(
+                        f"symlink '{rel}' is not allowed in a fighter-visible package"
+                    )
+            for name in filenames:
+                path = current / name
+                if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+                    continue
+                rel = path.relative_to(target_dir).as_posix()
+                if relpath_is_private_evaluator(rel):
+                    continue
+                if not rel_is_fighter_public(rel, roots, root_files):
+                    continue
+                escaped = _public_symlink_escape(path, target_dir)
+                if escaped:
+                    raise TargetSecurityError(
+                        f"symlink '{escaped}' is not allowed in a fighter-visible package"
+                    )
+                _assert_safe_public_file(path, rel)
+                planned.append((path, rel))
+        try:
+            for path, rel in planned:
+                dest = dest_target / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest, follow_symlinks=False)
+                if dest.is_symlink() or dest.lstat().st_nlink > 1:
+                    raise TargetSecurityError(
+                        f"copied '{rel}' is not a regular unlinked file"
+                    )
+        except Exception:
+            shutil.rmtree(dest_target, ignore_errors=True)
+            raise
     return dest_root

@@ -79,10 +79,23 @@ def _set_status(databases, database_id: str, battle_id: str, status: str) -> Non
 def run_in_process(battle_id: str) -> None:
     """Hermetic/local path: runner in this process using HttpTransport to self or Fake."""
     from .custom_battles import FrozenConfigError
+    from .fighter_isolation import (
+        FighterIsolationError,
+        assert_isolated_fighter_execution,
+        battle_target_id,
+    )
 
     try:
         databases, database_id, battle, cfg = _load_battle(battle_id)
     except FrozenConfigError as exc:
+        _fail_with_reason(battle_id, str(exc))
+        return
+
+    try:
+        assert_isolated_fighter_execution(
+            battle_target_id(battle, cfg), mode="in_process"
+        )
+    except FighterIsolationError as exc:
         _fail_with_reason(battle_id, str(exc))
         return
     key = settings().get("INTERNAL_API_KEY") or ""
@@ -274,8 +287,10 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     # token — never the global INTERNAL_API_KEY — so a compromised sandbox
     # cannot use the shared key to reach other battles or users' provider keys.
     sandbox_token = issue_battle_token(battle_id)
+    from .target_library import fighter_visible_battle_config
+
     bootstrap = {
-        "format_config": cfg,
+        "format_config": fighter_visible_battle_config(cfg),
         "model_ids": list(battle.get("model_ids") or []),
         "round_visibility": battle.get("round_visibility", "isolated"),
         "timeout_seconds": int(battle.get("timeout_seconds") or 600),
@@ -429,6 +444,25 @@ def start_battle(battle_id: str) -> None:
         except Exception:
             pass
         _set_status(None, None, battle_id, "running")
+        return
+    # No sandbox available: a target battle must not silently degrade to a
+    # same-host runner that can read the evaluator mount.
+    from .fighter_isolation import (
+        FighterIsolationError,
+        assert_isolated_fighter_execution,
+        battle_target_id,
+    )
+
+    try:
+        _, _, battle, cfg = _load_battle(battle_id)
+    except Exception:
+        battle, cfg = {}, {}
+    try:
+        assert_isolated_fighter_execution(
+            battle_target_id(battle, cfg), mode="in_process"
+        )
+    except FighterIsolationError as exc:
+        _fail_with_reason(battle_id, str(exc))
         return
     os.environ.setdefault("ARENA_INPROCESS_DIRECT", "1")
     if os.environ.get("ARENA_IN_SANDBOX") != "1":

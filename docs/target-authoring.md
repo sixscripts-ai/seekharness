@@ -51,13 +51,14 @@ arena-targets scaffold my-new-target --dest ./targets/drafts/my-new-target --for
 Generated skeleton:
 
 ```
-<target-id>/
-  target.yaml              # manifest – edit category/difficulty/format/runtime as needed
-  README.md                # mission overview placeholder
-  starter/                 # broken project the fighter repairs
-  tests/visible/           # visible tests (fighter sees)
-  tests/hidden/            # hidden tests (evaluator only)
-  reference/               # reference solution (never shipped to fighter)
+<target-id>/                         # public package
+  target.yaml
+  README.md
+  starter/
+  tests/visible/
+targets/evaluators/<target-id>/      # private evaluator package (gitignored)
+  tests/hidden/
+  reference/
 ```
 
 **No hidden solutions are generated.**  Placeholders use `assert True`; you
@@ -73,6 +74,7 @@ targets/library/<id>/
   README.md
   starter/                 # mounted as fighter workspace
   tests/visible/           # visible verification tests
+targets/evaluators/<id>/
   tests/hidden/            # hidden evaluator tests (never exposed to fighter)
   reference/               # evaluator-only reference (never exposed)
 ```
@@ -117,7 +119,7 @@ Safe checks only (no hidden solutions exposed, no destructive payloads outside
 the sandbox):
 
 - bundle loads
-- starter / visible / hidden dirs present
+- starter / visible dirs present; hidden tests load from the private evaluator package
 - `visible_command` / `hidden_command` not blocked by `_command_guard`
 - runtime is known
 - starter / visible file counts

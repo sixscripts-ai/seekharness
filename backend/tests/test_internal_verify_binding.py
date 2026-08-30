@@ -132,7 +132,6 @@ def test_http_verify_hides_hidden_oracle(client, monkeypatch, tmp_path: Path):
     target = tmp_path / tid
     (target / "starter").mkdir(parents=True)
     (target / "tests" / "visible").mkdir(parents=True)
-    (target / "tests" / "hidden").mkdir(parents=True)
     (target / "target.yaml").write_text(
         f"""
 schema_version: 1
@@ -171,10 +170,18 @@ safety:
         "from app import ping\n\ndef test_ping():\n    assert ping() == 'pong'\n",
         encoding="utf-8",
     )
-    (target / "tests" / "hidden" / "test_hidden.py").write_text(
-        "from app import ping\n\ndef test_hidden():\n    assert ping() == 'pong'\n",
-        encoding="utf-8",
+    from tests.eval_fixtures import point_evaluators, write_private_evaluator
+
+    write_private_evaluator(
+        tmp_path / "evaluators",
+        tid,
+        hidden={
+            "test_hidden.py": (
+                "from app import ping\n\ndef test_hidden():\n    assert ping() == 'pong'\n"
+            )
+        },
     )
+    point_evaluators(monkeypatch, tmp_path / "evaluators")
     bundle = load_target_bundle(target)
 
     class _Lib:

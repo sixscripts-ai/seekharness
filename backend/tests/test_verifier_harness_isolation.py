@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from agent_arena.target_library import load_target_bundle
+from tests.eval_fixtures import point_evaluators, write_private_evaluator
 from agent_arena.target_verifier import (
     _HARNESS_BASENAMES,
     verify_target_submission,
@@ -19,12 +20,11 @@ from agent_arena.target_verifier import (
 HIDDEN_ASSERT = "assert ping() == 'pong'"
 
 
-def _write_bundle(root: Path) -> Path:
+def _write_bundle(root: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     tid = "harness-iso"
     target = root / tid
     (target / "starter").mkdir(parents=True)
     (target / "tests" / "visible").mkdir(parents=True)
-    (target / "tests" / "hidden").mkdir(parents=True)
     (target / "target.yaml").write_text(
         f"""
 schema_version: 1
@@ -64,10 +64,16 @@ safety:
         "from app import ping\n\ndef test_ping():\n    " + HIDDEN_ASSERT + "\n",
         encoding="utf-8",
     )
-    (target / "tests" / "hidden" / "test_hidden.py").write_text(
-        "from app import ping\n\ndef test_hidden():\n    " + HIDDEN_ASSERT + "\n",
-        encoding="utf-8",
+    write_private_evaluator(
+        root / "evaluators",
+        tid,
+        hidden={
+            "test_hidden.py": (
+                "from app import ping\n\ndef test_hidden():\n    " + HIDDEN_ASSERT + "\n"
+            )
+        },
     )
+    point_evaluators(monkeypatch, root / "evaluators")
     return target
 
 
@@ -106,9 +112,11 @@ def _legacy_naive_verify(bundle, submitted_files: dict[str, str]) -> int:
         return proc.returncode
 
 
-def test_legacy_conftest_injection_used_to_force_pass(tmp_path: Path):
+def test_legacy_conftest_injection_used_to_force_pass(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """Prove the historical attack: fighter conftest.py zeros pytest exit status."""
-    target = _write_bundle(tmp_path)
+    target = _write_bundle(tmp_path, monkeypatch)
     bundle = load_target_bundle(target)
     malicious = (
         "def pytest_sessionfinish(session, exitstatus):\n"
@@ -124,7 +132,7 @@ def test_legacy_conftest_injection_used_to_force_pass(tmp_path: Path):
 
 def test_trusted_verifier_ignores_malicious_conftest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ARENA_VERIFIER_ALLOW_INPROCESS", "1")
-    target = _write_bundle(tmp_path)
+    target = _write_bundle(tmp_path, monkeypatch)
     bundle = load_target_bundle(target)
     malicious = (
         "def pytest_sessionfinish(session, exitstatus):\n"
@@ -150,7 +158,7 @@ def test_trusted_verifier_ignores_malicious_conftest(tmp_path: Path, monkeypatch
 
 def test_pytest_ini_ignore_hidden_does_not_skip_oracle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ARENA_VERIFIER_ALLOW_INPROCESS", "1")
-    target = _write_bundle(tmp_path)
+    target = _write_bundle(tmp_path, monkeypatch)
     bundle = load_target_bundle(target)
     evidence = verify_target_submission(
         bundle,
@@ -169,7 +177,7 @@ def test_pytest_ini_ignore_hidden_does_not_skip_oracle(tmp_path: Path, monkeypat
 
 def test_correct_submission_still_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ARENA_VERIFIER_ALLOW_INPROCESS", "1")
-    target = _write_bundle(tmp_path)
+    target = _write_bundle(tmp_path, monkeypatch)
     bundle = load_target_bundle(target)
     evidence = verify_target_submission(
         bundle,
@@ -196,7 +204,7 @@ def test_executor_inprocess_solo_verify_returns_coarse_payload(
 ):
     """In-process solo verify must not NameError and must not leak hidden fields."""
     monkeypatch.setenv("ARENA_VERIFIER_ALLOW_INPROCESS", "1")
-    target = _write_bundle(tmp_path)
+    target = _write_bundle(tmp_path, monkeypatch)
     bundle = load_target_bundle(target)
 
     class _Lib:

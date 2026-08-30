@@ -1,0 +1,19 @@
+name: target-secrecy
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tracked-private-paths:
+    name: Reject tracked private evaluator paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Check git index for hidden/reference/evaluator bodies
+        run: python3 targets/library/scripts/check_tracked_secrecy.py

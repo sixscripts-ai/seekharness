@@ -15,30 +15,50 @@ from agent_arena.custom_battles import is_ranked_battle
 from agent_arena.main import app
 from agent_arena.sandbox.client import FakeTransport, InternalClient
 from agent_arena.sandbox.executors.advanced_executor import AdvancedExecutor
-from agent_arena.target_library import compile_target_to_battle_config, get_target_library
+from agent_arena.target_library import (
+    compile_target_to_battle_config,
+    get_target_library,
+    load_target_bundle,
+)
 from agent_arena.target_verifier import verify_builder_breaker_submission, verify_target_submission
+from tests.eval_fixtures import (
+    BB_REFERENCE_SOURCE,
+    SOLO_REFERENCE_SOURCE,
+    point_evaluators,
+    reset_target_library_cache,
+    write_builder_breaker_reference_target,
+    write_solo_reference_target,
+)
 
 LIBRARY_ROOT = Path(__file__).resolve().parents[2] / "targets" / "library"
 
 
+def _use_synthetic_library(monkeypatch: pytest.MonkeyPatch, library: Path, eval_root: Path) -> None:
+    """Route the trusted loader at a synthetic public library + private overlay."""
+    point_evaluators(monkeypatch, eval_root)
+    monkeypatch.setenv("ARENA_TRUSTED_TARGETS_DIR", str(library))
+    reset_target_library_cache()
+
+
 def test_executor_runs_target_bundle_with_trusted_verifier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
-    registry = get_target_library(LIBRARY_ROOT)
-    bundle = registry.get_target("broken-package-recovery")
-    assert bundle is not None
+    library = tmp_path / "library"
+    eval_root = tmp_path / "evaluators"
+    target = write_solo_reference_target(library, eval_root)
+    _use_synthetic_library(monkeypatch, library, eval_root)
+    bundle = load_target_bundle(target)
 
     cfg = compile_target_to_battle_config(bundle, arena_size=1)
-    assert cfg["target_id"] == "broken-package-recovery"
+    assert cfg["target_id"] == bundle.id
     assert "battle_plan" in cfg
 
     transport = FakeTransport()
-    # Mock LLM response that writes the reference fix
-    package_json_fixed = bundle.reference_files["package.json"].decode("utf-8")
+    # Mock LLM response that writes the (synthetic) reference fix
     transport.model_canned = (
-        'THOUGHT: Fixing package.json syntax error and test scripts\n'
+        'THOUGHT: Fixing the ledger total\n'
         'SKILL: test-skill\n'
-        'THEORY: Syntax error in package.json trailing comma and missing test script\n'
-        f'TOOL write package.json\n{package_json_fixed}\n'
+        'THEORY: total() ignores its items and always returns 0\n'
+        f'TOOL write ledger.py\n{SOLO_REFERENCE_SOURCE}\n'
         'TOOL test\n'
     )
 
@@ -63,7 +83,7 @@ def test_executor_runs_target_bundle_with_trusted_verifier(tmp_path: Path, monke
 
     artifacts = "\n".join(r.get("artifact", "") for r in transport.rounds)
     assert "TEST_PASS" in artifacts
-    assert "broken-package-recovery" in artifacts
+    assert bundle.id in artifacts
     results = _executor_results(transport.rounds)
     assert all("target_verification_error" not in r for r in results)
     assert all("hidden_output" not in r for r in results)
@@ -133,11 +153,15 @@ def test_executor_fail_closed_on_hash_mismatch(monkeypatch: pytest.MonkeyPatch):
     assert "target-verifier-error" in artifacts
 
 
-def test_builder_breaker_asymmetric_scoring():
+def test_builder_breaker_asymmetric_scoring(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """Test asymmetric evaluation of Builder vs Breaker."""
-    registry = get_target_library(LIBRARY_ROOT)
-    bundle = registry.get_target("authentication-gate")
-    assert bundle is not None
+    library = tmp_path / "library"
+    eval_root = tmp_path / "evaluators"
+    target = write_builder_breaker_reference_target(library, eval_root)
+    point_evaluators(monkeypatch, eval_root)
+    bundle = load_target_bundle(target)
 
     # Case A: Builder writes reference solution, Breaker fails to exploit
     builder_clean_files = bundle.reference_files
@@ -173,12 +197,13 @@ def test_builder_breaker_asymmetric_scoring():
 
 
 def test_ranking_eligibility_for_target_library():
-    """Verified target library battles are ranked eligible, whereas custom unverified drafts are not."""
-    # Target battle
-    assert is_ranked_battle({"target_id": "broken-package-recovery", "spec_hash": "abc"}) is True
-    assert is_ranked_battle({}, {"target_id": "broken-package-recovery"}) is True
+    """Compromised library revisions are not ranked; unverified drafts stay unranked."""
+    assert is_ranked_battle({"target_id": "broken-package-recovery", "spec_hash": "abc"}) is False
+    assert is_ranked_battle({}, {"target_id": "broken-package-recovery"}) is False
+    assert is_ranked_battle(
+        {"target_id": "broken-package-recovery", "target_version": "1.0.0"}
+    ) is False
 
-    # User custom draft (unverified)
     assert is_ranked_battle({"draft_id": "custom-123", "spec_hash": "xyz"}) is False
     assert is_ranked_battle({"spec_hash": "xyz"}) is False
 
@@ -204,9 +229,11 @@ def test_builder_breaker_executor_runs_asymmetric_phases(
     """
     monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
     monkeypatch.setenv("ARENA_PREVIEW", "0")
-    registry = get_target_library(LIBRARY_ROOT)
-    bundle = registry.get_target("authentication-gate")
-    assert bundle is not None
+    library = tmp_path / "library"
+    eval_root = tmp_path / "evaluators"
+    target = write_builder_breaker_reference_target(library, eval_root)
+    _use_synthetic_library(monkeypatch, library, eval_root)
+    bundle = load_target_bundle(target)
 
     cfg = compile_target_to_battle_config(bundle, arena_size=2)
     assert cfg["format"] == "builder_breaker"
@@ -215,7 +242,7 @@ def test_builder_breaker_executor_runs_asymmetric_phases(
     # Builder writes the reference app.py (passes visible + hidden tests).
     builder_reply = (
         'TOOL write path=app.py\n'
-        + bundle.reference_files["app.py"].decode("utf-8")
+        + BB_REFERENCE_SOURCE
         + '\nEND_TOOL\nDONE\n'
     )
     # Breaker writes a benign exploit that exits non-zero (fails to exploit).

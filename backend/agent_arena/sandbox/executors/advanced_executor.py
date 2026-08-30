@@ -81,6 +81,7 @@ def _strip_secret_env(env: dict) -> dict:
         "BATTLE_TOKEN",
         "ARENA_EVALUATOR_DIR",
         "ARENA_TRUSTED_TARGETS_DIR",
+        "BATTLE_BOOTSTRAP_JSON",
     }
     _SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
     out = dict(env)

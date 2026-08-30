@@ -13,10 +13,12 @@ targets/library/<target-id>/
 ├── target.yaml          # Canonical target manifest (spec version 1)
 ├── README.md            # Target overview and mission brief
 ├── starter/             # Base workspace provided to fighters
-├── tests/
-│   ├── visible/         # Tests exposed to the agent in its workspace
-│   └── hidden/          # Evaluator-only tests (never mounted to fighter)
-└── reference/           # Gold standard reference solution (verifier only)
+└── tests/visible/       # Tests exposed to the agent in its workspace
+
+targets/evaluators/<target-id>/   # gitignored private package
+├── tests/hidden/        # Evaluator-only tests
+├── reference/           # Reference solution (verifier only)
+└── tests/*.py           # Other evaluator fixtures (e.g. breaker harness)
 ```
 
 ---
@@ -42,7 +44,7 @@ targets/library/<target-id>/
 
 1. **Fighter Workspace**:
    - Only `starter/` and `tests/visible/` are materialized into the agent's workspace.
-   - `tests/hidden/` and `reference/` are **never** mounted or accessible in fighter workspaces.
+   - `tests/hidden/` and `reference/` live only under `targets/evaluators/` or `$ARENA_EVALUATOR_DIR` and are **never** mounted or accessible in fighter workspaces.
 2. **Builder → Breaker Handoff**:
    - Builder writes artifacts to its workspace.
    - The orchestrator captures only paths explicitly listed in `workspace.handoff_allowlist`.

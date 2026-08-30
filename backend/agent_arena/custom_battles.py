@@ -99,9 +99,14 @@ def is_ranked_battle(battle_data: dict | None, cfg: dict | None = None) -> bool:
     cfg = cfg or {}
     if cfg.get("ranked") is False or is_custom_config(cfg):
         return False
-    # Verified library targets are ranked eligible
-    if data.get("target_id") or cfg.get("target_id"):
-        return True
+    target_id = str(data.get("target_id") or cfg.get("target_id") or "").strip()
+    if target_id:
+        from .target_library import target_ranked_eligible
+
+        version = str(
+            data.get("target_version") or cfg.get("target_version") or ""
+        ).strip()
+        return target_ranked_eligible(target_id, version)
     if data.get("draft_id") or data.get("spec_hash"):
         return False
     return True

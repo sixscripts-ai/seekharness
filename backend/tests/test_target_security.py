@@ -24,6 +24,7 @@ from agent_arena.target_verifier import (
     _STRIP_KEY_PATTERNS,
     verify_target_submission,
 )
+from tests.eval_fixtures import point_evaluators, write_private_evaluator
 
 
 def test_validate_safe_relative_path_valid():
@@ -245,6 +246,8 @@ safety:
 """,
         encoding="utf-8",
     )
+    write_private_evaluator(tmp_path / "evaluators", "env-test-target")
+    point_evaluators(monkeypatch, tmp_path / "evaluators")
 
     bundle = load_target_bundle(target_dir)
 
@@ -307,7 +310,9 @@ safety:
         load_target_bundle(target_dir)
 
 
-def test_verifier_blocks_manifest_command_at_runtime(tmp_path: Path):
+def test_verifier_blocks_manifest_command_at_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """Even a bundle that slipped past load-time validation is blocked fail-closed at runtime."""
     target_dir = tmp_path / "runtime-block-target"
     target_dir.mkdir()
@@ -344,6 +349,8 @@ safety:
 """,
         encoding="utf-8",
     )
+    write_private_evaluator(tmp_path / "evaluators", "runtime-block-target")
+    point_evaluators(monkeypatch, tmp_path / "evaluators")
     bundle = load_target_bundle(target_dir)
     evil = replace(
         bundle,
@@ -392,6 +399,8 @@ safety:
 """,
         encoding="utf-8",
     )
+    write_private_evaluator(tmp_path / "evaluators", "refuse-target")
+    point_evaluators(monkeypatch, tmp_path / "evaluators")
     bundle = load_target_bundle(target_dir)
     monkeypatch.delenv("ARENA_VERIFIER_ALLOW_INPROCESS", raising=False)
     monkeypatch.delenv("ARENA_IN_SANDBOX", raising=False)
@@ -419,7 +428,9 @@ def test_blocked_submission_path_partitions():
     assert _blocked_submission_path("sitecustomize.py") is True
 
 
-def test_role_objectives_cannot_leak_private_verifier_content(tmp_path: Path):
+def test_role_objectives_cannot_leak_private_verifier_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """Ensure private evaluator tests, secret flags, and reference solutions cannot leak into role_objectives or TargetDetailOut."""
     from agent_arena.target_router import _to_detail
 
@@ -432,10 +443,13 @@ def test_role_objectives_cannot_leak_private_verifier_content(tmp_path: Path):
     (target_dir / "starter" / "main.py").write_text("print('hello')\n")
     (target_dir / "tests" / "visible").mkdir(parents=True)
     (target_dir / "tests" / "visible" / "test_pub.py").write_text("def test_pub(): pass\n")
-    (target_dir / "tests" / "hidden").mkdir(parents=True)
-    (target_dir / "tests" / "hidden" / "test_sec.py").write_text(f"{secret_flag}\n{private_evaluator_assertion}\n")
-    (target_dir / "reference").mkdir()
-    (target_dir / "reference" / "solution.py").write_text(f"PRIVATE_SOLUTION_CODE = '{secret_flag}'\n")
+    write_private_evaluator(
+        tmp_path / "evaluators",
+        "secret-leak-test",
+        hidden={"test_sec.py": f"{secret_flag}\n{private_evaluator_assertion}\n"},
+        reference={"solution.py": f"PRIVATE_SOLUTION_CODE = '{secret_flag}'\n"},
+    )
+    point_evaluators(monkeypatch, tmp_path / "evaluators")
 
     (target_dir / "target.yaml").write_text(
         f"""
