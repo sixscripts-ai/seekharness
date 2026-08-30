@@ -38,6 +38,7 @@ from .discovery import (
     is_public_skill,
     score_skill_for_query,
     search_skills,
+    skill_capability_affinity,
     skill_to_compact_card,
 )
 from .graph import (
@@ -102,6 +103,7 @@ __all__ = [
     "is_public_skill",
     "score_skill_for_query",
     "search_skills",
+    "skill_capability_affinity",
     "skill_to_compact_card",
     "SkillGraph",
     "SkillGraphIndex",

@@ -158,12 +158,18 @@ class SearchDiscoveryView:
     view_type: str = "search"
     query: str = ""
     results: tuple[CompactSkillCard, ...] = ()
+    total_matches: int = 0
+    returned_count: int = 0
+    truncated: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "view_type": "search",
             "query": self.query,
             "results": [s.to_dict() for s in self.results],
+            "total_matches": self.total_matches,
+            "returned_count": self.returned_count,
+            "truncated": self.truncated,
         }
 
 
@@ -238,6 +244,17 @@ def inspect_skill_card(
     if not is_public_skill(skill):
         raise UnknownSkillError(f"skill '{skill_id}' is not public")
     return SkillDiscoveryView(card=skill_to_compact_card(skill))
+
+
+def skill_capability_affinity(
+    skill_id: str, graph: SkillGraph | None = None
+) -> tuple[str, ...]:
+    """Return advisory capability affinities without granting any capability."""
+    g = graph or load_skill_graph()
+    skill = g.require_skill(skill_id)
+    if not is_public_skill(skill):
+        raise UnknownSkillError(f"skill '{skill_id}' is not public")
+    return tuple(skill.capability_affinity)
 
 
 def is_public_skill(skill: SkillRecord) -> bool:
@@ -332,14 +349,16 @@ def score_skill_for_query(query: str, skill: SkillRecord) -> float:
 
 def search_skills(
     query: str,
-    limit: int = 15,
+    limit: int = 10,
     graph: SkillGraph | None = None,
 ) -> SearchDiscoveryView:
     """Deterministic lexical search across public skills in Skill Graph."""
     g = graph or load_skill_graph()
     q = str(query or "").strip()
     if not q:
-        return SearchDiscoveryView(query="", results=())
+        return SearchDiscoveryView(
+            query="", results=(), total_matches=0, returned_count=0, truncated=False
+        )
 
     scored: list[tuple[float, SkillRecord]] = []
     for skill in g.all_skills():
@@ -350,9 +369,16 @@ def search_skills(
     # Sort deterministically: score descending, tie-break by canonical skill ID ascending
     scored.sort(key=lambda item: (-item[0], item[1].id))
 
-    capped = scored[:limit] if limit > 0 else scored
+    cap = max(1, int(limit))
+    capped = scored[:cap]
     cards = tuple(skill_to_compact_card(s) for _, s in capped)
-    return SearchDiscoveryView(query=q, results=cards)
+    return SearchDiscoveryView(
+        query=q,
+        results=cards,
+        total_matches=len(scored),
+        returned_count=len(cards),
+        truncated=len(scored) > len(cards),
+    )
 
 
 def discover_skills(
@@ -458,7 +484,11 @@ def format_discovery_text(
             return 'SEARCH RESULTS: (empty query, 0 matches)\nUse skills() to browse roots or skills(search="<terms>") to search.'
         if not view.results:
             return f'SEARCH RESULTS for "{view.query}": (0 matches)\nUse skills() to browse roots or try broader search terms.'
-        lines = [f'SEARCH RESULTS for "{view.query}" ({len(view.results)} matches):']
+        cap_note = " [truncated]" if view.truncated else ""
+        lines = [
+            f'SEARCH RESULTS for "{view.query}" '
+            f"({view.returned_count}/{view.total_matches} matches){cap_note}:"
+        ]
         for i, card in enumerate(view.results, 1):
             lines.append(f"{i}. {card.id}")
             lines.append(f"   Summary: {card.summary}")

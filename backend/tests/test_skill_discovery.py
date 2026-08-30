@@ -367,3 +367,178 @@ def test_error_view_serializes_without_private_data():
         "error_type": "unknown_skill",
         "requested": "private-id",
     }
+
+
+def test_root_discovery_response_is_compact():
+    payload = browse_roots().to_dict()
+
+    assert set(payload) == {
+        "view_type",
+        "roots",
+        "total_skills",
+        "total_indexes",
+    }
+    assert len(payload["roots"]) == 13
+    assert all(
+        set(root) == {"path", "name", "description", "child_count", "skill_count"}
+        for root in payload["roots"]
+    )
+    assert "skills" not in payload
+    assert "body" not in str(payload).lower()
+
+
+def test_index_discovery_response_is_compact():
+    payload = browse_index("security/authentication").to_dict()
+
+    assert set(payload) == {
+        "view_type",
+        "index_path",
+        "name",
+        "description",
+        "is_root",
+        "parent",
+        "direct_children",
+        "skills",
+    }
+    assert payload["direct_children"] == []
+    assert all("body" not in card and "path" not in card for card in payload["skills"])
+    assert "SKILL.md" not in str(payload)
+
+
+def test_search_response_contains_cap_metadata_and_compact_cards():
+    payload = search_skills("debugger").to_dict()
+
+    assert payload["total_matches"] == 16
+    assert payload["returned_count"] == 10
+    assert payload["truncated"] is True
+    assert len(payload["results"]) == 10
+    assert all("body" not in card for card in payload["results"])
+
+
+def test_skill_inspection_response_is_compact():
+    payload = inspect_skill_card("auth-flow-debugger").to_dict()
+
+    assert set(payload) == {"view_type", "card"}
+    assert payload["card"] is not None
+    assert "body" not in payload["card"]
+    assert "SKILL.md" not in str(payload)
+
+
+def test_use_skill_is_the_only_operation_that_exposes_full_body(tmp_path: Path):
+    skill_dir = tmp_path / ".agents" / "skills" / "secure-code-execution"
+    skill_dir.mkdir(parents=True)
+    body = "---\nname: secure-code-execution\ndescription: test\n---\nUNIQUE_FULL_BODY_SENTINEL\n"
+    (skill_dir / "SKILL.md").write_text(body, encoding="utf-8")
+    session = ToolSession(tmp_path)
+
+    loaded = session.use_skill("secure-code-execution")
+    root = session.skills(count_step=False)
+    index = session.skills(index="security/code-execution", count_step=False)
+    search = session.skills(search="secure code", count_step=False)
+    card = session.skills(skill="secure-code-execution", count_step=False)
+
+    assert loaded.output == body
+    for discovery_result in (root, index, search, card):
+        assert "UNIQUE_FULL_BODY_SENTINEL" not in discovery_result.output
+
+
+def test_repeated_use_skill_does_not_duplicate_body_or_loaded_state(tmp_path: Path):
+    skill_dir = tmp_path / ".agents" / "skills" / "secure-code-execution"
+    skill_dir.mkdir(parents=True)
+    body = "UNIQUE_REPEAT_BODY_SENTINEL"
+    (skill_dir / "SKILL.md").write_text(body, encoding="utf-8")
+    session = ToolSession(tmp_path)
+
+    first = session.use_skill("secure-code-execution", count_step=False)
+    second = session.use_skill("secure-code-execution", count_step=False)
+
+    assert first.output == body
+    assert second.output == "SKILL_ALREADY_LOADED secure-code-execution"
+    assert body not in second.output
+    assert session.skill_reads == {"secure-code-execution"}
+
+
+def test_browse_search_and_card_after_loading_do_not_reinject_body(tmp_path: Path):
+    skill_dir = tmp_path / ".agents" / "skills" / "secure-code-execution"
+    skill_dir.mkdir(parents=True)
+    body = "UNIQUE_POST_LOAD_BODY_SENTINEL"
+    (skill_dir / "SKILL.md").write_text(body, encoding="utf-8")
+    session = ToolSession(tmp_path)
+    session.use_skill("secure-code-execution", count_step=False)
+
+    results = (
+        session.skills(index="security/code-execution", count_step=False),
+        session.skills(search="secure code", count_step=False),
+        session.skills(skill="secure-code-execution", count_step=False),
+    )
+
+    assert all(body not in result.output for result in results)
+    assert session.skill_reads == {"secure-code-execution"}
+
+
+def test_two_different_skills_can_both_load(tmp_path: Path):
+    for skill_id in ("first-skill", "second-skill"):
+        skill_dir = tmp_path / ".agents" / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(skill_id, encoding="utf-8")
+    session = ToolSession(tmp_path)
+
+    first = session.use_skill("first-skill", count_step=False)
+    second = session.use_skill("second-skill", count_step=False)
+
+    assert first.success is True
+    assert second.success is True
+    assert session.skill_reads == {"first-skill", "second-skill"}
+
+
+def test_many_different_skills_are_not_blocked_by_loaded_count(tmp_path: Path):
+    skill_ids = [f"skill-{i}" for i in range(8)]
+    for skill_id in skill_ids:
+        skill_dir = tmp_path / ".agents" / "skills" / skill_id
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(skill_id, encoding="utf-8")
+    session = ToolSession(tmp_path)
+
+    results = [session.use_skill(skill_id, count_step=False) for skill_id in skill_ids]
+
+    assert all(result.success for result in results)
+    assert session.skill_reads == set(skill_ids)
+
+
+def test_search_cap_is_deterministic_and_reports_total_matches():
+    first = search_skills("debugger")
+    second = search_skills("debugger")
+
+    assert first == second
+    assert first.total_matches == 16
+    assert first.returned_count == 10
+    assert first.truncated is True
+    assert [card.id for card in first.results] == [
+        "async-control-flow-debugger",
+        "auth-flow-debugger",
+        "browser-ui-debugger",
+        "build-system-debugger",
+        "compiler-linker-debugger",
+        "concurrency-race-debugger",
+        "database-migration-debugger",
+        "frontend-state-debugger",
+        "incremental-build-debugger",
+        "makefile-debugger",
+    ]
+
+
+def test_search_under_cap_reports_not_truncated():
+    result = search_skills("auditor")
+
+    assert result.total_matches == 10
+    assert result.returned_count == 10
+    assert result.truncated is False
+
+
+def test_d2_search_ordering_remains_unchanged():
+    result = search_skills("python kata")
+
+    assert result.results[0].id == "python-kata-fixer"
+    assert result.total_matches == 1
+    assert result.returned_count == 1
+    assert result.truncated is False
