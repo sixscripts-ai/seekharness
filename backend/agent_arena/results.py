@@ -21,6 +21,22 @@ UNTRUSTED_EXECUTION = "UNTRUSTED_EXECUTION"
 # score-like fields cannot influence competitive ranking.
 _UNTRUSTED_KEEP = frozenset({"model_id", "role", "phase", "battle_id"})
 
+# Display-only executor stop reasons. Never TEST_PASS / scores / winner.
+_DISPLAY_TERMINAL = frozenset(
+    {
+        "turn_budget_exhausted",
+        "step_budget_exhausted",
+        "TURN_BUDGET_EXCEEDED",
+        "STEP_BUDGET_EXCEEDED",
+        "MAX_TURNS_EXCEEDED",
+        "PARSE_RECOVERY_EXHAUSTED",
+        "cancelled",
+        "canceled",
+        "completed",
+        "test_failed",
+    }
+)
+
 INFRA_OUTCOMES = frozenset(
     {
         "PROVIDER_ERROR",
@@ -67,7 +83,7 @@ class AuthoritativeResult:
     status: str = "completed"  # completed, timeout, crashed, policy_violation, incomplete, failed
     passed: bool = False
     score: float = 0.0
-    verification_status: str = "unverified"  # verified_pass, verified_fail, unverified, infra_failure, policy_invalid
+    verification_status: str = "unverified"  # verified_pass, verified_fail, unverified, not_attempted, infra_failure, policy_invalid
     termination_reason: str | None = None  # TEST_PASS, TEST_FAIL, STEP_BUDGET_EXCEEDED, PROVIDER_ERROR, etc.
     artifact_refs: list[str] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
@@ -139,6 +155,12 @@ def sanitize_untrusted_executor_payload(payload: dict[str, Any]) -> dict[str, An
     item["passed"] = False
     item["verification_status"] = "unverified"
     item["_trusted"] = False
+    raw_term = str(raw.get("terminal_reason") or "")
+    raw_exec = str(raw.get("executor_outcome") or raw.get("outcome") or "")
+    if raw_term in _DISPLAY_TERMINAL:
+        item["terminal_reason"] = raw_term
+    if raw_exec in _DISPLAY_TERMINAL:
+        item["executor_outcome"] = raw_exec
     return item
 
 

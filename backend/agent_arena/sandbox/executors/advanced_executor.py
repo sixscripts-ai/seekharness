@@ -2023,6 +2023,21 @@ class AdvancedExecutor(Executor):
         return encoded
 
     @staticmethod
+    def _has_candidate_workspace(files: dict | None) -> bool:
+        for key, value in (files or {}).items():
+            rel = str(key).replace("\\", "/")
+            if rel.startswith(".agents/skills/") and rel.endswith("SKILL.md"):
+                continue
+            text = (
+                value.decode("utf-8", errors="ignore")
+                if isinstance(value, bytes)
+                else str(value)
+            )
+            if text.strip() and text.strip() != "(mounted skill)":
+                return True
+        return False
+
+    @staticmethod
     def _remote_verifier_required() -> bool:
         return (
             os.environ.get("ARENA_IN_SANDBOX") == "1"
@@ -2046,6 +2061,23 @@ class AdvancedExecutor(Executor):
             return
         from agent_arena.results import TRUSTED_VERIFICATION_MARKER
 
+        status = str(payload.get("verification_status") or "")
+        if not status:
+            if payload.get("attempted") is False:
+                status = "not_attempted"
+            elif payload.get("error"):
+                status = "infra_failure"
+            else:
+                status = "verified_pass" if payload.get("passed") else "verified_fail"
+        if status == "not_attempted":
+            outcome = "VERIFICATION_NOT_ATTEMPTED"
+            passed = False
+        elif status == "infra_failure":
+            outcome = "VERIFY_ERROR"
+            passed = False
+        else:
+            passed = bool(payload.get("passed")) and status == "verified_pass"
+            outcome = "TEST_PASS" if passed else "TEST_FAIL"
         record = {
             "source": "trusted_verifier",
             "target_id": target_id,
@@ -2053,11 +2085,19 @@ class AdvancedExecutor(Executor):
             "phase": phase or "main",
             "role": role or "fighter",
             "model_id": model_id,
-            "passed": bool(payload.get("passed")),
+            "passed": passed,
+            "attempted": status != "not_attempted",
+            "verification_status": status,
             "builder_passed": payload.get("builder_passed"),
             "breaker_passed": payload.get("breaker_passed"),
-            "outcome": "TEST_PASS" if payload.get("passed") else "TEST_FAIL",
+            "outcome": outcome,
         }
+        if payload.get("executor_outcome"):
+            record["executor_outcome"] = payload.get("executor_outcome")
+        if payload.get("terminal_reason"):
+            record["terminal_reason"] = payload.get("terminal_reason")
+        if payload.get("visible_passed") is not None:
+            record["visible_passed"] = bool(payload.get("visible_passed"))
         try:
             client.round(
                 battle_id,
@@ -2082,6 +2122,8 @@ class AdvancedExecutor(Executor):
         phase: str = "",
         role: str = "",
         model_id: str = "",
+        executor_outcome: str = "",
+        terminal_reason: str = "",
     ) -> tuple[dict | None, str | None]:
         """Run verification in the trusted host (backend) when in a fighter sandbox.
 
@@ -2103,6 +2145,8 @@ class AdvancedExecutor(Executor):
                         phase=phase,
                         role=role,
                         model_id=model_id,
+                        executor_outcome=executor_outcome,
+                        terminal_reason=terminal_reason,
                     )
                 else:
                     data = client.verify_target(
@@ -2113,13 +2157,15 @@ class AdvancedExecutor(Executor):
                         phase=phase,
                         role=role,
                         model_id=model_id,
+                        executor_outcome=executor_outcome,
+                        terminal_reason=terminal_reason,
                     )
             except Exception:
                 return None, "VERIFY_ERROR"
             if not isinstance(data, dict):
                 return None, "VERIFY_ERROR"
             if data.get("error") and not data.get("ok", True):
-                return None, "VERIFY_ERROR"
+                return data, "VERIFY_ERROR"
             return data, None
 
         from agent_arena.target_library import get_target_library, get_trusted_library_root
@@ -2127,6 +2173,29 @@ class AdvancedExecutor(Executor):
             verify_builder_breaker_submission,
             verify_target_submission,
         )
+
+        if not builder_breaker and not self._has_candidate_workspace(files):
+            public = {
+                "target_id": target_id,
+                "passed": False,
+                "attempted": False,
+                "verification_status": "not_attempted",
+            }
+            if executor_outcome:
+                public["executor_outcome"] = executor_outcome
+            if terminal_reason:
+                public["terminal_reason"] = terminal_reason
+            self._emit_trusted_verification(
+                client,
+                battle_id,
+                target_id=target_id,
+                kind=kind,
+                phase=phase,
+                role=role,
+                model_id=model_id,
+                payload=public,
+            )
+            return public, None
 
         bundle = get_target_library(get_trusted_library_root()).get_target(target_id)
         if bundle is None:
@@ -2147,6 +2216,10 @@ class AdvancedExecutor(Executor):
                     "passed": ev.builder_passed,
                     "builder_passed": ev.builder_passed,
                     "breaker_passed": ev.breaker_passed,
+                    "attempted": True,
+                    "verification_status": (
+                        "verified_pass" if ev.builder_passed else "verified_fail"
+                    ),
                 }
             else:
                 ev = verify_target_submission(
@@ -2159,7 +2232,15 @@ class AdvancedExecutor(Executor):
                     "target_id": ev.target_id,
                     "passed": ev.passed,
                     "visible_passed": ev.visible_passed,
+                    "attempted": True,
+                    "verification_status": (
+                        "verified_pass" if ev.passed else "verified_fail"
+                    ),
                 }
+            if executor_outcome:
+                public["executor_outcome"] = executor_outcome
+            if terminal_reason:
+                public["terminal_reason"] = terminal_reason
             self._emit_trusted_verification(
                 client,
                 battle_id,
@@ -2172,7 +2253,28 @@ class AdvancedExecutor(Executor):
             )
             return public, None
         except Exception:
-            return None, "VERIFY_ERROR"
+            failed = {
+                "target_id": target_id,
+                "passed": False,
+                "attempted": True,
+                "verification_status": "infra_failure",
+                "error": True,
+            }
+            if executor_outcome:
+                failed["executor_outcome"] = executor_outcome
+            if terminal_reason:
+                failed["terminal_reason"] = terminal_reason
+            self._emit_trusted_verification(
+                client,
+                battle_id,
+                target_id=target_id,
+                kind=kind,
+                phase=phase,
+                role=role,
+                model_id=model_id,
+                payload=failed,
+            )
+            return failed, "VERIFY_ERROR"
 
     def _finalize_role(
         self,
@@ -2378,24 +2480,30 @@ class AdvancedExecutor(Executor):
                 phase=phase,
                 role=role,
                 model_id=model_id,
+                executor_outcome=str(outcome_override or ""),
+                terminal_reason=str(terminal_reason or ""),
             )
             if target_evidence and not target_verification_error:
                 passed = bool(target_evidence.get("passed"))
 
         if target_id and not is_builder_breaker(format_config):
             # FAIL-CLOSED: if target verification was required but errored/unavailable, FAIL CLOSED
+            evidence_status = str((target_evidence or {}).get("verification_status") or "")
             if target_verification_error:
                 outcome = "VERIFY_ERROR"
                 passed = False
+            elif evidence_status == "not_attempted":
+                outcome = outcome_override or "VERIFICATION_NOT_ATTEMPTED"
+                passed = False
             elif target_evidence:
-                if target_evidence["passed"]:
+                if target_evidence.get("passed"):
                     outcome = "TEST_PASS"
-                elif outcome_override:
-                    outcome = outcome_override
-                elif budget_exceeded:
-                    outcome = "STEP_BUDGET_EXCEEDED"
+                    passed = True
                 else:
+                    # Verification ran and failed. Keep the trusted fail;
+                    # do not hide it behind a turn-budget executor label.
                     outcome = "TEST_FAIL"
+                    passed = False
             else:
                 outcome = "VERIFY_ERROR"
                 passed = False
@@ -2475,6 +2583,20 @@ class AdvancedExecutor(Executor):
             "spec_hash": str((format_config or {}).get("spec_hash") or ""),
             "evaluation_mode": str((format_config or {}).get("evaluation_mode") or ""),
         }
+        if target_id and not is_builder_breaker(format_config):
+            if target_verification_error:
+                result["verification_status"] = "infra_failure"
+            elif target_evidence:
+                result["verification_status"] = str(
+                    target_evidence.get("verification_status")
+                    or (
+                        "verified_pass"
+                        if target_evidence.get("passed")
+                        else "verified_fail"
+                    )
+                )
+            else:
+                result["verification_status"] = "not_attempted"
         if target_evidence:
             result["target_id"] = target_evidence.get("target_id")
         elif target_verification_error:

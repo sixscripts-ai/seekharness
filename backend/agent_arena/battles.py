@@ -107,16 +107,31 @@ def create_battle(
 
 @router.get("")
 def list_battles(saved: bool = False, user_id: str = Depends(get_current_user)):
+    from .battle_public import public_battle_payload
     from .persistence import service
 
-    return service.battle_list(user_id, saved=True if saved else None)
+    rows = service.battle_list(user_id, saved=True if saved else None)
+    return [public_battle_payload(row) for row in rows]
 
 
 @router.get("/{battle_id}")
 def get_battle(battle_id: str, user_id: str = Depends(get_current_user)):
+    from .battle_public import public_battle_payload
+    from .persistence import service
+
     data = _require_owned_battle(user_id, battle_id)
-    data.pop("encrypted_key", None)
-    return data
+    results: list = []
+    score_rows: list = []
+    try:
+        results = service.battle_results_list(battle_id)
+        score_rows = service.scores_list(battle_id)
+    except Exception:
+        results, score_rows = [], []
+    return public_battle_payload(
+        data,
+        results=results,
+        score_rows=score_rows,
+    )
 
 
 @router.get("/{battle_id}/artifacts")
@@ -145,6 +160,8 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
     _require_owned_battle(user_id, battle_id)
 
     def event_generator():
+        from .battle_public import scrub_evaluator_private
+
         seen_ids: set[str] = set()
         # Durable snapshot first (survives scale-to-zero / other replicas)
         for ev in service.events_load(battle_id):
@@ -153,7 +170,10 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
                 continue
             if eid:
                 seen_ids.add(eid)
-            yield {"event": ev["type"], "data": json.dumps(ev.get("data", {}))}
+            yield {
+                "event": ev["type"],
+                "data": json.dumps(scrub_evaluator_private(ev.get("data", {}))),
+            }
         while True:
             events = event_bus.subscribe(battle_id)
             # sort by created_at then event_id for stable multi-writer merge
@@ -170,7 +190,10 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
                     continue
                 if eid:
                     seen_ids.add(eid)
-                yield {"event": ev["type"], "data": json.dumps(ev.get("data", {}))}
+                yield {
+                    "event": ev["type"],
+                    "data": json.dumps(scrub_evaluator_private(ev.get("data", {}))),
+                }
             battle = service.battle_get(user_id, battle_id) or {}
             if battle.get("status") in ("completed", "failed", "cancelled"):
                 yield {

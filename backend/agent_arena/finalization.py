@@ -265,21 +265,33 @@ def _merge_trusted_authority(
                 passed = bool(tv.get("builder_passed", tv.get("passed")))
             elif role == "breaker":
                 passed = bool(tv.get("breaker_passed", tv.get("passed")))
+        stored_vs = str(tv.get("verification_status") or "")
         outcome = str(tv.get("outcome") or "")
-        if is_infra_outcome(outcome):
-            item["outcome"] = outcome
+        if stored_vs == "not_attempted":
             item["passed"] = False
+            item["outcome"] = "VERIFICATION_NOT_ATTEMPTED"
+            item["verification_status"] = "not_attempted"
+        elif stored_vs == "infra_failure" or is_infra_outcome(outcome):
+            item["outcome"] = outcome if is_infra_outcome(outcome) else "VERIFY_ERROR"
+            item["passed"] = False
+            item["verification_status"] = "infra_failure"
         else:
             item["passed"] = passed
             item["outcome"] = "TEST_PASS" if passed else "TEST_FAIL"
+            item["verification_status"] = (
+                "verified_pass" if item["passed"] else "verified_fail"
+            )
+        if tv.get("executor_outcome"):
+            item["executor_outcome"] = tv.get("executor_outcome")
+        elif tel.get("executor_outcome"):
+            item["executor_outcome"] = tel.get("executor_outcome")
+        if tv.get("terminal_reason"):
+            item["terminal_reason"] = tv.get("terminal_reason")
+        elif tel.get("terminal_reason"):
+            item["terminal_reason"] = tel.get("terminal_reason")
         item["phase"] = phase
         item["role"] = role
         item["model_id"] = model_id
-        item["verification_status"] = (
-            "infra_failure"
-            if is_infra_outcome(str(item.get("outcome") or ""))
-            else ("verified_pass" if item["passed"] else "verified_fail")
-        )
         item["_trusted"] = True
         merged.append(item)
 
@@ -300,19 +312,34 @@ def _merge_trusted_authority(
                 passed = bool(tv.get("builder_passed", tv.get("passed")))
             elif role == "breaker":
                 passed = bool(tv.get("breaker_passed", tv.get("passed")))
-        merged.append(
-            {
-                "model_id": model_id,
-                "phase": phase,
-                "role": role,
-                "passed": passed,
-                "outcome": "TEST_PASS" if passed else "TEST_FAIL",
-                "steps": 0,
-                "artifact_checks": {"present": [], "missing": []},
-                "verification_status": "verified_pass" if passed else "verified_fail",
-                "_trusted": True,
-            }
-        )
+        stored_vs = str(tv.get("verification_status") or "")
+        if stored_vs == "not_attempted":
+            outcome = "VERIFICATION_NOT_ATTEMPTED"
+            passed = False
+            verif_status = "not_attempted"
+        elif stored_vs == "infra_failure" or is_infra_outcome(str(tv.get("outcome") or "")):
+            outcome = str(tv.get("outcome") or "VERIFY_ERROR")
+            passed = False
+            verif_status = "infra_failure"
+        else:
+            outcome = "TEST_PASS" if passed else "TEST_FAIL"
+            verif_status = "verified_pass" if passed else "verified_fail"
+        extra = {
+            "model_id": model_id,
+            "phase": phase,
+            "role": role,
+            "passed": passed,
+            "outcome": outcome,
+            "steps": 0,
+            "artifact_checks": {"present": [], "missing": []},
+            "verification_status": verif_status,
+            "_trusted": True,
+        }
+        if tv.get("executor_outcome"):
+            extra["executor_outcome"] = tv.get("executor_outcome")
+        if tv.get("terminal_reason"):
+            extra["terminal_reason"] = tv.get("terminal_reason")
+        merged.append(extra)
     return merged
 
 
@@ -545,7 +572,9 @@ def finalize_battle(
                 sc = float(effective_scores.get(mid, 0.0))
                 passed = bool(r_payload.get("passed"))
                 term_reason = str(
-                    r_payload.get("outcome")
+                    r_payload.get("executor_outcome")
+                    or r_payload.get("terminal_reason")
+                    or r_payload.get("outcome")
                     or ("TEST_PASS" if passed else "TEST_FAIL")
                 )
                 if not r_payload.get("_trusted"):
@@ -561,12 +590,13 @@ def finalize_battle(
                     passed = False
                 elif stored_vs in {
                     "unverified",
+                    "not_attempted",
                     "verified_pass",
                     "verified_fail",
                     "infra_failure",
                 }:
                     verif_status = stored_vs
-                    if stored_vs == "unverified":
+                    if stored_vs in {"unverified", "not_attempted"}:
                         passed = False
                 else:
                     verif_status = "verified_pass" if passed else "verified_fail"
@@ -708,7 +738,36 @@ def finalize_battle(
             {"type": "evidence_summary", "data": {**evidence_summary, "decision": decision}},
         )
     if status == "completed" and effective_scores and score_source == "arena-score-v1":
-        event_bus.publish(battle_id, {"type": "scores", "data": {"scores": effective_scores}})
+        from .battle_public import (
+            aggregate_verification_status,
+            public_winner,
+            verified_solution_from_results,
+        )
+
+        verified = bool((decision or {}).get("verified_solution")) or verified_solution_from_results(
+            results
+        )
+        event_bus.publish(
+            battle_id,
+            {
+                "type": "scores",
+                "data": {
+                    "scores": effective_scores,
+                    "authoritative": True,
+                    "source": score_source,
+                    "verified_solution": verified,
+                    "verification_status": aggregate_verification_status(results),
+                    "winner": public_winner(
+                        verified_solution=verified, results=results
+                    ),
+                    "termination_reason": (results or [{}])[0].get("executor_outcome")
+                    or (results or [{}])[0].get("terminal_reason")
+                    or (results or [{}])[0].get("outcome")
+                    if results
+                    else None,
+                },
+            },
+        )
     event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": status}})
 
     payload = {

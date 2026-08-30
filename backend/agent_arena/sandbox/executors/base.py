@@ -114,7 +114,7 @@ class Executor:
         result = client.judge(battle_id, rubric, history, weights=weights)
         scores = result.get("scores") or {}
         client.round(
-            battle_id, "judge", "system", json.dumps(result), event_type="scores"
+            battle_id, "judge", "system", json.dumps(result), event_type="judge"
         )
         if on_status:
             on_status("completed")

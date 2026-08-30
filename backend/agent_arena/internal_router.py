@@ -194,6 +194,8 @@ class VerifyBody(BaseModel):
     submitted_files: dict[str, str] = Field(default_factory=dict)
     builder_files: dict[str, str] = Field(default_factory=dict)
     breaker_files: dict[str, str] = Field(default_factory=dict)
+    executor_outcome: str = ""
+    terminal_reason: str = ""
 
 
 _TARGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -251,6 +253,31 @@ def _derive_verify_binding(battle: dict, fmt_cfg: dict, body: VerifyBody) -> tup
     return target_id, kind, phase, role, model_id
 
 
+_SAFE_EXECUTOR_OUTCOMES = frozenset(
+    {
+        "TURN_BUDGET_EXCEEDED",
+        "STEP_BUDGET_EXCEEDED",
+        "MAX_TURNS_EXCEEDED",
+        "PARSE_RECOVERY_EXHAUSTED",
+        "PROVIDER_ERROR",
+        "PROVIDER_TIMEOUT",
+        "SANDBOX_ERROR",
+        "CANCELLED",
+        "CANCELED",
+        "TIMEOUT",
+    }
+)
+
+
+def _allowlisted_executor_hint(raw: str | None) -> str:
+    hint = str(raw or "").strip()
+    if hint.upper() in _SAFE_EXECUTOR_OUTCOMES:
+        return hint.upper()
+    if hint in {"turn_budget_exhausted", "step_budget_exhausted", "test_failed", "completed"}:
+        return hint
+    return ""
+
+
 def _persist_trusted_verification(
     battle_id: str,
     *,
@@ -260,7 +287,32 @@ def _persist_trusted_verification(
     role: str,
     model_id: str,
     payload: dict,
-) -> None:
+) -> dict:
+    from .battle_public import (
+        INFRA_FAILURE,
+        NOT_ATTEMPTED,
+        VERIFIED_FAIL,
+        VERIFIED_PASS,
+        public_verification_event_data,
+    )
+
+    status = str(payload.get("verification_status") or "")
+    if not status:
+        if payload.get("attempted") is False:
+            status = NOT_ATTEMPTED
+        elif payload.get("error"):
+            status = INFRA_FAILURE
+        else:
+            status = VERIFIED_PASS if payload.get("passed") else VERIFIED_FAIL
+    if status == NOT_ATTEMPTED:
+        outcome = "VERIFICATION_NOT_ATTEMPTED"
+        passed = False
+    elif status == INFRA_FAILURE:
+        outcome = str(payload.get("outcome") or "VERIFY_ERROR")
+        passed = False
+    else:
+        passed = bool(payload.get("passed")) and status == VERIFIED_PASS
+        outcome = "TEST_PASS" if passed else "TEST_FAIL"
     record = {
         "source": "trusted_verifier",
         "target_id": target_id,
@@ -268,16 +320,31 @@ def _persist_trusted_verification(
         "phase": phase or "main",
         "role": role or "fighter",
         "model_id": model_id,
-        "passed": bool(payload.get("passed")),
+        "passed": passed,
+        "attempted": status not in {NOT_ATTEMPTED},
+        "verification_status": status,
         "builder_passed": payload.get("builder_passed"),
         "breaker_passed": payload.get("breaker_passed"),
         "manifest_hash": payload.get("manifest_hash") or "",
-        "outcome": "TEST_PASS" if payload.get("passed") else "TEST_FAIL",
+        "outcome": outcome,
     }
+    exec_hint = _allowlisted_executor_hint(payload.get("executor_outcome"))
+    term_hint = _allowlisted_executor_hint(payload.get("terminal_reason"))
+    if exec_hint:
+        record["executor_outcome"] = exec_hint
+    if term_hint:
+        record["terminal_reason"] = term_hint
+    if payload.get("visible_passed") is not None:
+        record["visible_passed"] = bool(payload.get("visible_passed"))
     artifact = TRUSTED_VERIFICATION_MARKER + " " + json.dumps(record)
     from .persistence import service as persist
 
     persist.round_create(battle_id, phase or "verify", model_id, artifact)
+    event_bus.publish(
+        battle_id,
+        {"type": "verification", "data": public_verification_event_data(record)},
+    )
+    return record
 
 
 
@@ -500,19 +567,87 @@ def internal_verify(
     if frozen_hidden and bundle.hidden_hash != frozen_hidden:
         raise HTTPException(status_code=409, detail="target hidden hash mismatch")
 
+    hint_payload = {
+        "executor_outcome": body.executor_outcome,
+        "terminal_reason": body.terminal_reason,
+    }
+
+    def _has_candidate(files: dict | None) -> bool:
+        for key, value in (files or {}).items():
+            rel = str(key).replace("\\", "/")
+            if rel.startswith(".agents/skills/") and rel.endswith("SKILL.md"):
+                continue
+            text = value.decode("utf-8", errors="ignore") if isinstance(value, bytes) else str(value)
+            if text.strip() and text.strip() != "(mounted skill)":
+                return True
+        return False
+
     if kind == "builder_breaker":
-        ev = verify_builder_breaker_submission(
-            bundle,
-            body.builder_files,
-            body.breaker_files,
-            trusted_host=True,
-        )
+        if not _has_candidate(body.builder_files) and not _has_candidate(body.breaker_files):
+            record = _persist_trusted_verification(
+                body.battle_id,
+                target_id=target_id,
+                kind=kind,
+                phase=phase,
+                role=role,
+                model_id=model_id,
+                payload={
+                    "passed": False,
+                    "attempted": False,
+                    "verification_status": "not_attempted",
+                    **hint_payload,
+                },
+            )
+            return {
+                "ok": True,
+                "target_id": target_id,
+                "passed": False,
+                "attempted": False,
+                "verification_status": "not_attempted",
+                "builder_passed": False,
+                "breaker_passed": False,
+                "executor_outcome": record.get("executor_outcome"),
+            }
+        try:
+            ev = verify_builder_breaker_submission(
+                bundle,
+                body.builder_files,
+                body.breaker_files,
+                trusted_host=True,
+            )
+        except Exception:
+            _persist_trusted_verification(
+                body.battle_id,
+                target_id=target_id,
+                kind=kind,
+                phase=phase,
+                role=role,
+                model_id=model_id,
+                payload={
+                    "passed": False,
+                    "error": True,
+                    "verification_status": "infra_failure",
+                    "outcome": "VERIFY_ERROR",
+                    **hint_payload,
+                },
+            )
+            return {
+                "ok": False,
+                "error": "VERIFY_ERROR",
+                "target_id": target_id,
+                "passed": False,
+                "verification_status": "infra_failure",
+            }
         public = {
             "ok": True,
             "target_id": ev.target_id,
             "passed": bool(ev.builder_passed),
             "builder_passed": ev.builder_passed,
             "breaker_passed": ev.breaker_passed,
+            "attempted": True,
+            "verification_status": (
+                "verified_pass" if ev.builder_passed else "verified_fail"
+            ),
         }
         _persist_trusted_verification(
             body.battle_id,
@@ -526,22 +661,75 @@ def internal_verify(
                 "builder_passed": ev.builder_passed,
                 "breaker_passed": ev.breaker_passed,
                 "manifest_hash": ev.manifest_hash,
+                "verification_status": public["verification_status"],
+                **hint_payload,
             },
         )
         return public
 
-    ev = verify_target_submission(
-        bundle,
-        body.submitted_files,
-        run_visible=True,
-        run_hidden=True,
-        trusted_host=True,
-    )
+    if not _has_candidate(body.submitted_files):
+        record = _persist_trusted_verification(
+            body.battle_id,
+            target_id=target_id,
+            kind=kind,
+            phase=phase,
+            role=role,
+            model_id=model_id,
+            payload={
+                "passed": False,
+                "attempted": False,
+                "verification_status": "not_attempted",
+                **hint_payload,
+            },
+        )
+        return {
+            "ok": True,
+            "target_id": target_id,
+            "passed": False,
+            "attempted": False,
+            "verification_status": "not_attempted",
+            "executor_outcome": record.get("executor_outcome"),
+        }
+
+    try:
+        ev = verify_target_submission(
+            bundle,
+            body.submitted_files,
+            run_visible=True,
+            run_hidden=True,
+            trusted_host=True,
+        )
+    except Exception:
+        _persist_trusted_verification(
+            body.battle_id,
+            target_id=target_id,
+            kind=kind,
+            phase=phase,
+            role=role,
+            model_id=model_id,
+            payload={
+                "passed": False,
+                "error": True,
+                "verification_status": "infra_failure",
+                "outcome": "VERIFY_ERROR",
+                **hint_payload,
+            },
+        )
+        return {
+            "ok": False,
+            "error": "VERIFY_ERROR",
+            "target_id": target_id,
+            "passed": False,
+            "verification_status": "infra_failure",
+        }
+    status = "verified_pass" if ev.passed else "verified_fail"
     public = {
         "ok": True,
         "target_id": ev.target_id,
         "passed": ev.passed,
         "visible_passed": ev.visible_passed,
+        "attempted": True,
+        "verification_status": status,
     }
     _persist_trusted_verification(
         body.battle_id,
@@ -553,6 +741,9 @@ def internal_verify(
         payload={
             "passed": ev.passed,
             "manifest_hash": ev.manifest_hash,
+            "visible_passed": ev.visible_passed,
+            "verification_status": status,
+            **hint_payload,
         },
     )
     return public

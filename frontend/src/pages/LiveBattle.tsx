@@ -29,6 +29,10 @@ import LiveExecutionPane, {
   type BattleStreamItem,
 } from "@/components/LiveExecutionPane";
 import { cn } from "@/lib/utils";
+import {
+  isAuthoritativeScoresEvent,
+  targetResultPresentation,
+} from "@/lib/targetResult";
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 type DockTab = "activity" | "handoffs" | "evidence" | "judge";
@@ -241,6 +245,9 @@ export default function LiveBattle() {
         setFormat(loadedFormats.find((row) => row.id === loadedBattle.format_id) || null);
         setProviders(loadedProviders);
         if (loadedBattle.preview_urls) setPreviewUrls(loadedBattle.preview_urls);
+        if (loadedBattle.scores && Object.keys(loadedBattle.scores).length) {
+          setScores(loadedBattle.scores);
+        }
 
         if (loadedBattle.target_id) {
           api.target(loadedBattle.target_id, token).then((t) => {
@@ -313,16 +320,51 @@ export default function LiveBattle() {
               if (item) setEvents((previous) => mergeEvent(previous, item));
             }
 
+            if (ev.event === "verification") {
+              setBattle((current) =>
+                current
+                  ? {
+                      ...current,
+                      verification_status: data?.verification_status ?? current.verification_status,
+                      verified_solution:
+                        data?.verification_status === "verified_pass" && data?.passed === true,
+                      termination_reason:
+                        data?.executor_outcome || data?.outcome || current.termination_reason,
+                      outcome: data?.executor_outcome || data?.outcome || current.outcome,
+                    }
+                  : current,
+              );
+            }
+
             if (ev.event === "scores") {
-              const direct = data?.scores || wrapped?.scores;
-              if (direct) {
-                setScores(direct);
-              } else {
-                const raw = data?.artifact || wrapped?.artifact;
-                const parsed = parseJson(raw);
-                if (parsed?.scores) setScores(parsed.scores);
-                else if (parsed?.data?.scores) setScores(parsed.data.scores);
+              const payload = (data || wrapped || {}) as {
+                scores?: Record<string, number>;
+                authoritative?: boolean;
+                source?: string;
+                winner?: string | null;
+                verified_solution?: boolean;
+                verification_status?: string;
+                termination_reason?: string | null;
+              };
+              if (!isAuthoritativeScoresEvent(payload)) {
+                return;
               }
+              if (payload.scores && typeof payload.scores === "object") {
+                setScores(payload.scores);
+              }
+              setBattle((current) =>
+                current
+                  ? {
+                      ...current,
+                      scores: payload.scores ?? current.scores,
+                      winner: payload.winner ?? current.winner,
+                      verified_solution: payload.verified_solution ?? current.verified_solution,
+                      verification_status: payload.verification_status ?? current.verification_status,
+                      termination_reason: payload.termination_reason ?? current.termination_reason,
+                      outcome: payload.termination_reason ?? current.outcome,
+                    }
+                  : current,
+              );
             }
 
             if (ev.event === "preview") {
@@ -439,13 +481,23 @@ export default function LiveBattle() {
     return latestModelWithAction && latestModelWithAction !== modelId ? "complete" : "starting";
   }
 
-  const scoreWinner = useMemo(() => {
-    if (!scores || !modelIds.length) return null;
-    return modelIds.reduce(
-      (best, model) => Number(scores[model] ?? -Infinity) > Number(scores[best] ?? -Infinity) ? model : best,
-      modelIds[0],
-    );
-  }, [scores, modelIds]);
+  const resultView = useMemo(
+    () =>
+      targetResultPresentation({
+        status,
+        isTargetBattle: Boolean(battle?.target_id),
+        result: {
+          scores,
+          winner: battle?.winner ?? null,
+          verified_solution: battle?.verified_solution ?? null,
+          verification_status: battle?.verification_status ?? null,
+          termination_reason: battle?.termination_reason ?? null,
+          outcome: battle?.outcome ?? null,
+        },
+      }),
+    [status, battle, scores],
+  );
+  const scoreWinner = resultView.showCompetitiveWinner ? resultView.winnerId : null;
 
   const startAt = events[0]?.t || sessionStartedRef.current;
   const elapsed = formatElapsed(now - startAt);
@@ -565,8 +617,10 @@ export default function LiveBattle() {
                     "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-[9.5px] font-bold uppercase tracking-[0.14em]",
                     status === "running"
                       ? "border-pink-500/40 bg-pink-500/10 text-pink-400 shadow-[0_0_12px_rgba(255,0,160,0.3)]"
-                      : status === "completed"
+                      : resultView.statusTone === "verified"
                       ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.25)]"
+                      : resultView.statusTone === "unverified"
+                      ? "border-amber-500/40 bg-amber-950/40 text-amber-400"
                       : "border-white/10 bg-white/5 text-zinc-400",
                   )}
                 >
@@ -576,11 +630,7 @@ export default function LiveBattle() {
                   {status === "completed" ? (
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                   ) : null}
-                  {status === "running"
-                    ? "● Live Execution"
-                    : status === "completed"
-                    ? (isTargetBattle ? "VERIFIED TARGET RESULT" : "REPLAY · VERIFIED RESULT")
-                    : status}
+                  {resultView.statusLabel}
                 </span>
               </div>
 
@@ -697,13 +747,22 @@ export default function LiveBattle() {
       {/* Official Completed Verdict Banner */}
       {status === "completed" && (
         <div className="mx-auto max-w-[1760px] px-6 pt-6">
-          <div className="rounded-xl border border-emerald-500/40 bg-[#09090E] p-6 shadow-2xl space-y-4">
+          <div className={cn(
+            "rounded-xl border bg-[#09090E] p-6 shadow-2xl space-y-4",
+            resultView.statusTone === "verified" ? "border-emerald-500/40" : "border-amber-500/40",
+          )}>
             <div className="flex items-center justify-between border-b border-[#1F1F22] pb-3">
               <div className="flex items-center gap-2">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                <span className="mono text-xs font-bold uppercase tracking-wider text-emerald-400">
+                <span className={cn(
+                  "h-2 w-2 rounded-full",
+                  resultView.statusTone === "verified" ? "bg-emerald-400" : "bg-amber-400",
+                )} />
+                <span className={cn(
+                  "mono text-xs font-bold uppercase tracking-wider",
+                  resultView.statusTone === "verified" ? "text-emerald-400" : "text-amber-400",
+                )}>
                   {isTargetBattle
-                    ? `TARGET BENCHMARK VERDICT · ${targetDetail?.name || battle?.target_id} (v${battle?.target_version || "1.0.0"})`
+                    ? `${resultView.statusTone === "verified" ? "TARGET BENCHMARK VERDICT" : "UNVERIFIED TARGET RESULT"} · ${targetDetail?.name || battle?.target_id} (v${battle?.target_version || "1.0.0"})`
                     : "OFFICIAL MATCH VERDICT · VERIFIED REPLAY"}
                 </span>
               </div>
@@ -725,9 +784,10 @@ export default function LiveBattle() {
 
             <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
               {modelIds.slice(0, 2).map((mId, idx) => {
-                const isWinner = scoreWinner === mId;
-                const hasScore = scores && mId in scores;
-                const rawScore = hasScore ? scores[mId] : null;
+                const isWinner = Boolean(scoreWinner && scoreWinner === mId);
+                const displayScores = resultView.scores || scores;
+                const hasScore = Boolean(displayScores && mId in displayScores);
+                const rawScore = hasScore && displayScores ? displayScores[mId] : null;
                 const role = roleForModel(mId, idx);
 
                 return (
@@ -750,7 +810,10 @@ export default function LiveBattle() {
                       </div>
                       <div className="text-right">
                         {hasScore ? (
-                          <div className="text-2xl font-black text-emerald-400">
+                          <div className={cn(
+                            "text-2xl font-black",
+                            isWinner ? "text-emerald-400" : "text-zinc-200",
+                          )}>
                             {rawScore}
                           </div>
                         ) : (
@@ -771,10 +834,29 @@ export default function LiveBattle() {
                         <span className="text-zinc-500">Status:</span>
                         <span className="text-zinc-300 font-semibold uppercase">{status}</span>
                       </div>
-                      <div className="flex items-center justify-between text-[10.5px]">
-                        <span className="text-zinc-500">Execution:</span>
-                        <span className="text-zinc-300">Isolated MicroVM</span>
-                      </div>
+                      {isTargetBattle ? (
+                        <>
+                          <div className="flex items-center justify-between text-[10.5px]">
+                            <span className="text-zinc-500">Verification:</span>
+                            <span className="text-zinc-300 font-semibold">
+                              {resultView.verificationLabel || "Unverified"}
+                            </span>
+                          </div>
+                          {resultView.terminalOutcome ? (
+                            <div className="flex items-center justify-between text-[10.5px]">
+                              <span className="text-zinc-500">Outcome:</span>
+                              <span className="text-zinc-300 font-semibold uppercase">
+                                {resultView.terminalOutcome}
+                              </span>
+                            </div>
+                          ) : null}
+                        </>
+                      ) : (
+                        <div className="flex items-center justify-between text-[10.5px]">
+                          <span className="text-zinc-500">Execution:</span>
+                          <span className="text-zinc-300">Isolated MicroVM</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -812,7 +894,7 @@ export default function LiveBattle() {
                 events={history}
                 artifacts={artifacts}
                 previewUrl={previewUrls[modelId]}
-                win={status === "completed" && scoreWinner === modelId}
+                win={status === "completed" && Boolean(scoreWinner && scoreWinner === modelId)}
               />
             );
           })}
@@ -925,7 +1007,7 @@ export default function LiveBattle() {
                 </div>
               ) : (
                 <div className="text-[11px] text-zinc-500 text-center py-6">
-                  Judge pending. Scores appear only after the backend emits an authoritative score event.
+                  Authoritative scores appear only after trusted finalization. Judge hints are not displayed here.
                 </div>
               )}
             </div>

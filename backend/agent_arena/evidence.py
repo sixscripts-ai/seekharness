@@ -37,7 +37,14 @@ def _as_float(value, default: float | None = None):
 def phase_status(outcome: str | None) -> str:
     """Map an executor outcome marker to a lifecycle status."""
     out = (outcome or "").upper()
-    if out in ("TEST_PASS", "TEST_FAIL", "JUDGE_ONLY", "UNTRUSTED_EXECUTION", "COMPLETED"):
+    if out in (
+        "TEST_PASS",
+        "TEST_FAIL",
+        "JUDGE_ONLY",
+        "UNTRUSTED_EXECUTION",
+        "COMPLETED",
+        "VERIFICATION_NOT_ATTEMPTED",
+    ):
         return "completed"
     if "BUDGET" in out or "TIMEOUT" in out:
         return "timeout"

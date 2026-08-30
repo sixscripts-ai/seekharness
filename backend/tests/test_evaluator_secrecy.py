@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from agent_arena.sandbox.executors.advanced_executor import (
     ToolSession,
     _strip_secret_env,
 )
+from agent_arena.battle_public import public_battle_payload
 from agent_arena.target_library import (
     TargetSecurityError,
     compile_target_to_battle_config,
@@ -465,6 +467,12 @@ def test_fighter_bootstrap_strips_private_verifier_metadata(
     assert public["verification"]["visible_command"]
     assert trusted["hidden_hash"]
     assert trusted["verification"]["hidden_command"]
+    owner = public_battle_payload(
+        {"id": "owner-1", "battle_config": trusted, "target_id": tid}
+    )
+    owner_blob = json.dumps(owner)
+    assert "hidden_hash" not in owner_blob
+    assert "hidden_command" not in owner_blob
 
 
 def test_fighter_env_cannot_recover_private_evaluator_metadata(

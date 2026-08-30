@@ -205,6 +205,21 @@ export type BattleOut = {
   ranked?: boolean | null;
   target_id?: string | null;
   target_version?: string | null;
+  scores?: Record<string, number> | null;
+  winner?: string | null;
+  verified_solution?: boolean | null;
+  verification_status?: string | null;
+  termination_reason?: string | null;
+  outcome?: string | null;
+  results?: Array<{
+    model_id: string;
+    phase?: string;
+    role?: string;
+    passed?: boolean;
+    score?: number;
+    verification_status?: string;
+    termination_reason?: string | null;
+  }>;
 };
 
 export type BattleSpec = {

@@ -280,6 +280,8 @@ class InternalClient:
         phase: str = "",
         role: str = "",
         model_id: str = "",
+        executor_outcome: str = "",
+        terminal_reason: str = "",
     ) -> dict:
         payload: dict[str, Any] = {
             "battle_id": battle_id,
@@ -297,4 +299,8 @@ class InternalClient:
             payload["role"] = role
         if model_id:
             payload["model_id"] = model_id
+        if executor_outcome:
+            payload["executor_outcome"] = executor_outcome
+        if terminal_reason:
+            payload["terminal_reason"] = terminal_reason
         return self.t.post("/internal/verify", payload)
