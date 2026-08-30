@@ -480,6 +480,28 @@ def _battle_model_ids_pg(session, battle_id: str) -> list[str]:
     return repositories.battles.battle_model_ids(session, battle_id)
 
 
+def _authoritative_ranked_for_create(
+    payload: dict, cfg: dict | None = None
+) -> bool:
+    """Create-time ranked boolean derived from frozen config + target gate.
+
+    Always returns True or False. Does not treat stored null/missing as false;
+    this helper is only for new writes. Callers cannot enable ranking when the
+    frozen config or target gate disables it.
+    """
+    from agent_arena.custom_battles import is_ranked_battle
+
+    if cfg is None:
+        raw = payload.get("battle_config")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                raw = {}
+        cfg = raw if isinstance(raw, dict) else {}
+    return is_ranked_battle(payload, cfg)
+
+
 def battle_create(
     user_id: str,
     *,
@@ -497,7 +519,6 @@ def battle_create(
     """Create a battle with the full validation chain. Returns {id, status}."""
     from fastapi import HTTPException
 
-    from agent_arena.custom_battles import is_ranked_battle
     from agent_arena.providers import is_host_model
     from agent_arena.seed_formats import is_playable_format
 
@@ -585,8 +606,10 @@ def battle_create(
     if difficulty:
         payload["difficulty"] = difficulty
 
+    ranked = _authoritative_ranked_for_create(payload, cfg)
+    payload["ranked"] = ranked
+
     if using_postgres():
-        ranked = is_ranked_battle(payload, cfg)
         with session_scope() as session:
             battle = repositories.battles.battle_create(
                 session,
@@ -621,6 +644,16 @@ def _aw_battle_create(payload: dict) -> dict:
     databases, database_id = _aw()
     allowed_keys = {attr[0] for attr in COLLECTIONS.get("battles", [])}
     aw_payload = {k: v for k, v in payload.items() if k in allowed_keys}
+    if aw_payload.get("ranked") is not True and aw_payload.get("ranked") is not False:
+        cfg = aw_payload.get("battle_config")
+        if isinstance(cfg, str) and cfg.strip():
+            try:
+                cfg = _json.loads(cfg)
+            except (_json.JSONDecodeError, TypeError):
+                cfg = {}
+        aw_payload["ranked"] = _authoritative_ranked_for_create(
+            payload, cfg if isinstance(cfg, dict) else {}
+        )
     if isinstance(aw_payload.get("battle_config"), dict):
         aw_payload["battle_config"] = _json.dumps(aw_payload["battle_config"])
     # The new tablesdb engine accepts real arrays for string attributes that
@@ -1365,14 +1398,18 @@ def battle_create_raw(user_id: str, payload: dict) -> dict:
     """
     from fastapi import HTTPException
 
-    if using_postgres():
-        from agent_arena.custom_battles import is_ranked_battle
-        from agent_arena.seed_formats import is_playable_format
+    cfg = payload.get("battle_config") or {}
+    if isinstance(cfg, str) and cfg.strip():
+        try:
+            cfg = json.loads(cfg)
+        except (json.JSONDecodeError, TypeError):
+            cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    ranked = _authoritative_ranked_for_create(payload, cfg)
+    payload["ranked"] = ranked
 
-        cfg = payload.get("battle_config") or {}
-        ranked = bool(payload.get("ranked")) or (
-            is_playable_format(cfg) and is_ranked_battle(payload, cfg)
-        )
+    if using_postgres():
         with session_scope() as session:
             battle = repositories.battles.battle_create(
                 session,
