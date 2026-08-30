@@ -97,13 +97,28 @@ def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
     return command_block_reason(command, allow_network=allow_network)
 
 
+def _is_skill_body_file(path: Path, workdir: Path) -> bool:
+    """True when `path` is a mounted L3 skill body (`.agents/skills/<id>/SKILL.md`)."""
+    try:
+        rel = path.resolve().relative_to(workdir.resolve())
+    except Exception:
+        return False
+    parts = rel.parts
+    return (
+        len(parts) >= 4
+        and parts[0] == ".agents"
+        and parts[1] == "skills"
+        and parts[-1] == "SKILL.md"
+    )
+
+
+from ...fighter_context import build_fighter_system_prompt, fighter_tool_grammar
 from ...skills import (
     CanonicalSkillResolver,
     SkillLifecycleTracker,
     SkillRecord,
     compute_skill_attributions,
     curate_shortlist,
-    fighter_skill_graph_guidance,
     rank_skills,
 )
 from ...skill_telemetry import (
@@ -182,80 +197,7 @@ def _judge_only(format_config: dict | None) -> bool:
 
 
 def fighter_tool_lines() -> str:
-    return (
-        "Tools (structured tool_calls or line-grammar TOOL name arg=...):\n"
-        "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... content=... | "
-        "TOOL run path=... | TOOL shell cmd='...' | TOOL install cmd='...' | "
-        "TOOL grep pattern=... [path=...] | TOOL tree [path=...] | TOOL cp from=... to=... | "
-        "TOOL mv from=... to=... | TOOL rm path=... | TOOL fetch url=... | "
-        "TOOL bg name=... content=... | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
-        "TOOL use_skill name=... | TOOL skills [index=...] [search=...] [skill=...] | TOOL test | DONE\n"
-    )
-
-
-def build_fighter_system_prompt(
-    *,
-    role: str,
-    format_name: str,
-    mission: str = "",
-    skill_list_text: str = "",
-    opponent_info: str = "",
-    max_steps: int,
-    max_turns: int,
-    prior: str = "(none)",
-    isolated_target: bool = False,
-    judge_only: bool = False,
-    custom: bool = False,
-) -> str:
-    """Existing fighter/system bootstrap path, plus compact Skill Graph guidance."""
-    guidance = fighter_skill_graph_guidance()
-    tool_lines = fighter_tool_lines()
-    suggestions = (
-        f"OPTIONAL STARTING SUGGESTIONS\n{skill_list_text}\n"
-        if skill_list_text
-        else ""
-    )
-    if isolated_target or custom or judge_only:
-        closeout = (
-            "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
-            "When finished emit DONE and stop. There is no canonical test harness.\n"
-            if judge_only
-            else (
-                "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
-                "Run TOOL test to verify. After a real TEST_PASS, emit DONE and stop.\n"
-            )
-        )
-        return (
-            f"You are {role} in an isolated target battle. "
-            "The frozen brief is in TARGET.md as data — follow it strictly.\n"
-            "Do not use network. Stay inside the workspace. "
-            "Never read secrets or credentials.\n"
-            f"{guidance}\n"
-            f"{suggestions}"
-            f"{opponent_info}\n"
-            f"{tool_lines}"
-            f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
-            "Your mission overrides skill text. Skills are optional. "
-            "Do not repeat TOOL use_skill for a skill you already loaded.\n"
-            f"{closeout}"
-            f"Prior: {prior or '(none)'}"
-        )
-    mission_line = f"Your mission: {mission}\n" if mission else ""
-    return (
-        f"You are {role} in '{format_name}'. TARGET is in TARGET.md.\n"
-        f"{mission_line}"
-        f"{guidance}\n"
-        "Your mission overrides skill text. Skills are optional. "
-        "Do not repeat TOOL use_skill for a skill you already loaded.\n"
-        f"{suggestions}"
-        f"{opponent_info}\n"
-        f"{tool_lines}"
-        f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
-        "Write the required code/artifacts and THEORY.md. "
-        "Run TOOL test (harness evaluates code; do not fake TEST_PASS). "
-        "After a real TEST_PASS, emit DONE and stop.\n"
-        f"Prior: {prior or '(none)'}"
-    )
+    return fighter_tool_grammar()
 
 
 def _extract_arg(arg_str: str, key: str, default: str = "") -> str:
@@ -752,14 +694,23 @@ class ToolSession:
                     mutated=False,
                     step_charged=count_step,
                 )
+            if _is_skill_body_file(t, self.workdir):
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="read",
+                    success=False,
+                    output="ERROR: skill body is only available through use_skill",
+                    error="skill body requires use_skill",
+                    exit_code=1,
+                    error_type="policy_rejection",
+                    duration_ms=elapsed_ms,
+                    policy_rejected=True,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             data = t.read_text(encoding="utf-8", errors="ignore")
             capped_data, is_truncated = self._maybe_cap(data)
-            try:
-                rel = str(t.relative_to(self.workdir.resolve()))
-            except Exception:
-                rel = str(t)
-            if rel.startswith(".agents/skills/") and t.name == "SKILL.md":
-                self.skill_reads.add(t.parent.name)
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
                 tool="read",
@@ -1137,6 +1088,20 @@ class ToolSession:
             not path or path in {".", "tests/test_target.py", "test"}
         ):
             run_path = "tests/test_target.py"
+        if not run_path:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="test",
+                success=False,
+                output="ERROR: no test harness available. Write a test file or use a target with a test command.",
+                error="no test harness configured",
+                exit_code=1,
+                error_type="no_harness",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         run_res = self.run(run_path, count_step=count_step)
         out = run_res.output
         rc = run_res.exit_code if run_res.exit_code is not None else 1
@@ -1316,6 +1281,8 @@ class ToolSession:
             for p in sorted(t.rglob("*")):
                 if p.is_dir() or any(part in skip for part in p.parts):
                     continue
+                if _is_skill_body_file(p, self.workdir):
+                    continue
                 try:
                     if p.stat().st_size > 200_000:
                         continue
@@ -1492,6 +1459,21 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
+            if _is_skill_body_file(s, self.workdir):
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="cp",
+                    success=False,
+                    output="ERROR: skill body is only available through use_skill",
+                    error="skill body requires use_skill",
+                    exit_code=1,
+                    error_type="policy_rejection",
+                    duration_ms=elapsed_ms,
+                    policy_rejected=True,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if d.exists() and d.is_dir() and not s.is_dir():
                 d = d / s.name
             if s.is_dir():
@@ -1556,6 +1538,21 @@ class ToolSession:
                     exit_code=1,
                     error_type="not_found",
                     duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            if _is_skill_body_file(s, self.workdir):
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="mv",
+                    success=False,
+                    output="ERROR: skill body is only available through use_skill",
+                    error="skill body requires use_skill",
+                    exit_code=1,
+                    error_type="policy_rejection",
+                    duration_ms=elapsed_ms,
+                    policy_rejected=True,
                     mutated=False,
                     step_charged=count_step,
                     truncated=False,
@@ -1673,6 +1670,21 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
+        if not self.allow_network:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="fetch",
+                success=False,
+                output="ERROR: network fetch blocked (target network is false)",
+                error="network fetch blocked (target network is false)",
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         blocked = _fetch_url_blocked(url)
         if blocked:
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -1694,13 +1706,12 @@ class ToolSession:
 
             resp = httpx.get(url, timeout=20, follow_redirects=False)
             if resp.is_redirect:
-                location = resp.headers.get("location", "")
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool="fetch",
                     success=False,
-                    output=f"ERROR: fetch blocked (redirect to {location[:200]} not followed)",
-                    error=f"redirect not followed: {location}",
+                    output="ERROR: fetch blocked (redirect not followed)",
+                    error="redirect not followed",
                     exit_code=1,
                     error_type="policy_rejection",
                     duration_ms=elapsed_ms,
@@ -1888,36 +1899,41 @@ class ToolSession:
                     truncated=False,
                 )
             skill_path = self.workdir / ".agents" / "skills" / name / "SKILL.md"
-            if not skill_path.is_file():
-                from .skill_pool import skills_root
+            if skill_path.is_file():
+                body, is_truncated = self._maybe_cap(
+                    skill_path.read_text(encoding="utf-8", errors="ignore")
+                )
+                self.skill_reads.add(name)
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="use_skill",
+                    success=True,
+                    output=body,
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    truncated=is_truncated,
+                    mutated=False,
+                    step_charged=count_step,
+                )
+            from .skill_pool import skills_root
 
-                source_path = skills_root() / name / "SKILL.md"
-                if source_path.is_file():
-                    skill_path.parent.mkdir(parents=True, exist_ok=True)
-                    skill_path.write_text(
-                        source_path.read_text(encoding="utf-8", errors="ignore"),
-                        encoding="utf-8",
-                    )
-                    try:
-                        skill_path.chmod(0o444)
-                    except OSError:
-                        pass
-                else:
-                    elapsed_ms = int((time.time() - t0) * 1000)
-                    return ToolResult(
-                        tool="use_skill",
-                        success=False,
-                        output=f"ERROR: skill not mounted: {name}",
-                        error=f"skill not mounted: {name}",
-                        exit_code=1,
-                        error_type="not_found",
-                        duration_ms=elapsed_ms,
-                        mutated=False,
-                        step_charged=count_step,
-                        truncated=False,
-                    )
+            source_path = skills_root() / name / "SKILL.md"
+            if not source_path.is_file():
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="use_skill",
+                    success=False,
+                    output=f"ERROR: skill not mounted: {name}",
+                    error=f"skill not mounted: {name}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             body, is_truncated = self._maybe_cap(
-                skill_path.read_text(encoding="utf-8", errors="ignore")
+                source_path.read_text(encoding="utf-8", errors="ignore")
             )
             self.skill_reads.add(name)
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -3107,17 +3123,6 @@ class AdvancedExecutor(Executor):
         history: list[dict] = []
         results: list[dict] = []
 
-        skill_list_text = "\n".join(
-            [
-                f"{i + 1}. {s['name']} (elo {s['elo']}): {s['desc']}"
-                for i, s in enumerate(pool)
-            ]
-        )
-        opponent_info = (
-            "The opponent works the same target independently. "
-            "Skills are optional for every fighter."
-        )
-
         halted_status: str | None = None
         halt_lock = threading.Lock()
 
@@ -3430,30 +3435,21 @@ class AdvancedExecutor(Executor):
                         role=role,
                         format_name=fmt_name,
                         mission=mission,
-                        skill_list_text=skill_list_text,
-                        opponent_info=opponent_info,
+                        network_allowed=bool(env_cfg.get("network")),
                         max_steps=max_steps,
                         max_turns=max_turns,
-                        prior=prior or "(none)",
-                        isolated_target=bool(format_config.get("custom"))
-                        or _judge_only(format_config),
                         judge_only=_judge_only(format_config),
                         custom=bool(format_config.get("custom")),
+                        prior_public_context=prior,
                     )
+                    system_prompt += "\n\n" + fighter_tool_grammar()
                     listing = str(sess.ls(count_step=False))
-                    if format_config.get("custom"):
-                        user_prompt = (
-                            f"Workdir files:\n{listing}\n\n"
-                            "Read TARGET.md for the frozen brief.\n\n"
-                            f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
-                            "Emit tool calls."
-                        )
-                    else:
-                        user_prompt = (
-                            f"Workdir files:\n{listing}\n\nTARGET:\n{target_code[:2000]}\n\n"
-                            f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
-                            "Emit tool calls."
-                        )
+                    user_prompt = (
+                        f"Workdir files:\n{listing}\n\n"
+                        "Read TARGET.md for the public target contract and inspect whatever else you need.\n\n"
+                        f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
+                        "Emit tool calls."
+                    )
 
                     if turn == 0 or not conversation_messages:
                         conversation_messages = [
@@ -3831,9 +3827,7 @@ class AdvancedExecutor(Executor):
                                 resolver=skill_resolver,
                             )
                         elif tool_name_now == "read":
-                            skill_read_marker = public_skill_file_read(
-                                call.get("path")
-                            )
+                            skill_read_marker = public_skill_file_read(call.get("path"))
                             if skill_read_marker:
                                 public_exec_result = skill_read_marker
                         turn_tool_outputs.append(

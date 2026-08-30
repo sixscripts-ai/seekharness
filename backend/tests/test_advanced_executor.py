@@ -98,7 +98,13 @@ def test_repo_owned_harness_not_model_print(tmp_path):
     # this harness only checks racecar). Write a failing solution instead:
     sess.write("solution.py", "def is_palindrome(s):\n    return False\n")
     out = sess.test("")
-    assert "TEST_FAIL" in out or "rc=1" in out or "Error" in out or "assert" in out.lower() or "FAIL" in out
+    assert (
+        "TEST_FAIL" in out
+        or "rc=1" in out
+        or "Error" in out
+        or "assert" in out.lower()
+        or "FAIL" in out
+    )
 
 
 def test_skill_read_tracked(tmp_path):
@@ -107,7 +113,13 @@ def test_skill_read_tracked(tmp_path):
     work.mkdir()
     mount_skills(work, pool)
     sess = ToolSession(work)
-    sess.read(".agents/skills/python-kata-fixer/SKILL.md")
+    blocked = sess.read(".agents/skills/python-kata-fixer/SKILL.md")
+    assert blocked.success is False
+    assert blocked.policy_rejected is True
+    assert "use_skill" in blocked.output
+    assert sess.skill_reads == set()
+    loaded = sess.use_skill("python-kata-fixer")
+    assert loaded.success is True
     assert "python-kata-fixer" in sess.skill_reads
 
 
@@ -365,13 +377,16 @@ def test_fighter_roles_from_phases():
             ],
         }
     ) == ["agent_a", "agent_b"]
-    assert tool_phase_name(
-        {
-            "phases": [
-                {"name": "engage", "participants": ["agent_a", "agent_b"]},
-            ]
-        }
-    ) == "engage"
+    assert (
+        tool_phase_name(
+            {
+                "phases": [
+                    {"name": "engage", "participants": ["agent_a", "agent_b"]},
+                ]
+            }
+        )
+        == "engage"
+    )
     assert fighter_roles({"roles": ["player_a", "player_b", "judge"]}) == [
         "player_a",
         "player_b",
@@ -505,7 +520,6 @@ def test_duplicate_use_skill_does_not_count(tmp_path):
     assert sess.steps == 2
 
 
-
 def test_injection_format_picks_one_skill():
     from agent_arena.seed_formats import ALL_FORMATS
 
@@ -519,7 +533,9 @@ def test_tool_run_harness_early_stop(monkeypatch):
     import os
 
     reply = (
-        _PASSING_TOOLS.replace("TOOL test\n", "TOOL run path=tests/test_target.py\nEND_TOOL\n")
+        _PASSING_TOOLS.replace(
+            "TOOL test\n", "TOOL run path=tests/test_target.py\nEND_TOOL\n"
+        )
         + "\n".join(["TOOL ls"] * 20)
         + "\n"
     )
@@ -758,7 +774,12 @@ def test_shell_ssrf_even_when_network_enabled(tmp_path):
     out = sess.shell("curl http://127.0.0.1/")
     assert "ERROR" in out
     assert "blocked" in out.lower()
-    assert "127.0.0.1" in out or "loopback" in out.lower() or "not allowed" in out.lower() or "non-public" in out.lower()
+    assert (
+        "127.0.0.1" in out
+        or "loopback" in out.lower()
+        or "not allowed" in out.lower()
+        or "non-public" in out.lower()
+    )
 
 
 def test_shell_blocks_urlopen_loopback(tmp_path):
@@ -982,10 +1003,117 @@ def test_fetch_url_blocked_ssrf():
 
 
 def test_tool_session_fetch_blocks_loopback(tmp_path):
-    sess = ToolSession(tmp_path / "work")
+    sess = ToolSession(tmp_path / "work", allow_network=True)
     out = sess.fetch("http://127.0.0.1/")
     assert "ERROR" in out
     assert "blocked" in out.lower()
+
+
+def test_fetch_obeys_allow_network_before_any_request(tmp_path, monkeypatch):
+    import httpx
+
+    def boom(*args, **kwargs):
+        raise AssertionError(
+            "fetch must not open a connection when network is disabled"
+        )
+
+    monkeypatch.setattr(httpx, "get", boom)
+    from agent_arena.sandbox.executors import advanced_executor as ae
+
+    monkeypatch.setattr(
+        ae,
+        "_fetch_url_blocked",
+        lambda url: (_ for _ in ()).throw(
+            AssertionError("SSRF check must not run when network is disabled")
+        ),
+    )
+    sess = ToolSession(tmp_path / "work", allow_network=False)
+    out = sess.fetch("https://example.com/public")
+    assert out.success is False
+    assert out.policy_rejected is True
+    assert out.error_type == "policy_rejection"
+    assert "network" in out.output.lower()
+    assert "blocked" in out.output.lower()
+
+
+def test_fetch_with_network_enabled_reaches_transport_after_ssrf(tmp_path, monkeypatch):
+    import httpx
+    from agent_arena.sandbox.executors import advanced_executor as ae
+
+    monkeypatch.setattr(ae, "_fetch_url_blocked", lambda url: None)
+    seen: dict[str, object] = {}
+
+    class _Resp:
+        is_redirect = False
+        status_code = 200
+        text = "public-ok"
+        headers: dict[str, str] = {}
+
+    def fake_get(url, **kwargs):
+        seen["url"] = url
+        seen["follow"] = kwargs.get("follow_redirects")
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    sess = ToolSession(tmp_path / "work", allow_network=True)
+    out = sess.fetch("https://example.com/page")
+    assert seen["url"] == "https://example.com/page"
+    assert seen["follow"] is False
+    assert out.success is True
+    assert "STATUS 200" in out.output
+    assert "public-ok" in out.output
+
+
+def test_fetch_ssrf_when_network_enabled_does_not_call_httpx(tmp_path, monkeypatch):
+    import httpx
+
+    def boom(*args, **kwargs):
+        raise AssertionError("SSRF destinations must not reach httpx")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    sess = ToolSession(tmp_path / "work", allow_network=True)
+    for url in (
+        "http://127.0.0.1/",
+        "http://localhost/secret",
+        "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1/",
+        "file:///etc/passwd",
+    ):
+        out = sess.fetch(url)
+        assert out.success is False
+        assert out.policy_rejected is True
+        assert "blocked" in out.output.lower()
+
+
+def test_read_skill_body_is_policy_rejected_target_and_src_still_work(tmp_path):
+    work = tmp_path / "work"
+    skill_dir = work / ".agents" / "skills" / "auth-flow-debugger"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("UNIQUE_L3_BODY\n", encoding="utf-8")
+    (work / "TARGET.md").write_text("public target\n", encoding="utf-8")
+    src = work / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    sess = ToolSession(work, allow_network=False)
+
+    blocked = sess.read(".agents/skills/auth-flow-debugger/SKILL.md")
+    assert blocked.success is False
+    assert blocked.policy_rejected is True
+    assert "UNIQUE_L3_BODY" not in blocked.output
+    assert "use_skill" in blocked.output
+    assert sess.skill_reads == set()
+
+    target = sess.read("TARGET.md")
+    src_file = sess.read("src/app.py")
+    assert target.success is True
+    assert target.output == "public target\n"
+    assert src_file.success is True
+    assert "print('ok')" in src_file.output
+
+    loaded = sess.use_skill("auth-flow-debugger")
+    assert loaded.success is True
+    assert loaded.output == "UNIQUE_L3_BODY\n"
+    assert sess.skill_reads == {"auth-flow-debugger"}
 
 
 def test_fighters_run_in_parallel(monkeypatch):
@@ -1137,12 +1265,7 @@ def test_verified_custom_restores_generated_canonical_tests(monkeypatch):
 def test_dynamic_fighter_roles_are_isolated(monkeypatch):
     import os
 
-    reply = (
-        "TOOL write path=solution.py\n"
-        "print('hello')\n"
-        "END_TOOL\n"
-        "DONE\n"
-    )
+    reply = "TOOL write path=solution.py\nprint('hello')\nEND_TOOL\nDONE\n"
     scores, transport = _run_fake_race(
         monkeypatch,
         reply,
@@ -1152,8 +1275,174 @@ def test_dynamic_fighter_roles_are_isolated(monkeypatch):
     starts = [
         r.get("artifact", "")
         for r in transport.rounds
-        if r.get("event_type") == "phase_start" or "phase_start" in (r.get("artifact") or "")
+        if r.get("event_type") == "phase_start"
+        or "phase_start" in (r.get("artifact") or "")
     ]
     assert any("work_fighter_1" in s for s in starts)
     assert any("work_fighter_2" in s for s in starts)
     os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_initial_model_prompt_uses_compact_skill_discovery_context(monkeypatch):
+    import os
+
+    _, transport = _run_fake_race(
+        monkeypatch,
+        "DONE",
+        max_tool_turns=1,
+        max_tool_steps=8,
+    )
+    model_calls = [
+        payload for path, payload in transport.calls if path == "/internal/model"
+    ]
+    assert model_calls
+    messages = model_calls[0]["messages"]
+    system = messages[0]["content"]
+    user = messages[1]["content"]
+
+    assert "SKILLS POOL" not in system
+    assert "On turn 1" not in system
+    assert "pick 1" not in system
+    assert "skills()" in system
+    assert 'skills(index="security")' in system
+    assert "Skills are optional advisory expertise" in system
+    assert "Choose your own strategy" in system
+    assert "Discovery Quality" not in system
+    assert "Network access is not allowed" in system
+
+    # The target remains a public workspace artifact instead of being duplicated
+    # into the bootstrap message.
+    assert "TARGET.md" in user
+    assert "def is_palindrome(s): return s == s[::-1]" not in user
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_initial_model_prompt_follows_actual_network_policy(monkeypatch):
+    import os
+
+    _, transport = _run_fake_race(
+        monkeypatch,
+        "DONE",
+        max_tool_turns=1,
+        max_tool_steps=8,
+        format_overlay={"environment": {"network": True}},
+    )
+    model_calls = [
+        payload for path, payload in transport.calls if path == "/internal/model"
+    ]
+    system = model_calls[0]["messages"][0]["content"]
+    assert "Network access is available" in system
+    assert "Network access is not allowed" not in system
+    os.environ.pop("ARENA_IN_SANDBOX", None)
+
+
+def test_cp_skill_body_is_policy_rejected(tmp_path):
+    work = tmp_path / "work"
+    skill_dir = work / ".agents" / "skills" / "auth-flow-debugger"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("BODY\n", encoding="utf-8")
+    sess = ToolSession(work)
+
+    result = sess.cp(
+        ".agents/skills/auth-flow-debugger/SKILL.md",
+        "leaked.md",
+    )
+    assert result.success is False
+    assert result.policy_rejected is True
+    assert "use_skill" in result.output
+    assert not (work / "leaked.md").exists()
+
+
+def test_mv_skill_body_is_policy_rejected(tmp_path):
+    work = tmp_path / "work"
+    skill_dir = work / ".agents" / "skills" / "auth-flow-debugger"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("BODY\n", encoding="utf-8")
+    sess = ToolSession(work)
+
+    result = sess.mv(
+        ".agents/skills/auth-flow-debugger/SKILL.md",
+        "relocated.md",
+    )
+    assert result.success is False
+    assert result.policy_rejected is True
+    assert "use_skill" in result.output
+    # Original must still be in place (move was rejected)
+    assert (skill_dir / "SKILL.md").exists()
+    assert not (work / "relocated.md").exists()
+
+
+def test_use_skill_does_not_persist_body_to_workdir(tmp_path):
+    """When skill is not already in workdir, use_skill reads from repo without persisting."""
+    work = tmp_path / "work"
+    sess = ToolSession(work)
+
+    loaded = sess.use_skill("python-kata-fixer", count_step=False)
+    assert loaded.success is True
+    assert len(loaded.output) > 0
+
+    body_file = work / ".agents" / "skills" / "python-kata-fixer" / "SKILL.md"
+    assert not body_file.exists(), "use_skill must not persist body to workdir"
+
+
+def test_use_skill_still_works_with_repeated_loads(tmp_path):
+    work = tmp_path / "work"
+    sess = ToolSession(work)
+
+    first = sess.use_skill("python-kata-fixer", count_step=False)
+    second = sess.use_skill("python-kata-fixer", count_step=False)
+
+    assert first.success is True
+    assert len(first.output) > 0
+    assert second.success is True
+    assert "SKILL_ALREADY_LOADED" in second.output
+    assert first.output not in second.output
+    assert sess.skill_reads == {"python-kata-fixer"}
+
+
+def test_blocked_read_does_not_mutate_skill_reads(tmp_path):
+    work = tmp_path / "work"
+    skill_dir = work / ".agents" / "skills" / "secure-code-execution"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("PRIVATE\n", encoding="utf-8")
+    sess = ToolSession(work)
+
+    blocked = sess.read(
+        ".agents/skills/secure-code-execution/SKILL.md", count_step=False
+    )
+    assert blocked.success is False
+    assert blocked.policy_rejected is True
+    assert "PRIVATE" not in blocked.output
+    assert sess.skill_reads == set()
+
+
+def test_empty_test_with_no_harness_returns_no_harness_error(tmp_path):
+    work = tmp_path / "work"
+    sess = ToolSession(work)
+
+    result = sess.test("", count_step=False)
+    assert result.success is False
+    assert result.error_type == "no_harness"
+    assert "no test harness" in result.output.lower()
+    assert "run needs path" not in result.output
+
+
+def test_test_cmd_still_works(tmp_path):
+    work = tmp_path / "work"
+    sess = ToolSession(work, test_cmd="echo 'TEST_PASS'")
+
+    result = sess.test("", count_step=False)
+    assert result.success is True
+    assert "TEST_PASS" in result.output
+
+
+def test_harness_fallback_still_works(tmp_path):
+    work = tmp_path / "work"
+    test_dir = work / "tests"
+    test_dir.mkdir(parents=True)
+    (test_dir / "test_target.py").write_text("print('TEST_PASS')\n", encoding="utf-8")
+    sess = ToolSession(work)
+
+    result = sess.test("", count_step=False)
+    assert result.success is True
+    assert "TEST_PASS" in result.output

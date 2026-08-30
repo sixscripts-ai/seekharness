@@ -781,6 +781,74 @@ def parse_xml_tags(text: str) -> list[CanonicalToolCall]:
 
 # 3. Fenced / Bare JSON Tools: [{"tool": "shell", "arguments": {"cmd": "..."}}] or {"name": "..."}
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", re.I | re.S)
+_ARENA_JSON_ARG_CONTAINERS = ("arguments", "parameters", "args", "action_input")
+_ARENA_JSON_ENVELOPE_KEYS = frozenset(
+    {"tool", "action", "type", "call_id", "id", *_ARENA_JSON_ARG_CONTAINERS}
+)
+
+
+def _arena_json_tool_name(obj: dict[str, Any]) -> tuple[str, bool]:
+    """Return (tool_name, name_used_as_tool_identity).
+
+    Prefer explicit `tool` / `action` so a flat skill/process argument named
+    `name` is not mistaken for the tool identity:
+    ``{"tool":"use_skill","name":"auth-flow-debugger"}``.
+    Fall back to `name` for OpenAI-shaped objects:
+    ``{"name":"read","arguments":{"path":"TARGET.md"}}``.
+    """
+    for key in ("tool", "action"):
+        value = str(obj.get(key) or "").strip().lower()
+        if value:
+            return value, False
+    value = str(obj.get("name") or "").strip().lower()
+    return value, bool(value)
+
+
+def _arena_json_container_args(obj: dict[str, Any]) -> dict[str, Any] | None:
+    """Return an explicit argument object if one is present and valid."""
+    for key in _ARENA_JSON_ARG_CONTAINERS:
+        if key not in obj:
+            continue
+        value = obj[key]
+        if isinstance(value, dict):
+            return dict(value)
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except Exception:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+    return None
+
+
+def _arena_json_flat_args(
+    obj: dict[str, Any], *, name_is_tool_identity: bool
+) -> dict[str, Any]:
+    """Copy top-level non-envelope fields as candidate tool arguments.
+
+    Top-level ``id`` is always a call identifier, never a tool argument.
+    ``name`` is an argument only when ``tool`` or ``action`` already identified
+    the tool (so it cannot collide with OpenAI-shaped tool identity).
+    """
+    skip = set(_ARENA_JSON_ENVELOPE_KEYS)
+    if name_is_tool_identity:
+        skip.add("name")
+    return {key: value for key, value in obj.items() if key not in skip}
+
+
+def _arena_json_merge_args(
+    tool_name: str,
+    nested: dict[str, Any],
+    flat: dict[str, Any],
+) -> dict[str, Any]:
+    """Nested explicit arguments win; flat fields fill missing canonical keys."""
+    nested_args = _normalize_args(tool_name, nested)
+    if not flat:
+        return nested_args
+    merged = dict(_normalize_args(tool_name, flat))
+    merged.update(nested_args)
+    return merged
 
 
 def parse_arena_json(text: str) -> list[CanonicalToolCall]:
@@ -808,27 +876,14 @@ def parse_arena_json(text: str) -> list[CanonicalToolCall]:
         for obj in payload:
             if not isinstance(obj, dict):
                 continue
-            name = (
-                str(obj.get("name") or obj.get("tool") or obj.get("action") or "")
-                .strip()
-                .lower()
-            )
+            name, name_is_tool_identity = _arena_json_tool_name(obj)
             if not name:
                 continue
-            raw_args = (
-                obj.get("arguments")
-                or obj.get("parameters")
-                or obj.get("args")
-                or obj.get("action_input")
-                or {}
+            nested = _arena_json_container_args(obj) or {}
+            flat = _arena_json_flat_args(
+                obj, name_is_tool_identity=name_is_tool_identity
             )
-            if not isinstance(raw_args, dict):
-                raw_args = {
-                    k: v
-                    for k, v in obj.items()
-                    if k not in ("name", "tool", "action", "type", "call_id", "id")
-                }
-            args = _normalize_args(name, raw_args)
+            args = _arena_json_merge_args(name, nested, flat)
             call_id = str(obj.get("call_id") or obj.get("id") or "")
             calls.append(
                 CanonicalToolCall(
@@ -922,7 +977,17 @@ def normalize_response(
         calls: list[CanonicalToolCall] = []
         for tc in response.native_tool_calls:
             func = tc.get("function", {})
-            name = str(func.get("name") or tc.get("name") or "").strip().lower()
+            name = (
+                str(
+                    func.get("name")
+                    or tc.get("name")
+                    or tc.get("tool")
+                    or tc.get("action")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
             raw_args_str = func.get("arguments") or tc.get("arguments") or "{}"
             if isinstance(raw_args_str, str):
                 try:
@@ -937,6 +1002,16 @@ def normalize_response(
                 raw_args = raw_args_str
             else:
                 raw_args = {}
+            # Supplement with flat-format fields when standard container is empty.
+            # Some providers emit {"tool":"write","path":"...","content":"..."}
+            # instead of {"function":{"name":"write","arguments":"{...}"}}.
+            if not raw_args or (len(raw_args) == 1 and "raw" in raw_args):
+                flat_fields = _arena_json_flat_args(tc, name_is_tool_identity=False)
+                if flat_fields:
+                    flat = _normalize_args(name, flat_fields)
+                    for k, v in flat.items():
+                        if k not in raw_args:
+                            raw_args[k] = v
             args = _normalize_args(name, raw_args)
             call_id = str(tc.get("id") or tc.get("call_id") or "")
             calls.append(
