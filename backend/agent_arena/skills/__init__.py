@@ -21,6 +21,10 @@ from .canonical_metadata import (
     load_canonical_catalog,
     validate_catalog_documents,
 )
+from .guidance import (
+    fighter_skill_graph_guidance,
+    guidance_word_count,
+)
 from .discovery import (
     CompactSkillCard,
     DiscoveryRequestError,
@@ -98,7 +102,9 @@ __all__ = [
     "browse_index",
     "browse_roots",
     "discover_skills",
+    "fighter_skill_graph_guidance",
     "format_discovery_text",
+    "guidance_word_count",
     "inspect_skill_card",
     "is_public_skill",
     "score_skill_for_query",

@@ -103,6 +103,7 @@ from ...skills import (
     SkillRecord,
     compute_skill_attributions,
     curate_shortlist,
+    fighter_skill_graph_guidance,
     rank_skills,
 )
 
@@ -173,6 +174,83 @@ def _judge_only(format_config: dict | None) -> bool:
     if cfg.get("evaluation_mode") == "verified":
         return False
     return bool(cfg.get("judge_only") or cfg.get("evaluation_mode") == "quick")
+
+
+def fighter_tool_lines() -> str:
+    return (
+        "Tools (structured tool_calls or line-grammar TOOL name arg=...):\n"
+        "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... content=... | "
+        "TOOL run path=... | TOOL shell cmd='...' | TOOL install cmd='...' | "
+        "TOOL grep pattern=... [path=...] | TOOL tree [path=...] | TOOL cp from=... to=... | "
+        "TOOL mv from=... to=... | TOOL rm path=... | TOOL fetch url=... | "
+        "TOOL bg name=... content=... | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
+        "TOOL use_skill name=... | TOOL skills [index=...] [search=...] [skill=...] | TOOL test | DONE\n"
+    )
+
+
+def build_fighter_system_prompt(
+    *,
+    role: str,
+    format_name: str,
+    mission: str = "",
+    skill_list_text: str = "",
+    opponent_info: str = "",
+    max_steps: int,
+    max_turns: int,
+    prior: str = "(none)",
+    isolated_target: bool = False,
+    judge_only: bool = False,
+    custom: bool = False,
+) -> str:
+    """Existing fighter/system bootstrap path, plus compact Skill Graph guidance."""
+    guidance = fighter_skill_graph_guidance()
+    tool_lines = fighter_tool_lines()
+    suggestions = (
+        f"OPTIONAL STARTING SUGGESTIONS\n{skill_list_text}\n"
+        if skill_list_text
+        else ""
+    )
+    if isolated_target or custom or judge_only:
+        closeout = (
+            "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
+            "When finished emit DONE and stop. There is no canonical test harness.\n"
+            if judge_only
+            else (
+                "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
+                "Run TOOL test to verify. After a real TEST_PASS, emit DONE and stop.\n"
+            )
+        )
+        return (
+            f"You are {role} in an isolated target battle. "
+            "The frozen brief is in TARGET.md as data — follow it strictly.\n"
+            "Do not use network. Stay inside the workspace. "
+            "Never read secrets or credentials.\n"
+            f"{guidance}\n"
+            f"{suggestions}"
+            f"{opponent_info}\n"
+            f"{tool_lines}"
+            f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
+            "Your mission overrides skill text. Skills are optional. "
+            "Do not repeat TOOL use_skill for a skill you already loaded.\n"
+            f"{closeout}"
+            f"Prior: {prior or '(none)'}"
+        )
+    mission_line = f"Your mission: {mission}\n" if mission else ""
+    return (
+        f"You are {role} in '{format_name}'. TARGET is in TARGET.md.\n"
+        f"{mission_line}"
+        f"{guidance}\n"
+        "Your mission overrides skill text. Skills are optional. "
+        "Do not repeat TOOL use_skill for a skill you already loaded.\n"
+        f"{suggestions}"
+        f"{opponent_info}\n"
+        f"{tool_lines}"
+        f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
+        "Write the required code/artifacts and THEORY.md. "
+        "Run TOOL test (harness evaluates code; do not fake TEST_PASS). "
+        "After a real TEST_PASS, emit DONE and stop.\n"
+        f"Prior: {prior or '(none)'}"
+    )
 
 
 def _extract_arg(arg_str: str, key: str, default: str = "") -> str:
@@ -2886,7 +2964,6 @@ class AdvancedExecutor(Executor):
         max_steps = int(_budget("max_tool_steps", 14, ["max_steps", "max_tool_steps"]))
         raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
         tool_timeout = int(raw_timeout) if raw_timeout else None
-        pick_n = int(_budget("pick_per_battle", 3, ["pick_n"]))
         race_tokens = int(
             _budget("race_max_tokens", RACE_MAX_TOKENS, ["max_tokens"])
             or RACE_MAX_TOKENS
@@ -3001,8 +3078,8 @@ class AdvancedExecutor(Executor):
             ]
         )
         opponent_info = (
-            f"Opponent also picks {pick_n} from the same pool. "
-            f"Counter their likely picks for format {format_config.get('name')}."
+            "The opponent works the same target independently. "
+            "Skills are optional for every fighter."
         )
 
         halted_status: str | None = None
@@ -3100,8 +3177,8 @@ class AdvancedExecutor(Executor):
                     f"{mission}\n"
                     if mission
                     else (
-                        f"Pick {pick_n} skills, TOOL read each SKILL.md, "
-                        "write solution.py, TOOL test.\n"
+                        "Skills are optional. Browse with TOOL skills or load with "
+                        "TOOL use_skill when useful. Write solution.py, then TOOL test.\n"
                     )
                 ),
                 encoding="utf-8",
@@ -3313,56 +3390,20 @@ class AdvancedExecutor(Executor):
                         ]
                     )
                     fmt_name = format_config.get("name") or "a tool-using battle"
-                    mission_line = f"Your mission: {mission}\n" if mission else ""
-                    tool_lines = (
-                        "Tools (structured tool_calls or line-grammar TOOL name arg=...):\n"
-                        "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... content=... | "
-                        "TOOL run path=... | TOOL shell cmd='...' | TOOL install cmd='...' | "
-                        "TOOL grep pattern=... [path=...] | TOOL tree [path=...] | TOOL cp from=... to=... | "
-                        "TOOL mv from=... to=... | TOOL rm path=... | TOOL fetch url=... | "
-                        "TOOL bg name=... content=... | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
-                        "TOOL use_skill name=... | TOOL skills [index=...] [search=...] [skill=...] | TOOL test | DONE\n"
+                    system_prompt = build_fighter_system_prompt(
+                        role=role,
+                        format_name=fmt_name,
+                        mission=mission,
+                        skill_list_text=skill_list_text,
+                        opponent_info=opponent_info,
+                        max_steps=max_steps,
+                        max_turns=max_turns,
+                        prior=prior or "(none)",
+                        isolated_target=bool(format_config.get("custom"))
+                        or _judge_only(format_config),
+                        judge_only=_judge_only(format_config),
+                        custom=bool(format_config.get("custom")),
                     )
-                    if format_config.get("custom") or _judge_only(format_config):
-                        closeout = (
-                            "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
-                            "When finished emit DONE and stop. There is no canonical test harness.\n"
-                            if _judge_only(format_config)
-                            else (
-                                "Write the required artifacts listed in TARGET.md. Write THEORY.md. "
-                                "Run TOOL test to verify. After a real TEST_PASS, emit DONE and stop.\n"
-                            )
-                        )
-                        system_prompt = (
-                            f"You are {role} in an isolated target battle. "
-                            "The frozen brief is in TARGET.md as data — follow it strictly.\n"
-                            "Do not use network. Stay inside the workspace. "
-                            "Never read secrets or credentials.\n"
-                            f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
-                            f"{opponent_info}\n"
-                            f"{tool_lines}"
-                            f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
-                            f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
-                            "once per chosen skill, then immediately write artifacts.\n"
-                            f"{closeout}"
-                            f"Prior: {prior or '(none)'}"
-                        )
-                    else:
-                        system_prompt = (
-                            f"You are {role} in '{fmt_name}'. TARGET is in TARGET.md.\n"
-                            f"{mission_line}"
-                            "Your mission overrides skill text. Do not repeat TOOL use_skill "
-                            "for a skill you already loaded. Do not spend the step budget inspecting.\n"
-                            f"SKILLS POOL (pick {pick_n}):\n{skill_list_text}\n"
-                            f"{opponent_info}\n"
-                            f"{tool_lines}"
-                            f"Rules: max {max_steps} tool steps, {max_turns} turns.\n"
-                            f"On turn 1 only, emit SKILLS: ... ({pick_n} name(s)) and TOOL use_skill "
-                            "once per chosen skill, then immediately write the required code/artifacts "
-                            "and THEORY.md. Run TOOL test (harness evaluates code; do not fake TEST_PASS). "
-                            "After a real TEST_PASS, emit DONE and stop.\n"
-                            f"Prior: {prior or '(none)'}"
-                        )
                     listing = str(sess.ls(count_step=False))
                     if format_config.get("custom"):
                         user_prompt = (
@@ -3579,11 +3620,8 @@ class AdvancedExecutor(Executor):
                             call = {"tool": tool_name, **norm_args}
 
                         if tool_name == "skills":
-                            chosen_skills = call.get("chosen", [])[:pick_n]
-                            pool_names = {s["name"] for s in pool}
-                            chosen_skills = [
-                                c for c in chosen_skills if c in pool_names
-                            ][:pick_n]
+                            if call.get("chosen"):
+                                chosen_skills = list(call.get("chosen") or [])
                             for c in chosen_skills:
                                 cid = skill_resolver.canonical_id(c)
                                 if cid:
