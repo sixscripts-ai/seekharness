@@ -491,6 +491,7 @@ def test_ls_prompt_does_not_count_step(tmp_path):
 
 
 def test_duplicate_use_skill_does_not_count(tmp_path):
+    """Under canonical execution kernel contract, repeated use_skill costs 1 step."""
     pool = load_skill_pool()
     work = tmp_path / "work"
     work.mkdir()
@@ -501,7 +502,8 @@ def test_duplicate_use_skill_does_not_count(tmp_path):
     assert sess.steps == 1
     second = sess.use_skill("python-kata-fixer")
     assert "SKILL_ALREADY_LOADED" in second
-    assert sess.steps == 1
+    assert sess.steps == 2
+
 
 
 def test_injection_format_picks_one_skill():
@@ -546,7 +548,7 @@ def test_injection_attacker_duplicate_skills_then_exploit(monkeypatch):
     cfg = next(
         c for c in ALL_FORMATS if c["name"] == "Injection agent vs hardened agent"
     )
-    cfg = {**cfg, "pick_per_battle": 3, "max_tool_turns": 2, "max_tool_steps": 11}
+    cfg = {**cfg, "pick_per_battle": 3, "max_tool_turns": 2, "max_tool_steps": 15}
     exe = get_executor(cfg)
     waste = (
         "SKILLS: python-kata-fixer, secure-code-execution, sandbox-runtime-engineer\n"

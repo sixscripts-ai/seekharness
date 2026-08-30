@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import Executor
+from .tool_result import ToolResult
 from .battle_plan import (
     parse_battle_plan,
     restore_protected,
@@ -539,16 +540,17 @@ class ToolSession:
         self.test_cmd = str(test_cmd or "").strip() or None
         self.procs = ProcessManager(self.workdir)
 
-    def _maybe_cap(self, data: str) -> str:
+    def _maybe_cap(self, data: str) -> tuple[str, bool]:
         if self._max_output is None:
-            return data
+            return data, False
         encoded = data.encode("utf-8")
         if len(encoded) <= self._max_output:
-            return data
-        return (
+            return data, False
+        capped = (
             encoded[: self._max_output].decode("utf-8", errors="ignore")
             + "\n[TRUNCATED]"
         )
+        return capped, True
 
     def _resolve(self, rel: str) -> Path:
         if not rel or rel == ".":
@@ -567,7 +569,10 @@ class ToolSession:
             raise ValueError(f"ERROR: path escape rejected: {rel}")
         return resolved
 
-    def write(self, path: str, content: str) -> str:
+    def write(self, path: str, content: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             if path.endswith(".py"):
                 from ._harness import extract_python_source
@@ -578,38 +583,160 @@ class ToolSession:
             t = self._resolve(path)
             t.parent.mkdir(parents=True, exist_ok=True)
             t.write_text(content, encoding="utf-8")
-            self.steps += 1
-            return f"WROTE {path} {len(content)} bytes"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="write",
+                success=True,
+                output=f"WROTE {path} {len(content)} bytes",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=True,
+                step_charged=count_step,
+                truncated=False,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="write",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="write",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def read(self, path: str) -> str:
+    def read(self, path: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             t = self._resolve(path)
             if not t.exists():
-                return f"ERROR: not found {path}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="read",
+                    success=False,
+                    output=f"ERROR: not found {path}",
+                    error=f"not found {path}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                )
             if t.is_dir():
-                return f"ERROR: {path} is a directory, use ls"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="read",
+                    success=False,
+                    output=f"ERROR: {path} is a directory, use ls",
+                    error=f"{path} is a directory, use ls",
+                    exit_code=1,
+                    error_type="invalid_argument",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                )
             data = t.read_text(encoding="utf-8", errors="ignore")
-            data = self._maybe_cap(data)
-            self.steps += 1
+            capped_data, is_truncated = self._maybe_cap(data)
             try:
                 rel = str(t.relative_to(self.workdir.resolve()))
             except Exception:
                 rel = str(t)
             if rel.startswith(".agents/skills/") and t.name == "SKILL.md":
                 self.skill_reads.add(t.parent.name)
-            return data
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="read",
+                success=True,
+                output=capped_data,
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="read",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="read",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def ls(self, path: str = ".", *, count_step: bool = True) -> str:
+    def ls(self, path: str = ".", *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             t = self._resolve(path)
             if not t.exists():
-                return f"ERROR: not found {path}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="ls",
+                    success=False,
+                    output=f"ERROR: not found {path}",
+                    error=f"not found {path}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if t.is_file():
-                return f"FILE {t.name} {t.stat().st_size}b"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="ls",
+                    success=True,
+                    output=f"FILE {t.name} {t.stat().st_size}b",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             items = []
             for child in sorted(t.iterdir(), key=lambda x: x.name):
                 typ = "DIR" if child.is_dir() else "FILE"
@@ -618,30 +745,135 @@ class ToolSession:
                 except Exception:
                     sz = 0
                 items.append(f"{typ} {child.name} {sz}b")
-            if count_step:
-                self.steps += 1
-            return "\n".join(items) if items else "(empty)"
+            out_str = "\n".join(items) if items else "(empty)"
+            capped_out, is_truncated = self._maybe_cap(out_str)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="ls",
+                success=True,
+                output=capped_out,
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="ls",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="ls",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def clean(self, path: str) -> str:
+    def clean(self, path: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             t = self._resolve(path)
             if not t.exists():
-                return f"ERROR: not found {path}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="clean",
+                    success=False,
+                    output=f"ERROR: not found {path}",
+                    error=f"not found {path}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if t.is_dir():
-                return f"ERROR: {path} is a dir, not cleaned (use rm -rf manually)"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="clean",
+                    success=False,
+                    output=f"ERROR: {path} is a dir, not cleaned (use rm -rf manually)",
+                    error=f"{path} is a dir, not cleaned",
+                    exit_code=1,
+                    error_type="invalid_argument",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             t.unlink()
-            self.steps += 1
-            return f"CLEANED {path}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="clean",
+                success=True,
+                output=f"CLEANED {path}",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=True,
+                step_charged=count_step,
+                truncated=False,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="clean",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="clean",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def run(self, path: str | None = None, inline: str | None = None) -> str:
+    def run(self, path: str | None = None, inline: str | None = None, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             env = _strip_secret_env(os.environ.copy())
             env["ARENA_ROOT"] = str(self.root)
             env["ARENA_WORKDIR"] = str(self.workdir)
+            env["PYTHONDONTWRITEBYTECODE"] = "1"
+            env["PYTHONUNBUFFERED"] = "1"
             work = str(self.workdir.resolve())
             env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
             if path:
@@ -666,35 +898,132 @@ class ToolSession:
                     env=env,
                 )
             else:
-                return "ERROR: run needs path"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="run",
+                    success=False,
+                    output="ERROR: run needs path or inline code",
+                    error="run needs path or inline code",
+                    exit_code=1,
+                    error_type="invalid_argument",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             try:
                 out, err = proc.communicate(timeout=self.tool_timeout)
-                out = self._maybe_cap(out or "")
-                err = self._maybe_cap(err or "")
-                self.steps += 1
-                return f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}"
+                out, out_trunc = self._maybe_cap(out or "")
+                err, err_trunc = self._maybe_cap(err or "")
+                is_truncated = out_trunc or err_trunc
+                success = proc.returncode == 0
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="run",
+                    success=success,
+                    output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}",
+                    error=None if success else f"rc={proc.returncode}",
+                    exit_code=proc.returncode,
+                    error_type=None if success else "execution_error",
+                    duration_ms=elapsed_ms,
+                    truncated=is_truncated,
+                    mutated=True,
+                    step_charged=count_step,
+                )
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
                     pass
-                return f"ERROR: timeout after {self.tool_timeout}s"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="run",
+                    success=False,
+                    output=f"ERROR: timeout after {self.tool_timeout}s",
+                    error=f"timeout after {self.tool_timeout}s",
+                    exit_code=124,
+                    error_type="timeout",
+                    duration_ms=elapsed_ms,
+                    timed_out=True,
+                    mutated=True,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="run",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="run",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def test(self, path: str) -> str:
+    def test(self, path: str = "", *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
         if self.test_cmd and (not path or path in {".", "tests/test_target.py", "test"}):
-            out = self._run_command(self.test_cmd)
-            self.steps += 1
-            rc_m = re.search(r"rc=(-?\d+)\s*$", out.strip())
-            rc = int(rc_m.group(1)) if rc_m else 1
+            res = self._run_command(self.test_cmd, tool_name="test", count_step=count_step)
+            out = res.output
+            rc = res.exit_code if res.exit_code is not None else 1
             passed = rc == 0 or "TEST_PASS" in out
             fail = rc != 0 or "TEST_FAIL" in out
+            elapsed_ms = int((time.time() - t0) * 1000)
             if passed and rc == 0:
-                return f"TEST_PASS {self.test_cmd}\n{out}"
+                return ToolResult(
+                    tool="test",
+                    success=True,
+                    output=f"TEST_PASS {self.test_cmd}\n{out}",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    truncated=res.truncated,
+                    mutated=False,
+                    step_charged=count_step,
+                )
             if fail:
-                return f"TEST_FAIL {self.test_cmd}\n{out}"
-            return f"TEST_UNKNOWN {self.test_cmd}\n{out}"
+                return ToolResult(
+                    tool="test",
+                    success=False,
+                    output=f"TEST_FAIL {self.test_cmd}\n{out}",
+                    error="test failed",
+                    exit_code=rc,
+                    error_type="test_failed",
+                    duration_ms=elapsed_ms,
+                    truncated=res.truncated,
+                    mutated=False,
+                    step_charged=count_step,
+                )
+            return ToolResult(
+                tool="test",
+                success=False,
+                output=f"TEST_UNKNOWN {self.test_cmd}\n{out}",
+                error="test unknown outcome",
+                exit_code=rc,
+                error_type="test_failed",
+                duration_ms=elapsed_ms,
+                truncated=res.truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
 
         harness = self.workdir / "tests" / "test_target.py"
         run_path = path
@@ -702,28 +1031,83 @@ class ToolSession:
             not path or path in {".", "tests/test_target.py", "test"}
         ):
             run_path = "tests/test_target.py"
-        out = self.run(run_path)
-        rc_m = re.search(r"rc=(-?\d+)\s*$", out.strip())
-        rc = int(rc_m.group(1)) if rc_m else 1
+        run_res = self.run(run_path, count_step=count_step)
+        out = run_res.output
+        rc = run_res.exit_code if run_res.exit_code is not None else 1
         passed = rc == 0 or "TEST_PASS" in out
         fail = rc != 0 or "TEST_FAIL" in out
-        # `run()` already counted this step; don't double-charge the budget.
+        elapsed_ms = int((time.time() - t0) * 1000)
         if passed and rc == 0:
-            return f"TEST_PASS {run_path}\n{out}"
+            return ToolResult(
+                tool="test",
+                success=True,
+                output=f"TEST_PASS {run_path}\n{out}",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                truncated=run_res.truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
         if fail:
-            return f"TEST_FAIL {run_path}\n{out}"
-        return f"TEST_UNKNOWN {run_path}\n{out}"
+            return ToolResult(
+                tool="test",
+                success=False,
+                output=f"TEST_FAIL {run_path}\n{out}",
+                error="test failed",
+                exit_code=rc,
+                error_type="test_failed",
+                duration_ms=elapsed_ms,
+                truncated=run_res.truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
+        return ToolResult(
+            tool="test",
+            success=False,
+            output=f"TEST_UNKNOWN {run_path}\n{out}",
+            error="test unknown outcome",
+            exit_code=rc,
+            error_type="test_failed",
+            duration_ms=elapsed_ms,
+            truncated=run_res.truncated,
+            mutated=False,
+            step_charged=count_step,
+        )
 
-    def _run_command(self, command: str, timeout: int | None = None) -> str:
+    def _run_command(
+        self,
+        command: str,
+        timeout: int | None = None,
+        tool_name: str = "shell",
+        *,
+        count_step: bool = True,
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         blocked = _shell_command_blocked(
             command, allow_network=self.allow_network
         )
         if blocked:
-            self.steps += 1
-            return f"ERROR: {blocked}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool=tool_name,
+                success=False,
+                output=f"ERROR: {blocked}",
+                error=blocked,
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         env = _strip_secret_env(os.environ.copy())
         env["ARENA_ROOT"] = str(self.root)
         env["ARENA_WORKDIR"] = str(self.workdir)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
         work = str(self.workdir.resolve())
         env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
         cmd_timeout = timeout or self.tool_timeout or 90
@@ -744,25 +1128,82 @@ class ToolSession:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
                     pass
-                return f"ERROR: timeout after {cmd_timeout}s"
-            out = self._maybe_cap(out or "")
-            err = self._maybe_cap(err or "")
-            self.steps += 1
-            return f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool=tool_name,
+                    success=False,
+                    output=f"ERROR: timeout after {cmd_timeout}s",
+                    error=f"timeout after {cmd_timeout}s",
+                    exit_code=124,
+                    error_type="timeout",
+                    duration_ms=elapsed_ms,
+                    timed_out=True,
+                    mutated=True,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            out, out_trunc = self._maybe_cap(out or "")
+            err, err_trunc = self._maybe_cap(err or "")
+            is_truncated = out_trunc or err_trunc
+            success = proc.returncode == 0
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool=tool_name,
+                success=success,
+                output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}",
+                error=None if success else f"rc={proc.returncode}",
+                exit_code=proc.returncode,
+                error_type=None if success else "execution_error",
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=True,
+                step_charged=count_step,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool=tool_name,
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def shell(self, command: str) -> str:
-        return self._run_command(command)
+    def shell(self, command: str, *, count_step: bool = True) -> ToolResult:
+        return self._run_command(command, tool_name="shell", count_step=count_step)
 
-    def install(self, command: str) -> str:
-        return self._run_command(command, timeout=self.tool_timeout or 300)
+    def install(self, command: str, *, count_step: bool = True) -> ToolResult:
+        return self._run_command(
+            command,
+            timeout=self.tool_timeout or 300,
+            tool_name="install",
+            count_step=count_step,
+        )
 
-    def grep(self, pattern: str, path: str = ".") -> str:
+    def grep(self, pattern: str, path: str = ".", *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             t = self._resolve(path)
             if not t.exists():
-                return f"ERROR: not found {path}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="grep",
+                    success=False,
+                    output=f"ERROR: not found {path}",
+                    error=f"not found {path}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                )
             rx = re.compile(pattern)
             matches: list[str] = []
             skip = {".arena_bg", ".git", "__pycache__", "node_modules", ".venv"}
@@ -789,18 +1230,81 @@ class ToolSession:
                             break
                 if len(matches) >= 200:
                     break
-            self.steps += 1
-            return "\n".join(matches) if matches else f"(no matches for {pattern!r})"
+            out_str = "\n".join(matches) if matches else f"(no matches for {pattern!r})"
+            capped_out, is_truncated = self._maybe_cap(out_str)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="grep",
+                success=True,
+                output=capped_out,
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="grep",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="grep",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def tree(self, path: str = ".") -> str:
+    def tree(self, path: str = ".", *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             t = self._resolve(path)
             if not t.exists():
-                return f"ERROR: not found {path}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="tree",
+                    success=False,
+                    output=f"ERROR: not found {path}",
+                    error=f"not found {path}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if t.is_file():
-                return f"FILE {t.name} {t.stat().st_size}b"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="tree",
+                    success=True,
+                    output=f"FILE {t.name} {t.stat().st_size}b",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             lines: list[str] = []
             skip = {".arena_bg", ".git", "__pycache__", "node_modules", ".venv"}
 
@@ -818,201 +1322,653 @@ class ToolSession:
                         walk(child, prefix + "  ", depth + 1)
 
             walk(t, "", 0)
-            self.steps += 1
-            return "\n".join(lines) if lines else "(empty)"
+            out_str = "\n".join(lines) if lines else "(empty)"
+            capped_out, is_truncated = self._maybe_cap(out_str)
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="tree",
+                success=True,
+                output=capped_out,
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="tree",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="tree",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def cp(self, src: str, dst: str) -> str:
+    def cp(self, src: str, dst: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             s = self._resolve(src)
             d = self._resolve(dst)
             if not s.exists():
-                return f"ERROR: not found {src}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="cp",
+                    success=False,
+                    output=f"ERROR: not found {src}",
+                    error=f"not found {src}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if d.exists() and d.is_dir() and not s.is_dir():
                 d = d / s.name
             if s.is_dir():
                 shutil.copytree(s, d, dirs_exist_ok=True)
             else:
                 shutil.copy2(s, d)
-            self.steps += 1
-            return f"COPIED {src} -> {dst}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="cp",
+                success=True,
+                output=f"COPIED {src} -> {dst}",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=True,
+                step_charged=count_step,
+                truncated=False,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="cp",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="cp",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def mv(self, src: str, dst: str) -> str:
+    def mv(self, src: str, dst: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             s = self._resolve(src)
             d = self._resolve(dst)
             if not s.exists():
-                return f"ERROR: not found {src}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="mv",
+                    success=False,
+                    output=f"ERROR: not found {src}",
+                    error=f"not found {src}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if d.exists() and d.is_dir():
                 d = d / s.name
             shutil.move(str(s), str(d))
-            self.steps += 1
-            return f"MOVED {src} -> {dst}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="mv",
+                success=True,
+                output=f"MOVED {src} -> {dst}",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=True,
+                step_charged=count_step,
+                truncated=False,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="mv",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="mv",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def rm(self, path: str) -> str:
+    def rm(self, path: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             t = self._resolve(path)
             if not t.exists():
-                return f"ERROR: not found {path}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="rm",
+                    success=False,
+                    output=f"ERROR: not found {path}",
+                    error=f"not found {path}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if t.is_dir():
                 shutil.rmtree(t)
             else:
                 t.unlink()
-            self.steps += 1
-            return f"REMOVED {path}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="rm",
+                success=True,
+                output=f"REMOVED {path}",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=True,
+                step_charged=count_step,
+                truncated=False,
+            )
+        except ValueError as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="rm",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="rm",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def fetch(self, url: str) -> str:
+    def fetch(self, url: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         blocked = _fetch_url_blocked(url)
         if blocked:
-            self.steps += 1
-            return f"ERROR: fetch blocked ({blocked})"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="fetch",
+                success=False,
+                output=f"ERROR: fetch blocked ({blocked})",
+                error=blocked,
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         try:
             import httpx
 
-            # Disable redirects: a public URL could 3xx to an internal address,
-            # bypassing the pre-flight SSRF check above.
             resp = httpx.get(url, timeout=20, follow_redirects=False)
             if resp.is_redirect:
-                self.steps += 1
                 location = resp.headers.get("location", "")
-                return f"ERROR: fetch blocked (redirect to {location[:200]} not followed)"
-            body = self._maybe_cap(resp.text[:20000])
-            self.steps += 1
-            return f"STATUS {resp.status_code}\n{body}"
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="fetch",
+                    success=False,
+                    output=f"ERROR: fetch blocked (redirect to {location[:200]} not followed)",
+                    error=f"redirect not followed: {location}",
+                    exit_code=1,
+                    error_type="policy_rejection",
+                    duration_ms=elapsed_ms,
+                    policy_rejected=True,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            body, is_truncated = self._maybe_cap(resp.text[:20000])
+            success = resp.status_code == 200
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="fetch",
+                success=success,
+                output=f"STATUS {resp.status_code}\n{body}",
+                error=None if success else f"status {resp.status_code}",
+                exit_code=0 if success else 1,
+                error_type=None if success else "execution_error",
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="fetch",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def search(self, query: str) -> str:
-        self.steps += 1
-        return (
-            "SEARCH has no external key configured. Use TOOL FETCH url=<known endpoint> "
-            f"to pull specific pages, and read TARGET.md + tests/test_target.py first. "
-            f"(query ignored: {query[:200]})"
+    def search(self, query: str, *, count_step: bool = True) -> ToolResult:
+        if count_step:
+            self.steps += 1
+        return ToolResult(
+            tool="search",
+            success=True,
+            output=(
+                "SEARCH has no external key configured. Use TOOL FETCH url=<known endpoint> "
+                f"to pull specific pages, and read TARGET.md + tests/test_target.py first. "
+                f"(query ignored: {query[:200]})"
+            ),
+            exit_code=0,
+            duration_ms=0,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
         )
 
-    def bg(self, name: str, content: str) -> str:
+    def bg(self, name: str, content: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         blocked = _shell_command_blocked(
             content or "", allow_network=self.allow_network
         )
         if blocked:
-            self.steps += 1
-            return f"ERROR: {blocked}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="bg",
+                success=False,
+                output=f"ERROR: {blocked}",
+                error=blocked,
+                exit_code=1,
+                error_type="policy_rejection",
+                duration_ms=elapsed_ms,
+                policy_rejected=True,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         try:
             mgr = self.procs.start(
                 name, content or "", env=_strip_secret_env(os.environ.copy())
             )
-            self.steps += 1
-            return f"BG STARTED {mgr.name} pid={mgr.proc.pid}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="bg",
+                success=True,
+                output=f"BG STARTED {mgr.name} pid={mgr.proc.pid}",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=True,
+                step_charged=count_step,
+                truncated=False,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="bg",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def ps(self) -> str:
-        self.steps += 1
-        return self.procs.list()
+    def ps(self, *, count_step: bool = True) -> ToolResult:
+        if count_step:
+            self.steps += 1
+        out_str, is_truncated = self._maybe_cap(self.procs.list())
+        return ToolResult(
+            tool="ps",
+            success=True,
+            output=out_str,
+            exit_code=0,
+            duration_ms=0,
+            mutated=False,
+            step_charged=count_step,
+            truncated=is_truncated,
+        )
 
-    def kill(self, name: str) -> str:
+    def kill(self, name: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         res = self.procs.kill(name)
-        self.steps += 1
-        return res
+        success = not res.startswith("ERROR")
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="kill",
+            success=success,
+            output=res,
+            error=None if success else res,
+            exit_code=0 if success else 1,
+            error_type=None if success else "execution_error",
+            duration_ms=elapsed_ms,
+            mutated=True,
+            step_charged=count_step,
+            truncated=False,
+        )
 
-    def logs(self, name: str, tail: str = "8000") -> str:
+    def logs(self, name: str, tail: str = "8000", *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
         try:
             n = int(tail)
         except Exception:
             n = 8000
         res = self.procs.logs(name, n)
-        self.steps += 1
-        return res
+        res_capped, is_truncated = self._maybe_cap(res)
+        success = not res.startswith("ERROR")
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="logs",
+            success=success,
+            output=res_capped,
+            error=None if success else res,
+            exit_code=0 if success else 1,
+            error_type=None if success else "execution_error",
+            duration_ms=elapsed_ms,
+            truncated=is_truncated,
+            mutated=False,
+            step_charged=count_step,
+        )
 
-    def use_skill(self, name: str) -> str:
+    def use_skill(self, name: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
         try:
+            if count_step:
+                self.steps += 1
             if name in self.skill_reads:
-                return f"SKILL_ALREADY_LOADED {name}"
+                return ToolResult(
+                    tool="use_skill",
+                    success=True,
+                    output=f"SKILL_ALREADY_LOADED {name}",
+                    exit_code=0,
+                    duration_ms=0,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             skill_path = self.workdir / ".agents" / "skills" / name / "SKILL.md"
             if not skill_path.is_file():
-                return f"ERROR: skill not mounted: {name}"
-            body = self._maybe_cap(
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="use_skill",
+                    success=False,
+                    output=f"ERROR: skill not mounted: {name}",
+                    error=f"skill not mounted: {name}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            body, is_truncated = self._maybe_cap(
                 skill_path.read_text(encoding="utf-8", errors="ignore")
             )
             self.skill_reads.add(name)
-            self.steps += 1
-            return body
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="use_skill",
+                success=True,
+                output=body,
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=False,
+                step_charged=count_step,
+            )
         except Exception as exc:
-            return f"ERROR: {exc}"
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="use_skill",
+                success=False,
+                output=f"ERROR: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="exception",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
 
-    def list_skills(self) -> str:
+    def list_skills(self, *, count_step: bool = True) -> ToolResult:
+        if count_step:
+            self.steps += 1
         skills_dir = self.workdir / ".agents" / "skills"
         if not skills_dir.is_dir():
-            return "(no skills mounted)"
+            return ToolResult(
+                tool="skills",
+                success=True,
+                output="(no skills mounted)",
+                exit_code=0,
+                duration_ms=0,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         names = sorted(
             d.name for d in skills_dir.iterdir() if (d / "SKILL.md").is_file()
         )
-        return "\n".join(names) if names else "(no skills mounted)"
+        out_text = "\n".join(names) if names else "(no skills mounted)"
+        capped_out, is_truncated = self._maybe_cap(out_text)
+        return ToolResult(
+            tool="skills",
+            success=True,
+            output=capped_out,
+            exit_code=0,
+            duration_ms=0,
+            mutated=False,
+            step_charged=count_step,
+            truncated=is_truncated,
+        )
 
-    def exec_tool(self, call: dict) -> str:
-        tool = call.get("tool")
+    def skills(
+        self,
+        chosen: list[str] | None = None,
+        *,
+        list: bool = False,
+        count_step: bool = True,
+    ) -> ToolResult:
+        if list:
+            return self.list_skills(count_step=count_step)
+        if count_step:
+            self.steps += 1
+        chosen_list = chosen or []
+        return ToolResult(
+            tool="skills",
+            success=True,
+            output=f"SKILLS_CHOSEN {','.join(chosen_list)}",
+            exit_code=0,
+            duration_ms=0,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
+
+    def exec_tool(self, call: dict, *, count_step: bool = True) -> ToolResult:
+        tool = str(call.get("tool") or "").strip().lower()
         if tool == "write":
-            return self.write(call.get("path", ""), call.get("content", ""))
+            return self.write(call.get("path", ""), call.get("content", ""), count_step=count_step)
         if tool == "read":
-            return self.read(call.get("path", ""))
+            return self.read(call.get("path", ""), count_step=count_step)
         if tool == "ls":
-            return self.ls(call.get("path", "."))
+            return self.ls(call.get("path", "."), count_step=count_step)
         if tool == "clean":
-            return self.clean(call.get("path", ""))
+            return self.clean(call.get("path", ""), count_step=count_step)
         if tool == "run":
             if call.get("content"):
                 tmp = f"_tmp_run_{int(time.time() * 1000)}.py"
-                self.write(tmp, call.get("content", ""))
-                res = self.run(tmp)
-                self.clean(tmp)
+                self.write(tmp, call.get("content", ""), count_step=False)
+                res = self.run(tmp, count_step=count_step)
+                self.clean(tmp, count_step=False)
                 return res
-            return self.run(call.get("path", ""))
+            return self.run(call.get("path", ""), count_step=count_step)
         if tool == "test":
-            return self.test(call.get("path", ""))
+            return self.test(call.get("path", ""), count_step=count_step)
         if tool == "shell":
-            return self.shell(call.get("cmd") or call.get("content", ""))
+            return self.shell(call.get("cmd") or call.get("content", ""), count_step=count_step)
         if tool == "install":
-            return self.install(call.get("content", "") or call.get("cmd", ""))
+            return self.install(call.get("content", "") or call.get("cmd", ""), count_step=count_step)
         if tool == "grep":
-            return self.grep(call.get("pattern", ""), call.get("path", "."))
+            return self.grep(call.get("pattern", ""), call.get("path", "."), count_step=count_step)
         if tool == "tree":
-            return self.tree(call.get("path", "."))
+            return self.tree(call.get("path", "."), count_step=count_step)
         if tool == "cp":
-            return self.cp(call.get("src", ""), call.get("dst", ""))
+            return self.cp(call.get("src", ""), call.get("dst", ""), count_step=count_step)
         if tool == "mv":
-            return self.mv(call.get("src", ""), call.get("dst", ""))
+            return self.mv(call.get("src", ""), call.get("dst", ""), count_step=count_step)
         if tool == "rm":
-            return self.rm(call.get("path", ""))
+            return self.rm(call.get("path", ""), count_step=count_step)
         if tool == "fetch":
-            return self.fetch(call.get("url", ""))
+            return self.fetch(call.get("url", ""), count_step=count_step)
         if tool == "search":
-            return self.search(call.get("query", ""))
+            return self.search(call.get("query", ""), count_step=count_step)
         if tool == "bg":
-            return self.bg(call.get("name", ""), call.get("content", ""))
+            return self.bg(call.get("name", ""), call.get("content", ""), count_step=count_step)
         if tool == "ps":
-            return self.ps()
+            return self.ps(count_step=count_step)
         if tool == "kill":
-            return self.kill(call.get("name", ""))
+            return self.kill(call.get("name", ""), count_step=count_step)
         if tool == "logs":
-            return self.logs(call.get("name", ""), call.get("tail", "8000"))
+            return self.logs(call.get("name", ""), call.get("tail", "8000"), count_step=count_step)
         if tool == "use_skill":
-            return self.use_skill(call.get("name", ""))
+            return self.use_skill(call.get("name", ""), count_step=count_step)
         if tool == "skills":
-            if call.get("list"):
-                return self.list_skills()
-            return f"SKILLS_CHOSEN {','.join(call.get('chosen', []))}"
+            return self.skills(call.get("chosen"), list=bool(call.get("list")), count_step=count_step)
         if tool == "done":
-            return "DONE"
+            return ToolResult(
+                tool="done",
+                success=True,
+                output="DONE",
+                exit_code=0,
+                duration_ms=0,
+                mutated=False,
+                step_charged=False,
+                truncated=False,
+            )
         if tool == "error":
-            return call.get("error", "ERROR")
-        return f"ERROR: unknown tool {tool}"
+            err = call.get("error", "ERROR")
+            if count_step:
+                self.steps += 1
+            return ToolResult(
+                tool="error",
+                success=False,
+                output=f"ERROR: {err}",
+                error=str(err),
+                exit_code=1,
+                error_type="parse_error",
+                duration_ms=0,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+        if count_step:
+            self.steps += 1
+        return ToolResult(
+            tool=tool,
+            success=False,
+            output=f"ERROR: unknown tool: '{tool}'",
+            error=f"unknown tool: '{tool}'",
+            exit_code=1,
+            error_type="unknown_tool",
+            duration_ms=0,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
 
 
 def fighter_roles(format_config: dict) -> list[str]:
@@ -1073,8 +2029,8 @@ class AdvancedExecutor(Executor):
         return files, theory
 
     @staticmethod
-    def _harness_passed(test_res: str | None) -> bool:
-        text = test_res or ""
+    def _harness_passed(test_res: Any) -> bool:
+        text = getattr(test_res, "output", str(test_res or ""))
         return "TEST_PASS" in text and "rc=0" in text
 
     def _finalize_role(
@@ -1099,6 +2055,11 @@ class AdvancedExecutor(Executor):
         lock: threading.Lock | None = None,
         tool_errors: int = 0,
         parse_errors: int = 0,
+        turns: int = 0,
+        duration_ms: int = 0,
+        consecutive_parse_failures: int = 0,
+        outcome_override: str | None = None,
+        terminal_reason: str | None = None,
         canonical_test_code: str | None = None,
         required_artifacts: list[str] | None = None,
         phase_type: str | None = None,
@@ -1122,9 +2083,12 @@ class AdvancedExecutor(Executor):
                 "present": [r for r in required_artifacts if r in files],
                 "missing": [r for r in required_artifacts if r not in files],
             }
-            outcome = "JUDGE_ONLY"
-            if budget_exceeded:
+            if outcome_override:
+                outcome = outcome_override
+            elif budget_exceeded:
                 outcome = "STEP_BUDGET_EXCEEDED"
+            else:
+                outcome = "JUDGE_ONLY"
             outcome = self.guard(
                 outcome,
                 format_config.get("outcome_markers", []),
@@ -1137,8 +2101,12 @@ class AdvancedExecutor(Executor):
                 "phase": phase,
                 "phase_type": phase_type or phase,
                 "outcome": outcome,
+                "terminal_reason": terminal_reason or ("step_budget_exhausted" if budget_exceeded else "completed"),
                 "passed": None,
                 "steps": sess.steps,
+                "turns": turns,
+                "duration_ms": duration_ms,
+                "consecutive_parse_failures": consecutive_parse_failures,
                 "tool_errors": tool_errors,
                 "parse_errors": parse_errors,
                 "artifact_checks": artifact_checks,
@@ -1158,7 +2126,10 @@ class AdvancedExecutor(Executor):
                     "chosen_skills": chosen_skills,
                     "theory": theory,
                     "outcome": outcome,
+                    "terminal_reason": result["terminal_reason"],
                     "steps": sess.steps,
+                    "turns": turns,
+                    "duration_ms": duration_ms,
                     "skill_read_ok": result["skill_read_ok"],
                     "preview_url": preview_url,
                     "spec_hash": spec_hash,
@@ -1228,7 +2199,7 @@ class AdvancedExecutor(Executor):
         # The final verdict ALWAYS comes from a fresh run of the restored
         # canonical harness. A mid-battle TEST_PASS observed through a tampered
         # harness can never become the recorded outcome.
-        test_res = sess.test("")
+        test_res = sess.test("", count_step=False)
         if emit_action is not None:
             emit_action(
                 model_id,
@@ -1299,6 +2270,8 @@ class AdvancedExecutor(Executor):
             elif target_evidence:
                 if target_evidence["passed"]:
                     outcome = "TEST_PASS"
+                elif outcome_override:
+                    outcome = outcome_override
                 elif budget_exceeded:
                     outcome = "STEP_BUDGET_EXCEEDED"
                 else:
@@ -1308,6 +2281,8 @@ class AdvancedExecutor(Executor):
                 passed = False
         elif passed:
             outcome = "TEST_PASS"
+        elif outcome_override:
+            outcome = outcome_override
         elif budget_exceeded:
             outcome = "STEP_BUDGET_EXCEEDED"
         else:
@@ -1334,6 +2309,18 @@ class AdvancedExecutor(Executor):
 
         policy_status = "invalid" if policy_violations else "clean"
 
+        # Determine terminal reason
+        if terminal_reason:
+            resolved_terminal_reason = terminal_reason
+        elif passed:
+            resolved_terminal_reason = "completed"
+        elif outcome_override:
+            resolved_terminal_reason = outcome_override.lower()
+        elif budget_exceeded:
+            resolved_terminal_reason = "step_budget_exhausted"
+        else:
+            resolved_terminal_reason = "test_failed"
+
         # Compact, correctness-first record: `files` (potentially large) are
         # excluded because they already persist via the separate artifact
         # event + rounds doc. Ordering keeps truncation-safe fields first so
@@ -1345,8 +2332,12 @@ class AdvancedExecutor(Executor):
             "phase": phase,
             "phase_type": phase_type or phase,
             "outcome": outcome,
+            "terminal_reason": resolved_terminal_reason,
             "passed": passed,
             "steps": sess.steps,
+            "turns": turns,
+            "duration_ms": duration_ms,
+            "consecutive_parse_failures": consecutive_parse_failures,
             "tool_errors": tool_errors,
             "parse_errors": parse_errors,
             "artifact_checks": artifact_checks,
@@ -1374,7 +2365,10 @@ class AdvancedExecutor(Executor):
                 "chosen_skills": chosen_skills,
                 "theory": theory,
                 "outcome": outcome,
+                "terminal_reason": resolved_terminal_reason,
                 "steps": sess.steps,
+                "turns": turns,
+                "duration_ms": duration_ms,
                 "skill_read_ok": skill_read_ok,
                 "preview_url": preview_url,
             },
@@ -1444,11 +2438,15 @@ class AdvancedExecutor(Executor):
         # from top-level keys with a fallback to nested `limits.*`.
         limits = format_config.get("limits") or {}
 
-        def _budget(key, default):
-            val = format_config.get(key)
-            if val is None:
-                val = limits.get(key)
-            return val if val is not None else default
+        def _budget(key, default, aliases=None):
+            keys = [key] + list(aliases or [])
+            for k in keys:
+                val = format_config.get(k)
+                if val is None:
+                    val = limits.get(k)
+                if val is not None:
+                    return val
+            return default
 
         target_code = format_config.get("target_code") or (
             ""
@@ -1466,12 +2464,12 @@ class AdvancedExecutor(Executor):
             seed_solution_roles = seed_solution_roles | set(
                 fighter_roles(format_config)
             )
-        max_turns = int(_budget("max_tool_turns", 6))
-        max_steps = int(_budget("max_tool_steps", 14))
-        raw_timeout = _budget("tool_timeout", None)
+        max_turns = int(_budget("max_tool_turns", 6, ["max_turns"]))
+        max_steps = int(_budget("max_tool_steps", 14, ["max_steps", "max_tool_steps"]))
+        raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
         tool_timeout = int(raw_timeout) if raw_timeout else None
-        pick_n = int(_budget("pick_per_battle", 3))
-        race_tokens = int(_budget("race_max_tokens", RACE_MAX_TOKENS) or RACE_MAX_TOKENS)
+        pick_n = int(_budget("pick_per_battle", 3, ["pick_n"]))
+        race_tokens = int(_budget("race_max_tokens", RACE_MAX_TOKENS, ["max_tokens"]) or RACE_MAX_TOKENS)
         pool = select_skills(format_config) or load_skill_pool() or SKILL_POOL
         seq = {"n": 0}
         phase_name = tool_phase_name(format_config)
@@ -1736,10 +2734,20 @@ class AdvancedExecutor(Executor):
             last_test = ""
 
             metrics = {"tool_errors": 0, "parse_errors": 0, "tool_calls": 0}
+            consecutive_parse_failures = 0
+            max_consecutive_parse_failures = 3
+            turns_used = 0
+            fighter_t0 = time.time()
+            is_finalized = False
 
             def finalize(**extra):
+                nonlocal is_finalized
+                if is_finalized:
+                    return None
+                is_finalized = True
+                duration_ms = int((time.time() - fighter_t0) * 1000)
                 restore_protected(work, protected_files or {})
-                self._finalize_role(
+                return self._finalize_role(
                     client=client,
                     battle_id=battle_id,
                     work=work,
@@ -1758,6 +2766,9 @@ class AdvancedExecutor(Executor):
                     lock=io_lock,
                     tool_errors=metrics["tool_errors"],
                     parse_errors=metrics["parse_errors"],
+                    turns=turns_used,
+                    duration_ms=duration_ms,
+                    consecutive_parse_failures=consecutive_parse_failures,
                     canonical_test_code=test_code,
                     required_artifacts=required_outputs,
                     emit_action=emit_action,
@@ -1778,6 +2789,7 @@ class AdvancedExecutor(Executor):
 
             try:
                 for turn in range(max_turns):
+                    turns_used = turn + 1
                     halted = halted_now()
                     if halted:
                         mark_halted(halted)
@@ -1842,7 +2854,7 @@ class AdvancedExecutor(Executor):
                             "After a real TEST_PASS, emit DONE and stop.\n"
                             f"Prior: {prior or '(none)'}"
                         )
-                    listing = sess.ls(count_step=False)
+                    listing = str(sess.ls(count_step=False))
                     if format_config.get("custom"):
                         user_prompt = (
                             f"Workdir files:\n{listing}\n\n"
@@ -1865,7 +2877,7 @@ class AdvancedExecutor(Executor):
 
                     t0 = time.time()
                     try:
-                        from ...tool_protocol import TOOL_SCHEMAS
+                        from ...tool_protocol import REGISTRY, TOOL_SCHEMAS
 
                         raw_resp = client.model(
                             battle_id,
@@ -1873,7 +2885,7 @@ class AdvancedExecutor(Executor):
                             conversation_messages,
                             phase=local_phase,
                             max_tokens=race_tokens,
-                            tools=TOOL_SCHEMAS,
+                            tools=REGISTRY.openai_schemas(),
                             return_raw=True,
                         )
                     except Exception as exc:
@@ -1886,7 +2898,10 @@ class AdvancedExecutor(Executor):
                             duration_ms=elapsed_ms,
                             result=err,
                         )
-                        finalize()
+                        finalize(
+                            outcome_override="PROVIDER_ERROR",
+                            terminal_reason="provider_error",
+                        )
                         return
 
                     from ...tool_protocol import ModelResponse, normalize_response
@@ -1914,6 +2929,7 @@ class AdvancedExecutor(Executor):
 
                     if not calls:
                         metrics["parse_errors"] += 1
+                        consecutive_parse_failures += 1
                         emit_action(
                             model_id,
                             "tool_parse_failed",
@@ -1930,7 +2946,37 @@ class AdvancedExecutor(Executor):
                         )
                         artifact = sanitize_artifact(content[:10000])
                         record_artifact(model_id, artifact, role)
+
+                        if consecutive_parse_failures >= max_consecutive_parse_failures:
+                            emit_action(
+                                model_id,
+                                "parse_failure_limit",
+                                state="failed",
+                                turn_id=turn + 1,
+                                tool_step=sess.steps,
+                                reason=f"exceeded maximum consecutive parse failures ({max_consecutive_parse_failures})",
+                                result=f"Finalizing role after {consecutive_parse_failures} consecutive parse failures",
+                            )
+                            finalize(
+                                outcome_override="PARSE_RECOVERY_EXHAUSTED",
+                                terminal_reason="parse_recovery_exhausted",
+                            )
+                            break
+
+                        # Provide structured feedback to model (interface guidance only, no free workspace disclosure)
+                        conversation_messages.append({"role": "assistant", "content": content or "(empty response)"})
+                        conversation_messages.append({
+                            "role": "user",
+                            "content": (
+                                f"Notice: No valid tool calls were parsed from your response (error: {norm.error_code or 'unrecognized_format'}).\n"
+                                "Please emit your actions as standard tool calls or using the TOOL line grammar.\n\n"
+                                f"Turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}."
+                            ),
+                        })
                         continue
+
+                    # Reset consecutive parse failures on successful parse
+                    consecutive_parse_failures = 0
 
                     emit_action(
                         model_id,
@@ -1953,24 +2999,90 @@ class AdvancedExecutor(Executor):
                             mark_halted(halted)
                             break
                         if sess.steps >= max_steps:
-                            finalize(budget_exceeded=True)
+                            finalize(
+                                budget_exceeded=True,
+                                terminal_reason="step_budget_exhausted",
+                            )
                             break
 
-                        if call.get("tool") == "skills":
+                        tool_name = str(call.get("tool") or "").strip().lower()
+
+                        # Validate call arguments via REGISTRY
+                        if tool_name not in ("done",):
+                            norm_args, val_errors = REGISTRY.validate_call(tool_name, call)
+                            if val_errors:
+                                metrics["tool_errors"] += 1
+                                sess.steps += 1
+                                err_msg = f"ERROR: validation failed: {'; '.join(val_errors)}"
+                                val_result = ToolResult(
+                                    tool=tool_name,
+                                    success=False,
+                                    output=err_msg,
+                                    error=f"validation failed: {'; '.join(val_errors)}",
+                                    exit_code=1,
+                                    error_type="validation_error",
+                                    duration_ms=0,
+                                    mutated=False,
+                                    step_charged=True,
+                                    truncated=False,
+                                )
+                                turn_tool_outputs.append(f"[{tool_name}]: {val_result.output}")
+                                emit_action(
+                                    model_id,
+                                    tool_name,
+                                    target=str(call.get("path") or call.get("name") or call.get("url") or ""),
+                                    state="failed",
+                                    turn_id=turn + 1,
+                                    tool_step=sess.steps,
+                                    result=val_result.output,
+                                    role=role,
+                                    workspace=work.name,
+                                )
+                                record_artifact(model_id, sanitize_artifact(val_result.output), role)
+                                if sess.steps >= max_steps:
+                                    finalize(
+                                        budget_exceeded=True,
+                                        terminal_reason="step_budget_exhausted",
+                                    )
+                                    break
+                                continue
+                            call = {"tool": tool_name, **norm_args}
+
+                        if tool_name == "skills":
                             chosen_skills = call.get("chosen", [])[:pick_n]
                             pool_names = {s["name"] for s in pool}
                             chosen_skills = [
                                 c for c in chosen_skills if c in pool_names
                             ][:pick_n]
-                            res = sess.exec_tool(call)
+                            res = sess.exec_tool(call, count_step=True)
+                            failed = not res.success
+                            if failed:
+                                metrics["tool_errors"] += 1
                             record_artifact(
-                                model_id, sanitize_artifact(f"{res}"), role
+                                model_id, sanitize_artifact(str(res)), role
                             )
                             turn_tool_outputs.append(f"[SKILLS]: {res}")
+                            emit_action(
+                                model_id,
+                                "skills",
+                                target=",".join(chosen_skills),
+                                state="done" if not failed else "failed",
+                                turn_id=turn + 1,
+                                tool_step=sess.steps,
+                                result=str(res.output)[:4000],
+                                role=role,
+                                workspace=work.name,
+                            )
+                            if sess.steps >= max_steps:
+                                finalize(
+                                    budget_exceeded=True,
+                                    terminal_reason="step_budget_exhausted",
+                                )
+                                break
                             continue
 
-                        if call.get("tool") == "done":
-                            finalize(retest=True)
+                        if tool_name == "done":
+                            finalize(retest=True, terminal_reason="fighter_done")
                             break
 
                         exec_start = time.time()
@@ -2031,12 +3143,12 @@ class AdvancedExecutor(Executor):
                             workspace=work.name,
                         )
 
-                        exec_res = sess.exec_tool(call)
-                        failed = isinstance(exec_res, str) and exec_res.startswith("ERROR")
+                        tool_res = sess.exec_tool(call)
+                        failed = not tool_res.success
                         if failed:
                             metrics["tool_errors"] += 1
                         exec_ms = int((time.time() - exec_start) * 1000)
-                        exec_res_sanitized = sanitize_artifact(exec_res[:10000])
+                        exec_res_sanitized = sanitize_artifact(tool_res.output[:10000])
                         turn_tool_outputs.append(f"[{tool_name_now} {target_now or command_now}]:\n{exec_res_sanitized[:3000]}")
                         emit_action(
                             model_id,
@@ -2067,13 +3179,13 @@ class AdvancedExecutor(Executor):
                         if harness_like:
                             last_test = exec_res_sanitized
                             if self._harness_passed(exec_res_sanitized):
-                                finalize()
+                                finalize(terminal_reason="completed")
                                 break
 
                     if turn_tool_outputs:
                         conversation_messages.append({"role": "assistant", "content": content or json.dumps(calls)})
                         tool_feedback_text = "\n\n".join(turn_tool_outputs)
-                        listing_after = sess.ls(count_step=False)
+                        listing_after = str(sess.ls(count_step=False))
                         conversation_messages.append({
                             "role": "user",
                             "content": (
@@ -2084,11 +3196,14 @@ class AdvancedExecutor(Executor):
                             ),
                         })
 
-                    if role_recorded(model_id, record_token):
+                    if is_finalized or role_recorded(model_id, record_token):
                         break
 
-                if not role_recorded(model_id, record_token):
-                    finalize()
+                if not is_finalized and not role_recorded(model_id, record_token):
+                    finalize(
+                        outcome_override="TURN_BUDGET_EXCEEDED",
+                        terminal_reason="turn_budget_exhausted",
+                    )
             finally:
                 if preview_server is not None:
                     try:
