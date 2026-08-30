@@ -1,6 +1,7 @@
 """Skills module for Agent Arena.
 
-Exposes canonical skill identity, lifecycle tracking, context ranking, and authoritative attribution.
+Exposes canonical skill identity, lifecycle tracking, context ranking,
+authoritative attribution, and Skill Graph v0.3 catalog metadata (D0).
 """
 
 from .canonical import (
@@ -9,6 +10,16 @@ from .canonical import (
     normalize_skill_ref,
     parse_skill_text,
     slugify,
+)
+from .canonical_metadata import (
+    CATALOG_VERSION,
+    SCHEMA_VERSION,
+    CanonicalSkillCatalog,
+    CatalogValidationError,
+    apply_canonical_metadata,
+    canonical_metadata_for,
+    load_canonical_catalog,
+    validate_catalog_documents,
 )
 from .lifecycle import SkillLifecycleTracker
 from .ranking import (
@@ -29,6 +40,14 @@ __all__ = [
     "normalize_skill_ref",
     "parse_skill_text",
     "slugify",
+    "CATALOG_VERSION",
+    "SCHEMA_VERSION",
+    "CanonicalSkillCatalog",
+    "CatalogValidationError",
+    "apply_canonical_metadata",
+    "canonical_metadata_for",
+    "load_canonical_catalog",
+    "validate_catalog_documents",
     "SkillLifecycleTracker",
     "RankedSkillScore",
     "compute_semantic_relevance",

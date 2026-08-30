@@ -1,0 +1,2612 @@
+catalog_version: 0.3.0
+canonical_skill_count: 63
+skills:
+- schema_version: 2
+  id: hypothesis-driven-debugging
+  name: hypothesis-driven-debugging
+  version: 1.0.0
+  summary: Develop explicit explanations for observed behavior and use targeted evidence
+    to distinguish between them.
+  indexes:
+  - strategy/hypothesis
+  - debugging/failure-analysis
+  - strategy/replanning
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - debugging
+  related_skills:
+  - failure-driven-replanning
+  - minimal-reproduction-builder
+  - evidence-before-editing
+  - root-cause-first
+  - failure-classifier
+  suggested_foundations:
+  - evidence-before-editing
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - hypothesis
+    - experiment
+    - diagnosis
+    normal:
+    - evidence
+    - debugging
+    - uncertainty
+    weak:
+    - generic bug
+- schema_version: 2
+  id: evidence-before-editing
+  name: evidence-before-editing
+  version: 1.0.0
+  summary: Establish what the repository and runtime are actually doing before relying
+    on assumptions about the defect.
+  indexes:
+  - strategy/evidence
+  - investigation/repository
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - testing
+  related_skills:
+  - test-surface-mapper
+  - runtime-inspector
+  - authority-source-finder
+  - technical-web-researcher
+  - regression-test-designer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: small
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - evidence
+    - baseline
+    - observe
+    normal:
+    - inspect
+    - verify
+    - diagnosis
+    weak:
+    - edit
+- schema_version: 2
+  id: root-cause-first
+  name: root-cause-first
+  version: 1.0.0
+  summary: Trace visible failures through dependency and execution paths to identify
+    the defect that produces them.
+  indexes:
+  - strategy/repair-style
+  - debugging/failure-analysis
+  - investigation/entrypoints
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - debugging
+  related_skills:
+  - entrypoint-tracer
+  - dependency-tracer
+  - state-flow-debugger
+  - failure-classifier
+  - minimal-change-repair
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - root-cause
+    - causality
+    - shared symptom
+    normal:
+    - execution-path
+    - repair
+    - symptom
+    weak:
+    - bug
+- schema_version: 2
+  id: failure-driven-replanning
+  name: failure-driven-replanning
+  version: 1.0.0
+  summary: Use unsuccessful commands, tests, experiments, and attempted repairs as
+    information for revising the current approach.
+  indexes:
+  - strategy/replanning
+  - debugging/failure-analysis
+  - strategy/hypothesis
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - debugging
+  related_skills:
+  - hypothesis-driven-debugging
+  - failure-classifier
+  - minimal-reproduction-builder
+  - runtime-inspector
+  - technical-web-researcher
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - replan
+    - failed-attempt
+    - contradictory evidence
+    normal:
+    - recovery
+    - feedback
+    - adaptation
+    weak:
+    - failure
+- schema_version: 2
+  id: minimal-change-repair
+  name: minimal-change-repair
+  version: 1.0.0
+  summary: Search for a compact repair that resolves the demonstrated defect while
+    preserving unrelated behavior and interfaces.
+  indexes:
+  - strategy/repair-style
+  - testing/regression
+  - roles/builder
+  roles:
+  - general
+  - builder
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - engineering
+  related_skills:
+  - root-cause-first
+  - regression-test-designer
+  - defensive-builder
+  - api-contract-auditor
+  - data-integrity-checker
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: small
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - minimal patch
+    - regression surface
+    - compatibility
+    normal:
+    - repair
+    - small change
+    - preserve interface
+    weak:
+    - fix
+- schema_version: 2
+  id: alternative-hypothesis-explorer
+  name: alternative-hypothesis-explorer
+  version: 1.0.0
+  summary: Explore several credible explanations or system areas before becoming overcommitted
+    to one theory.
+  indexes:
+  - strategy/hypothesis
+  - investigation/repository
+  - investigation/authority
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - investigation
+  related_skills:
+  - hypothesis-driven-debugging
+  - repository-cartographer
+  - authority-source-finder
+  - failure-classifier
+  - adversarial-repository-reader
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - alternative hypotheses
+    - premature narrowing
+    - multiple explanations
+    normal:
+    - survey
+    - uncertainty
+    - investigation
+    weak:
+    - breadth-first
+- schema_version: 2
+  id: repository-cartographer
+  name: repository-cartographer
+  version: 1.0.0
+  summary: Construct an execution-oriented map of an unfamiliar codebase, its important
+    structure, entrypoints, tests, configuration, dependencies, and artifacts.
+  indexes:
+  - investigation/repository
+  - investigation/entrypoints
+  - artifacts/workspaces
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - architecture
+  related_skills:
+  - entrypoint-tracer
+  - dependency-tracer
+  - test-surface-mapper
+  - configuration-auditor
+  - git-history-forensics
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - repository structure
+    - codebase map
+    - module ownership
+    normal:
+    - architecture
+    - directories
+    - entrypoints
+    weak:
+    - repository
+- schema_version: 2
+  id: entrypoint-tracer
+  name: entrypoint-tracer
+  version: 1.0.0
+  summary: Follow control from an externally visible trigger into the implementation
+    responsible for its behavior.
+  indexes:
+  - investigation/entrypoints
+  - backend/api
+  - debugging/state
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - backend
+  related_skills:
+  - repository-cartographer
+  - state-flow-debugger
+  - api-contract-auditor
+  - subprocess-command-debugger
+  - root-cause-first
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - entrypoint
+    - call-flow
+    - handler
+    normal:
+    - route
+    - startup
+    - execution
+    weak:
+    - function
+- schema_version: 2
+  id: dependency-tracer
+  name: dependency-tracer
+  version: 1.0.0
+  summary: Trace relationships among modules, packages, files, build targets, generated
+    artifacts, and runtime dependencies.
+  indexes:
+  - investigation/dependencies
+  - runtime/dependencies
+  - build/incremental-builds
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - runtime
+  - build
+  related_skills:
+  - dependency-doctor
+  - node-package-debugger
+  - build-system-debugger
+  - repository-cartographer
+  - filesystem-path-auditor
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - dependency graph
+    - module dependency
+    - build dependency
+    normal:
+    - imports
+    - packages
+    - generated artifact
+    weak:
+    - dependency
+- schema_version: 2
+  id: test-surface-mapper
+  name: test-surface-mapper
+  version: 1.0.0
+  summary: Determine what available tests execute, assert, and leave untested without
+    assuming visible tests fully describe correct behavior.
+  indexes:
+  - testing/visible-tests
+  - investigation/repository
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - testing
+  - investigation
+  related_skills:
+  - regression-test-designer
+  - evidence-before-editing
+  - minimal-reproduction-builder
+  - api-contract-auditor
+  - edge-case-hunter
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - test surface
+    - visible tests
+    - assertion coverage
+    normal:
+    - harness
+    - behavior contract
+    - coverage
+    weak:
+    - test
+- schema_version: 2
+  id: configuration-auditor
+  name: configuration-auditor
+  version: 1.0.0
+  summary: Trace configuration values through definitions, defaults, environment variables,
+    files, arguments, overrides, and runtime consumers.
+  indexes:
+  - investigation/configuration
+  - runtime/packages
+  - backend/state-machines
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - runtime
+  related_skills:
+  - runtime-inspector
+  - authority-source-finder
+  - dependency-doctor
+  - subprocess-command-debugger
+  - state-flow-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - configuration precedence
+    - environment override
+    - settings source
+    normal:
+    - config
+    - defaults
+    - environment
+    weak:
+    - yaml
+- schema_version: 2
+  id: authority-source-finder
+  name: authority-source-finder
+  version: 1.0.0
+  summary: Determine which implementation, specification, test, configuration source,
+    or generated artifact currently governs behavior when sources disagree.
+  indexes:
+  - investigation/authority
+  - security/adversarial-instructions
+  - strategy/evidence
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - strategy
+  related_skills:
+  - adversarial-repository-reader
+  - git-history-forensics
+  - configuration-auditor
+  - evidence-before-editing
+  - repository-cartographer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - source of truth
+    - conflicting sources
+    - stale documentation
+    normal:
+    - authority
+    - duplicate implementation
+    - generated
+    weak:
+    - readme
+- schema_version: 2
+  id: technical-web-researcher
+  name: technical-web-researcher
+  version: 1.0.0
+  summary: Search and navigate public technical sources to fill knowledge gaps about
+    APIs, commands, packages, errors, specifications, and implementation techniques.
+  indexes:
+  - investigation/web-research
+  - runtime/documentation
+  - interface/browser
+  - strategy/evidence
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - research
+  related_skills:
+  - evidence-before-editing
+  - dependency-doctor
+  - runtime-inspector
+  - authority-source-finder
+  - configuration-auditor
+  suggested_foundations: []
+  capability_affinity:
+  - web_research
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - technical documentation
+    - error reference
+    - package documentation
+    normal:
+    - web research
+    - specification
+    - command lookup
+    weak:
+    - internet
+- schema_version: 2
+  id: traceback-triage
+  name: traceback-triage
+  version: 1.0.0
+  summary: Interpret exceptions, stack traces, error chains, and failure context to
+    identify where execution first diverged from expected behavior.
+  indexes:
+  - debugging/traceback
+  - debugging/failure-analysis
+  - investigation/entrypoints
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  related_skills:
+  - root-cause-first
+  - entrypoint-tracer
+  - failure-classifier
+  - minimal-reproduction-builder
+  - subprocess-command-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - traceback
+    - exception chain
+    - failure origin
+    normal:
+    - stack trace
+    - crash
+    - error
+    weak:
+    - log
+- schema_version: 2
+  id: minimal-reproduction-builder
+  name: minimal-reproduction-builder
+  version: 1.0.0
+  summary: Reduce a complex failure to the smallest experiment, input, command, or
+    execution path that still demonstrates the behavior.
+  indexes:
+  - debugging/reproduction
+  - testing/verification
+  - strategy/hypothesis
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  - testing
+  related_skills:
+  - hypothesis-driven-debugging
+  - failure-classifier
+  - regression-test-designer
+  - edge-case-hunter
+  - concurrency-race-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - minimal reproduction
+    - repro case
+    - isolate failure
+    normal:
+    - experiment
+    - testcase
+    - reduce
+    weak:
+    - test
+- schema_version: 2
+  id: state-flow-debugger
+  name: state-flow-debugger
+  version: 1.0.0
+  summary: Trace application state through creation, mutation, transfer, consumption,
+    persistence, ownership, and invalidation.
+  indexes:
+  - debugging/state
+  - backend/state-machines
+  - data/transactions
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  - backend
+  related_skills:
+  - state-machine-repair
+  - session-lifecycle-debugger
+  - transaction-consistency-debugger
+  - async-control-flow-debugger
+  - concurrency-race-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - state lifecycle
+    - state ownership
+    - state mutation
+    normal:
+    - flow
+    - invalidation
+    - persistence
+    weak:
+    - state
+- schema_version: 2
+  id: failure-classifier
+  name: failure-classifier
+  version: 1.0.0
+  summary: Classify an observed failure by likely layer and mechanism before committing
+    to a repair strategy.
+  indexes:
+  - debugging/failure-analysis
+  - runtime/dependencies
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  - runtime
+  related_skills:
+  - traceback-triage
+  - runtime-inspector
+  - dependency-doctor
+  - configuration-auditor
+  - failure-driven-replanning
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: small
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - failure classification
+    - infrastructure failure
+    - environment failure
+    normal:
+    - dependency failure
+    - configuration failure
+    - runtime failure
+    weak:
+    - failure
+- schema_version: 2
+  id: edge-case-hunter
+  name: edge-case-hunter
+  version: 1.0.0
+  summary: Explore inputs, states, ordering, limits, and unusual conditions that may
+    expose behavior outside the normal path.
+  indexes:
+  - debugging/edge-cases
+  - testing/regression
+  - security/input-validation
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  - testing
+  related_skills:
+  - input-validation-auditor
+  - invariant-breaker
+  - regression-test-designer
+  - idempotency-auditor
+  - concurrency-race-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - edge case
+    - boundary condition
+    - corner case
+    normal:
+    - malformed
+    - limits
+    - unusual input
+    weak:
+    - input
+- schema_version: 2
+  id: regression-test-designer
+  name: regression-test-designer
+  version: 1.0.0
+  summary: Design focused tests that demonstrate a defect, protect intended repaired
+    behavior, and avoid overfitting to one implementation.
+  indexes:
+  - testing/regression
+  - testing/verification
+  - strategy/evidence
+  roles:
+  - general
+  - builder
+  runtimes:
+  - '*'
+  domains:
+  - testing
+  related_skills:
+  - minimal-reproduction-builder
+  - test-surface-mapper
+  - minimal-change-repair
+  - edge-case-hunter
+  - evidence-before-editing
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - regression test
+    - before after proof
+    - behavioral assertion
+    normal:
+    - test design
+    - coverage
+    - assertion
+    weak:
+    - test
+- schema_version: 2
+  id: python-kata-fixer
+  name: python-kata-fixer
+  version: 0.1.0
+  summary: Diagnose and repair compact Python exercises governed by a small repository-owned
+    harness or narrow functional contract.
+  indexes:
+  - debugging/python/kata
+  - testing/harnesses/python-kata
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - python
+  domains:
+  - debugging
+  - testing
+  related_skills:
+  - test-surface-mapper
+  - minimal-reproduction-builder
+  - traceback-triage
+  - regression-test-designer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - kata
+    - algorithm-exercise
+    - small-harness
+    normal:
+    - solution.py
+    - functional-contract
+    - coding exercise
+    weak:
+    - python
+- schema_version: 2
+  id: concurrency-race-debugger
+  name: concurrency-race-debugger
+  version: 1.0.0
+  summary: Analyze failures whose outcome depends on overlapping operations, scheduling,
+    ordering, or shared mutable state.
+  indexes:
+  - debugging/concurrency
+  - runtime/processes
+  - data/transactions
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  - concurrency
+  related_skills:
+  - state-flow-debugger
+  - transaction-consistency-debugger
+  - async-control-flow-debugger
+  - idempotency-auditor
+  - minimal-reproduction-builder
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - race condition
+    - interleaving
+    - lost update
+    normal:
+    - concurrency
+    - lock
+    - shared state
+    - check then act
+    weak:
+    - async
+- schema_version: 2
+  id: async-control-flow-debugger
+  name: async-control-flow-debugger
+  version: 1.0.0
+  summary: Trace asynchronous work across promises, futures, tasks, callbacks, queues,
+    cancellation, timeout, and deferred errors.
+  indexes:
+  - debugging/async
+  - runtime/processes
+  - backend/state-machines
+  - observability/runtime-events
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - debugging
+  - runtime
+  related_skills:
+  - state-flow-debugger
+  - concurrency-race-debugger
+  - realtime-execution-streaming
+  - entrypoint-tracer
+  - failure-classifier
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - forgotten await
+    - task cancellation
+    - deferred error
+    normal:
+    - async
+    - promise
+    - future
+    - callback
+    - timeout
+    weak:
+    - concurrency
+- schema_version: 2
+  id: filesystem-path-auditor
+  name: filesystem-path-auditor
+  version: 1.0.0
+  summary: Analyze how paths are constructed, normalized, resolved, copied, linked,
+    mounted, and constrained across filesystem boundaries.
+  indexes:
+  - security/filesystem
+  - runtime/workspaces
+  - artifacts/workspaces
+  - security/trust-boundaries
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - runtime
+  related_skills:
+  - artifact-workspace-versioning
+  - secure-code-execution
+  - subprocess-command-debugger
+  - trust-boundary-auditor
+  - repository-cartographer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - symlink
+    - path traversal
+    - path normalization
+    normal:
+    - filesystem
+    - cwd
+    - mount
+    - workspace
+    weak:
+    - file
+- schema_version: 2
+  id: subprocess-command-debugger
+  name: subprocess-command-debugger
+  version: 1.0.0
+  summary: Diagnose process-launch behavior including executable resolution, arguments,
+    quoting, working directory, environment, pipes, signals, and exit status.
+  indexes:
+  - runtime/processes
+  - debugging/failure-analysis
+  - security/code-execution
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - runtime
+  - debugging
+  related_skills:
+  - runtime-inspector
+  - secure-code-execution
+  - filesystem-path-auditor
+  - configuration-auditor
+  - traceback-triage
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - subprocess
+    - exit code
+    - PATH resolution
+    normal:
+    - command
+    - cwd
+    - environment
+    - pipe
+    - signal
+    weak:
+    - shell
+- schema_version: 2
+  id: git-history-forensics
+  name: git-history-forensics
+  version: 1.0.0
+  summary: Use repository history, diffs, blame, branches, removed files, and earlier
+    implementations as evidence about how behavior evolved.
+  indexes:
+  - investigation/history
+  - investigation/authority
+  - artifacts/versioning
+  - strategy/evidence
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - investigation
+  - version-control
+  related_skills:
+  - authority-source-finder
+  - repository-cartographer
+  - adversarial-repository-reader
+  - configuration-auditor
+  - root-cause-first
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - git history
+    - git blame
+    - removed file
+    normal:
+    - diff
+    - commit
+    - previous version
+    - regression
+    weak:
+    - git
+- schema_version: 2
+  id: dependency-doctor
+  name: dependency-doctor
+  version: 1.0.0
+  summary: Diagnose missing, incompatible, duplicated, incorrectly resolved, or environmentally
+    unavailable dependencies.
+  indexes:
+  - runtime/dependencies
+  - investigation/dependencies
+  - runtime/documentation
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - runtime
+  - dependencies
+  related_skills:
+  - dependency-tracer
+  - package-recovery
+  - runtime-inspector
+  - technical-web-researcher
+  - node-package-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - dependency conflict
+    - version mismatch
+    - missing dependency
+    normal:
+    - install
+    - resolution
+    - compatibility
+    weak:
+    - package
+- schema_version: 2
+  id: package-recovery
+  name: package-recovery
+  version: 1.0.0
+  summary: Repair damaged package manifests, lock/configuration state, install metadata,
+    and package-level expectations without masking the underlying package problem.
+  indexes:
+  - runtime/packages
+  - runtime/dependencies
+  - build/node
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - runtime
+  - packages
+  related_skills:
+  - dependency-doctor
+  - node-package-debugger
+  - configuration-auditor
+  - build-system-debugger
+  - technical-web-researcher
+  suggested_foundations:
+  - dependency-doctor
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - broken manifest
+    - lockfile mismatch
+    - package recovery
+    normal:
+    - package install
+    - manifest
+    - restore
+    weak:
+    - dependency
+- schema_version: 2
+  id: runtime-inspector
+  name: runtime-inspector
+  version: 1.0.0
+  summary: Determine what execution environment, interpreters, binaries, packages,
+    paths, variables, and granted capabilities actually exist.
+  indexes:
+  - runtime/processes
+  - runtime/dependencies
+  - observability/runtime-events
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - runtime
+  related_skills:
+  - failure-classifier
+  - subprocess-command-debugger
+  - dependency-doctor
+  - configuration-auditor
+  - sandbox-runtime-engineer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - runtime environment
+    - interpreter version
+    - available binary
+    normal:
+    - environment
+    - process
+    - PATH
+    - capability
+    weak:
+    - runtime
+- schema_version: 2
+  id: node-package-debugger
+  name: node-package-debugger
+  version: 1.0.0
+  summary: Diagnose Node package manifests, scripts, module formats, imports, exports,
+    package-manager behavior, and module resolution.
+  indexes:
+  - build/node
+  - runtime/packages
+  - investigation/dependencies
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - node
+  domains:
+  - runtime
+  - build
+  related_skills:
+  - package-recovery
+  - dependency-doctor
+  - dependency-tracer
+  - build-system-debugger
+  - technical-web-researcher
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - package.json
+    - module resolution
+    - npm script
+    normal:
+    - node
+    - npm
+    - exports
+    - imports
+    weak:
+    - javascript
+- schema_version: 2
+  id: build-system-debugger
+  name: build-system-debugger
+  version: 1.0.0
+  summary: Trace a build from invocation through configuration, dependency graph,
+    generated artifacts, and failing build stage.
+  indexes:
+  - build/incremental-builds
+  - investigation/dependencies
+  - runtime/processes
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - build
+  related_skills:
+  - dependency-tracer
+  - subprocess-command-debugger
+  - incremental-build-debugger
+  - makefile-debugger
+  - compiler-linker-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - build graph
+    - build stage
+    - generated artifact
+    normal:
+    - build command
+    - dependency
+    - artifact
+    weak:
+    - compile
+- schema_version: 2
+  id: makefile-debugger
+  name: makefile-debugger
+  version: 1.0.0
+  summary: Diagnose Make targets, variables, recipes, prerequisites, phony targets,
+    automatic variables, and rebuild behavior.
+  indexes:
+  - build/make
+  - build/incremental-builds
+  - investigation/dependencies
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - c
+  - cpp
+  - '*'
+  domains:
+  - build
+  related_skills:
+  - incremental-build-debugger
+  - build-system-debugger
+  - dependency-tracer
+  - compiler-linker-debugger
+  - subprocess-command-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - makefile
+    - make prerequisite
+    - phony target
+    normal:
+    - make
+    - recipe
+    - target
+    - automatic variable
+    weak:
+    - c
+- schema_version: 2
+  id: compiler-linker-debugger
+  name: compiler-linker-debugger
+  version: 1.0.0
+  summary: Diagnose compilation and linking across flags, symbols, headers, object
+    files, libraries, ABI expectations, and emitted artifacts.
+  indexes:
+  - build/compiler
+  - runtime/processes
+  - investigation/dependencies
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - c
+  - cpp
+  - '*'
+  domains:
+  - build
+  related_skills:
+  - build-system-debugger
+  - makefile-debugger
+  - dependency-tracer
+  - subprocess-command-debugger
+  - runtime-inspector
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - undefined symbol
+    - linker error
+    - compiler flag
+    normal:
+    - gcc
+    - header
+    - object file
+    - library
+    weak:
+    - c
+- schema_version: 2
+  id: incremental-build-debugger
+  name: incremental-build-debugger
+  version: 1.0.0
+  summary: Diagnose stale artifacts, incorrect dependency edges, timestamp/content
+    invalidation, and missing or redundant rebuilds.
+  indexes:
+  - build/incremental-builds
+  - build/make
+  - investigation/dependencies
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - build
+  related_skills:
+  - build-system-debugger
+  - makefile-debugger
+  - dependency-tracer
+  - artifact-workspace-versioning
+  - filesystem-path-auditor
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - stale artifact
+    - incremental rebuild
+    - missing prerequisite
+    normal:
+    - timestamp
+    - dependency
+    - cache invalidation
+    weak:
+    - build
+- schema_version: 2
+  id: secure-code-execution
+  name: secure-code-execution
+  version: 2.0.0
+  summary: Reason about execution authority, trust, secrets, filesystem/network exposure,
+    privilege boundaries, and isolation requirements for code-running systems.
+  indexes:
+  - runtime/execution
+  - runtime/sandboxes
+  - security/code-execution
+  - security/trust-boundaries
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - runtime
+  - security
+  related_skills:
+  - sandbox-runtime-engineer
+  - filesystem-path-auditor
+  - subprocess-command-debugger
+  - trust-boundary-auditor
+  - artifact-workspace-versioning
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - execution trust boundary
+    - privileged execution
+    - secret exposure
+    normal:
+    - code execution
+    - isolation
+    - network
+    - credentials
+    weak:
+    - shell
+- schema_version: 2
+  id: sandbox-runtime-engineer
+  name: sandbox-runtime-engineer
+  version: 2.0.0
+  summary: Reason about execution runtimes, isolated workspaces, process lifecycle,
+    language runners, cleanup, and sandbox control surfaces.
+  indexes:
+  - runtime/sandboxes
+  - runtime/processes
+  - runtime/execution
+  - observability/runtime-events
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - runtime
+  - systems
+  related_skills:
+  - secure-code-execution
+  - runtime-inspector
+  - artifact-workspace-versioning
+  - battle-runtime-observability
+  - subprocess-command-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - sandbox lifecycle
+    - workspace isolation
+    - process supervision
+    normal:
+    - runner
+    - container
+    - cleanup
+    - execution
+    weak:
+    - docker
+- schema_version: 2
+  id: artifact-workspace-versioning
+  name: artifact-workspace-versioning
+  version: 2.0.0
+  summary: Reason about mutable workspaces, immutable submitted artifacts, snapshots,
+    diffs, restore/replay, and version transitions.
+  indexes:
+  - artifacts/versioning
+  - artifacts/workspaces
+  - runtime/workspaces
+  - artifacts/handoffs
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - artifacts
+  - runtime
+  related_skills:
+  - filesystem-path-auditor
+  - handoff-integrity-auditor
+  - sandbox-runtime-engineer
+  - git-history-forensics
+  - incremental-build-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - artifact version
+    - workspace snapshot
+    - restore replay
+    normal:
+    - diff
+    - workspace
+    - version
+    - snapshot
+    weak:
+    - git
+- schema_version: 2
+  id: terminal-sandbox-ui
+  name: terminal-sandbox-ui
+  version: 2.0.0
+  summary: Reason about terminal-driven execution interfaces, structured output panes,
+    tool timelines, artifact views, and runtime interaction state.
+  indexes:
+  - interface/terminal
+  - runtime/sandboxes
+  - observability/streaming
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - interface
+  - observability
+  related_skills:
+  - realtime-execution-streaming
+  - battle-runtime-observability
+  - sandbox-runtime-engineer
+  - browser-ui-debugger
+  - frontend-state-debugger
+  suggested_foundations: []
+  capability_affinity:
+  - browser
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - terminal interface
+    - execution inspector
+    - tool timeline
+    normal:
+    - shell UI
+    - console
+    - output pane
+    weak:
+    - terminal
+- schema_version: 2
+  id: api-contract-auditor
+  name: api-contract-auditor
+  version: 1.0.0
+  summary: Compare observable endpoint behavior with its declared request, response,
+    status, error, and compatibility contract.
+  indexes:
+  - backend/api
+  - testing/verification
+  - security/input-validation
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - backend
+  - testing
+  related_skills:
+  - entrypoint-tracer
+  - input-validation-auditor
+  - auth-flow-debugger
+  - regression-test-designer
+  - browser-ui-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - api contract
+    - status code contract
+    - response schema
+    normal:
+    - endpoint
+    - request
+    - response
+    - compatibility
+    weak:
+    - api
+- schema_version: 2
+  id: auth-flow-debugger
+  name: auth-flow-debugger
+  version: 1.0.0
+  summary: Trace identity from credential presentation through verification, identity
+    establishment, token/session creation, and later authentication checks.
+  indexes:
+  - backend/authentication
+  - security/authentication
+  - debugging/state
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - backend
+  - security
+  related_skills:
+  - session-lifecycle-debugger
+  - authorization-boundary-auditor
+  - trust-boundary-auditor
+  - state-flow-debugger
+  - api-contract-auditor
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - authentication flow
+    - credential verification
+    - identity establishment
+    normal:
+    - token
+    - login
+    - authentication
+    - principal
+    weak:
+    - authorization
+- schema_version: 2
+  id: authorization-boundary-auditor
+  name: authorization-boundary-auditor
+  version: 1.0.0
+  summary: Analyze ownership, role, privilege, object-access, and policy decisions
+    that determine what an authenticated actor may do.
+  indexes:
+  - backend/authorization
+  - security/authorization
+  - security/trust-boundaries
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - backend
+  - security
+  related_skills:
+  - auth-flow-debugger
+  - trust-boundary-auditor
+  - attack-surface-mapper
+  - invariant-breaker
+  - api-contract-auditor
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - authorization boundary
+    - object ownership
+    - privilege check
+    normal:
+    - role
+    - access control
+    - permission
+    weak:
+    - authentication
+- schema_version: 2
+  id: session-lifecycle-debugger
+  name: session-lifecycle-debugger
+  version: 1.0.0
+  summary: Trace session creation, binding, freshness, rotation, expiry, invalidation,
+    storage, and reuse across requests.
+  indexes:
+  - backend/sessions
+  - security/replay
+  - debugging/state
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - backend
+  - security
+  related_skills:
+  - auth-flow-debugger
+  - session-replay-attacker
+  - state-flow-debugger
+  - idempotency-auditor
+  - trust-boundary-auditor
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - session lifecycle
+    - session invalidation
+    - token rotation
+    normal:
+    - expiry
+    - freshness
+    - session
+    - cookie
+    weak:
+    - authentication
+- schema_version: 2
+  id: state-machine-repair
+  name: state-machine-repair
+  version: 1.0.0
+  summary: Identify and repair missing, illegal, stale, irreversible, or incorrectly
+    terminal application state transitions.
+  indexes:
+  - backend/state-machines
+  - debugging/state
+  - data/transactions
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - backend
+  - debugging
+  related_skills:
+  - state-flow-debugger
+  - idempotency-auditor
+  - transaction-consistency-debugger
+  - concurrency-race-debugger
+  - failure-driven-replanning
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - illegal transition
+    - terminal state
+    - state machine
+    normal:
+    - lifecycle
+    - transition
+    - status
+    weak:
+    - state
+- schema_version: 2
+  id: sql-query-debugger
+  name: sql-query-debugger
+  version: 1.0.0
+  summary: Diagnose SQL semantics, parameter binding, filtering, joins, aggregation,
+    null behavior, and database-specific query behavior.
+  indexes:
+  - data/sql
+  - security/injection
+  - data/integrity
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - sql
+  - '*'
+  domains:
+  - data
+  related_skills:
+  - injection-tester
+  - data-integrity-checker
+  - transaction-consistency-debugger
+  - schema-drift-auditor
+  - database-migration-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - sql query
+    - parameter binding
+    - join bug
+    normal:
+    - sqlite
+    - postgres
+    - filter
+    - 'null'
+    weak:
+    - database
+- schema_version: 2
+  id: database-migration-debugger
+  name: database-migration-debugger
+  version: 1.0.0
+  summary: Trace schema and data evolution across migration ordering, upgrades, downgrades,
+    transforms, and compatibility windows.
+  indexes:
+  - data/migrations
+  - data/schema
+  - data/integrity
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - sql
+  - '*'
+  domains:
+  - data
+  related_skills:
+  - schema-drift-auditor
+  - data-integrity-checker
+  - transaction-consistency-debugger
+  - idempotency-auditor
+  - artifact-workspace-versioning
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - database migration
+    - migration order
+    - schema upgrade
+    normal:
+    - upgrade
+    - downgrade
+    - data transform
+    weak:
+    - sql
+- schema_version: 2
+  id: transaction-consistency-debugger
+  name: transaction-consistency-debugger
+  version: 1.0.0
+  summary: Analyze atomicity, isolation, retries, concurrent updates, locking, stale
+    reads, and lost writes in persistent transactions.
+  indexes:
+  - data/transactions
+  - debugging/concurrency
+  - backend/state-machines
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - sql
+  - '*'
+  domains:
+  - data
+  - concurrency
+  related_skills:
+  - concurrency-race-debugger
+  - state-flow-debugger
+  - idempotency-auditor
+  - data-integrity-checker
+  - state-machine-repair
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - transaction isolation
+    - lost update
+    - atomicity
+    normal:
+    - transaction
+    - lock
+    - retry
+    - consistency
+    weak:
+    - sql
+- schema_version: 2
+  id: schema-drift-auditor
+  name: schema-drift-auditor
+  version: 1.0.0
+  summary: Detect mismatches between application expectations, migrations, generated
+    models, and the actual stored database schema.
+  indexes:
+  - data/schema
+  - data/migrations
+  - investigation/configuration
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - sql
+  - '*'
+  domains:
+  - data
+  related_skills:
+  - database-migration-debugger
+  - configuration-auditor
+  - sql-query-debugger
+  - data-integrity-checker
+  - authority-source-finder
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - schema drift
+    - model schema mismatch
+    - missing migration
+    normal:
+    - schema
+    - migration
+    - column
+    - constraint
+    weak:
+    - sql
+- schema_version: 2
+  id: idempotency-auditor
+  name: idempotency-auditor
+  version: 1.0.0
+  summary: Determine whether repeated requests, retries, jobs, or operations produce
+    duplicate, conflicting, or non-repeatable effects.
+  indexes:
+  - data/transactions
+  - backend/state-machines
+  - testing/regression
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - data
+  - backend
+  related_skills:
+  - state-machine-repair
+  - transaction-consistency-debugger
+  - concurrency-race-debugger
+  - session-replay-attacker
+  - edge-case-hunter
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - idempotency
+    - duplicate effect
+    - retry safety
+    normal:
+    - retry
+    - exactly-once
+    - duplicate
+    - replay
+    weak:
+    - transaction
+- schema_version: 2
+  id: data-integrity-checker
+  name: data-integrity-checker
+  version: 1.0.0
+  summary: Verify that storage operations and transformations preserve required records,
+    relationships, values, and structural invariants.
+  indexes:
+  - data/integrity
+  - data/migrations
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - data
+  - testing
+  related_skills:
+  - database-migration-debugger
+  - sql-query-debugger
+  - schema-drift-auditor
+  - regression-test-designer
+  - minimal-change-repair
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - data integrity
+    - data preservation
+    - referential integrity
+    normal:
+    - transform
+    - invariant
+    - record preservation
+    weak:
+    - data
+- schema_version: 2
+  id: trust-boundary-auditor
+  name: trust-boundary-auditor
+  version: 1.0.0
+  summary: Identify where data, identity, authority, or execution crosses trust boundaries
+    and test the assumptions at each crossing.
+  indexes:
+  - security/trust-boundaries
+  - security/code-execution
+  - backend/authorization
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  related_skills:
+  - authorization-boundary-auditor
+  - secure-code-execution
+  - filesystem-path-auditor
+  - attack-surface-mapper
+  - handoff-integrity-auditor
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - trust boundary
+    - privilege boundary
+    - trusted untrusted
+    normal:
+    - authority
+    - boundary
+    - attacker
+    weak:
+    - security
+- schema_version: 2
+  id: input-validation-auditor
+  name: input-validation-auditor
+  version: 1.0.0
+  summary: Analyze parsing, normalization, validation, canonicalization, type, range,
+    and format assumptions at input boundaries.
+  indexes:
+  - security/input-validation
+  - backend/api
+  - debugging/edge-cases
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - backend
+  related_skills:
+  - injection-tester
+  - api-contract-auditor
+  - edge-case-hunter
+  - trust-boundary-auditor
+  - browser-ui-debugger
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - input validation
+    - canonicalization
+    - normalization
+    normal:
+    - parser
+    - malformed
+    - type check
+    - range
+    weak:
+    - input
+- schema_version: 2
+  id: attack-surface-mapper
+  name: attack-surface-mapper
+  version: 1.0.0
+  summary: Enumerate externally influenceable interfaces, reachable operations, identities,
+    resources, and trust transitions to identify meaningful attack paths.
+  indexes:
+  - security/attack-surface
+  - security/trust-boundaries
+  - roles/breaker
+  roles:
+  - general
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  related_skills:
+  - trust-boundary-auditor
+  - authorization-boundary-auditor
+  - invariant-breaker
+  - exploit-evidence-builder
+  - entrypoint-tracer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - attack surface
+    - reachable interface
+    - entrypoint inventory
+    normal:
+    - exploit surface
+    - external input
+    - boundary
+    weak:
+    - security
+- schema_version: 2
+  id: adversarial-repository-reader
+  name: adversarial-repository-reader
+  version: 1.0.0
+  summary: Treat repository content as potentially misleading and use corroborating
+    evidence to distinguish implementation truth from deceptive or stale material.
+  indexes:
+  - security/adversarial-instructions
+  - investigation/authority
+  - investigation/repository
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - investigation
+  related_skills:
+  - instruction-trust-auditor
+  - authority-source-finder
+  - git-history-forensics
+  - repository-cartographer
+  - alternative-hypothesis-explorer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - misleading repository
+    - deceptive instruction
+    - stale instruction
+    normal:
+    - adversarial
+    - repository
+    - deception
+    weak:
+    - readme
+- schema_version: 2
+  id: invariant-breaker
+  name: invariant-breaker
+  version: 1.0.0
+  summary: Search for inputs, states, sequences, or boundary crossings that violate
+    a claimed correctness or security invariant.
+  indexes:
+  - security/attack-surface
+  - roles/breaker
+  - debugging/edge-cases
+  roles:
+  - general
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - testing
+  related_skills:
+  - attack-surface-mapper
+  - edge-case-hunter
+  - authorization-boundary-auditor
+  - session-replay-attacker
+  - exploit-evidence-builder
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - break invariant
+    - bypass condition
+    - violate guarantee
+    normal:
+    - adversarial
+    - boundary
+    - sequence
+    weak:
+    - edge case
+- schema_version: 2
+  id: session-replay-attacker
+  name: session-replay-attacker
+  version: 1.0.0
+  summary: Analyze token/session freshness, reuse, expiry, nonce binding, rotation,
+    and cross-context replay weaknesses.
+  indexes:
+  - security/replay
+  - backend/sessions
+  - security/authentication
+  roles:
+  - general
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - backend
+  related_skills:
+  - session-lifecycle-debugger
+  - auth-flow-debugger
+  - idempotency-auditor
+  - invariant-breaker
+  - exploit-evidence-builder
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - session replay
+    - token reuse
+    - nonce freshness
+    normal:
+    - expiry
+    - rotation
+    - session
+    - replay
+    weak:
+    - authentication
+- schema_version: 2
+  id: instruction-trust-auditor
+  name: instruction-trust-auditor
+  version: 1.0.0
+  summary: Distinguish authoritative task requirements from untrusted instructions
+    embedded in repository content, artifacts, documentation, or retrieved material.
+  indexes:
+  - security/adversarial-instructions
+  - investigation/authority
+  - strategy/evidence
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - investigation
+  related_skills:
+  - adversarial-repository-reader
+  - authority-source-finder
+  - technical-web-researcher
+  - trust-boundary-auditor
+  - evidence-before-editing
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - instruction provenance
+    - untrusted instruction
+    - prompt injection
+    normal:
+    - authority
+    - instruction
+    - repository content
+    weak:
+    - prompt
+- schema_version: 2
+  id: injection-tester
+  name: injection-tester
+  version: 1.0.0
+  summary: Probe boundaries where untrusted input may be interpreted as SQL, shell
+    commands, templates, paths, expressions, or executable code.
+  indexes:
+  - security/injection
+  - security/input-validation
+  - data/sql
+  - runtime/execution
+  roles:
+  - general
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  related_skills:
+  - input-validation-auditor
+  - sql-query-debugger
+  - subprocess-command-debugger
+  - secure-code-execution
+  - exploit-evidence-builder
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - sql injection
+    - command injection
+    - template injection
+    normal:
+    - shell injection
+    - parser injection
+    - untrusted input
+    weak:
+    - security
+- schema_version: 2
+  id: defensive-builder
+  name: defensive-builder
+  version: 1.0.0
+  summary: Reason from explicit correctness and security invariants while constructing
+    repairs or implementations that remain robust under adversarial use.
+  indexes:
+  - roles/builder
+  - strategy/repair-style
+  - security/trust-boundaries
+  roles:
+  - builder
+  runtimes:
+  - '*'
+  domains:
+  - strategy
+  - security
+  related_skills:
+  - minimal-change-repair
+  - trust-boundary-auditor
+  - regression-test-designer
+  - authorization-boundary-auditor
+  - data-integrity-checker
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - defensive construction
+    - security invariant
+    - robust implementation
+    normal:
+    - builder
+    - hardening
+    - defense
+    weak:
+    - security
+- schema_version: 2
+  id: exploit-evidence-builder
+  name: exploit-evidence-builder
+  version: 1.0.0
+  summary: Turn a suspected weakness into reproducible, scoped evidence that demonstrates
+    impact without relying on unsupported claims.
+  indexes:
+  - roles/breaker
+  - security/attack-surface
+  - testing/verification
+  roles:
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - security
+  - testing
+  related_skills:
+  - attack-surface-mapper
+  - invariant-breaker
+  - minimal-reproduction-builder
+  - session-replay-attacker
+  - injection-tester
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - exploit reproduction
+    - proof of vulnerability
+    - attack evidence
+    normal:
+    - breaker
+    - proof
+    - reproduction
+    weak:
+    - security
+- schema_version: 2
+  id: handoff-integrity-auditor
+  name: handoff-integrity-auditor
+  version: 1.0.0
+  summary: Analyze provenance, completeness, trust, mutability, and assumptions across
+    explicit artifact or phase handoff boundaries.
+  indexes:
+  - artifacts/handoffs
+  - roles/breaker
+  - roles/builder
+  - security/trust-boundaries
+  roles:
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - artifacts
+  - security
+  related_skills:
+  - artifact-workspace-versioning
+  - trust-boundary-auditor
+  - filesystem-path-auditor
+  - defensive-builder
+  - exploit-evidence-builder
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - handoff integrity
+    - artifact provenance
+    - phase boundary
+    normal:
+    - handoff
+    - snapshot
+    - provenance
+    weak:
+    - artifact
+- schema_version: 2
+  id: realtime-execution-streaming
+  name: realtime-execution-streaming
+  version: 2.0.0
+  summary: Reason about ordered realtime execution streams, reconnects, duplicate
+    delivery, backpressure, replay, and event-consumer synchronization.
+  indexes:
+  - observability/streaming
+  - observability/runtime-events
+  - interface/terminal
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - observability
+  - realtime
+  related_skills:
+  - battle-runtime-observability
+  - async-control-flow-debugger
+  - terminal-sandbox-ui
+  - frontend-state-debugger
+  - sandbox-runtime-engineer
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - event ordering
+    - stream reconnect
+    - duplicate delivery
+    normal:
+    - sse
+    - websocket
+    - backpressure
+    - replay
+    weak:
+    - streaming
+- schema_version: 2
+  id: battle-runtime-observability
+  name: battle-runtime-observability
+  version: 2.0.0
+  summary: Trace and analyze structured execution events, spans, state transitions,
+    diagnostics, timing, and replay needed to explain runtime behavior.
+  indexes:
+  - observability/runtime-events
+  - observability/traces
+  - runtime/processes
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - '*'
+  domains:
+  - observability
+  related_skills:
+  - realtime-execution-streaming
+  - sandbox-runtime-engineer
+  - runtime-inspector
+  - async-control-flow-debugger
+  - terminal-sandbox-ui
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: large
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - battle trace
+    - runtime telemetry
+    - execution replay
+    normal:
+    - events
+    - span
+    - latency
+    - diagnostic
+    weak:
+    - logging
+- schema_version: 2
+  id: frontend-state-debugger
+  name: frontend-state-debugger
+  version: 1.0.0
+  summary: Trace client-side state, rendering, events, derived data, asynchronous
+    updates, and API synchronization through a frontend application.
+  indexes:
+  - interface/frontend
+  - debugging/state
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - web
+  - '*'
+  domains:
+  - interface
+  - frontend
+  related_skills:
+  - browser-ui-debugger
+  - state-flow-debugger
+  - async-control-flow-debugger
+  - api-contract-auditor
+  - realtime-execution-streaming
+  suggested_foundations: []
+  capability_affinity: []
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - frontend state
+    - render loop
+    - stale UI state
+    normal:
+    - react
+    - event
+    - rendering
+    - client state
+    weak:
+    - javascript
+- schema_version: 2
+  id: browser-ui-debugger
+  name: browser-ui-debugger
+  version: 1.0.0
+  summary: Diagnose browser-visible navigation, DOM interaction, forms, network-driven
+    UI behavior, user flows, and observable interface contracts.
+  indexes:
+  - interface/browser
+  - interface/frontend
+  - testing/verification
+  roles:
+  - general
+  - builder
+  - breaker
+  runtimes:
+  - web
+  - '*'
+  domains:
+  - interface
+  - frontend
+  related_skills:
+  - frontend-state-debugger
+  - api-contract-auditor
+  - input-validation-auditor
+  - terminal-sandbox-ui
+  - technical-web-researcher
+  suggested_foundations: []
+  capability_affinity:
+  - browser
+  context_cost_class: medium
+  visibility: public
+  benchmark_safe: true
+  discovery:
+    strong:
+    - browser flow
+    - dom interaction
+    - navigation bug
+    normal:
+    - ui
+    - form
+    - network request
+    - interaction
+    weak:
+    - frontend

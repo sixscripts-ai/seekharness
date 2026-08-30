@@ -32,3 +32,6 @@ include = ["agent_arena*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+"agent_arena.skills" = ["*.yaml"]

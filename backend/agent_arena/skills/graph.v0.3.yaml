@@ -1,0 +1,349 @@
+version: 0.3.0
+roots:
+  strategy: Reasoning approaches for diagnosis, repair, evidence, and replanning.
+  investigation: Repository, dependency, authority, history, configuration, and external
+    research.
+  debugging: Failure diagnosis across traces, state, concurrency, async flow, reproduction,
+    and edge cases.
+  testing: Visible-test understanding, regression design, verification, and harness
+    expertise.
+  runtime: Execution environments, dependencies, packages, processes, sandboxes, workspaces,
+    and documentation.
+  build: Node/package builds, Make, compilers/linkers, and incremental build behavior.
+  backend: APIs, authentication, authorization, sessions, and application state machines.
+  data: SQL, schemas, migrations, transactions, and data integrity.
+  security: Trust boundaries, execution, filesystem, auth, validation, injection,
+    replay, and adversarial analysis.
+  artifacts: Mutable workspaces, immutable versions, and handoff boundaries.
+  observability: Traces, runtime events, and realtime execution streams.
+  interface: Frontend, browser-visible behavior, and terminal/execution interfaces.
+  roles: Builder and breaker perspectives without restricting general fighter access.
+indexes:
+  artifacts/handoffs:
+    skills:
+    - artifact-workspace-versioning
+    - handoff-integrity-auditor
+  artifacts/versioning:
+    skills:
+    - artifact-workspace-versioning
+    - git-history-forensics
+  artifacts/workspaces:
+    skills:
+    - artifact-workspace-versioning
+    - filesystem-path-auditor
+    - repository-cartographer
+  backend/api:
+    skills:
+    - api-contract-auditor
+    - entrypoint-tracer
+    - input-validation-auditor
+  backend/authentication:
+    skills:
+    - auth-flow-debugger
+  backend/authorization:
+    skills:
+    - authorization-boundary-auditor
+    - trust-boundary-auditor
+  backend/sessions:
+    skills:
+    - session-lifecycle-debugger
+    - session-replay-attacker
+  backend/state-machines:
+    skills:
+    - async-control-flow-debugger
+    - configuration-auditor
+    - idempotency-auditor
+    - state-flow-debugger
+    - state-machine-repair
+    - transaction-consistency-debugger
+  build/compiler:
+    skills:
+    - compiler-linker-debugger
+  build/incremental-builds:
+    skills:
+    - build-system-debugger
+    - dependency-tracer
+    - incremental-build-debugger
+    - makefile-debugger
+  build/make:
+    skills:
+    - incremental-build-debugger
+    - makefile-debugger
+  build/node:
+    skills:
+    - node-package-debugger
+    - package-recovery
+  data/integrity:
+    skills:
+    - data-integrity-checker
+    - database-migration-debugger
+    - sql-query-debugger
+  data/migrations:
+    skills:
+    - data-integrity-checker
+    - database-migration-debugger
+    - schema-drift-auditor
+  data/schema:
+    skills:
+    - database-migration-debugger
+    - schema-drift-auditor
+  data/sql:
+    skills:
+    - injection-tester
+    - sql-query-debugger
+  data/transactions:
+    skills:
+    - concurrency-race-debugger
+    - idempotency-auditor
+    - state-flow-debugger
+    - state-machine-repair
+    - transaction-consistency-debugger
+  debugging/async:
+    skills:
+    - async-control-flow-debugger
+  debugging/concurrency:
+    skills:
+    - concurrency-race-debugger
+    - transaction-consistency-debugger
+  debugging/edge-cases:
+    skills:
+    - edge-case-hunter
+    - input-validation-auditor
+    - invariant-breaker
+  debugging/failure-analysis:
+    skills:
+    - failure-classifier
+    - failure-driven-replanning
+    - hypothesis-driven-debugging
+    - root-cause-first
+    - subprocess-command-debugger
+    - traceback-triage
+  debugging/python/kata:
+    skills:
+    - python-kata-fixer
+  debugging/reproduction:
+    skills:
+    - minimal-reproduction-builder
+  debugging/state:
+    skills:
+    - auth-flow-debugger
+    - entrypoint-tracer
+    - frontend-state-debugger
+    - session-lifecycle-debugger
+    - state-flow-debugger
+    - state-machine-repair
+  debugging/traceback:
+    skills:
+    - traceback-triage
+  interface/browser:
+    skills:
+    - browser-ui-debugger
+    - technical-web-researcher
+  interface/frontend:
+    skills:
+    - browser-ui-debugger
+    - frontend-state-debugger
+  interface/terminal:
+    skills:
+    - realtime-execution-streaming
+    - terminal-sandbox-ui
+  investigation/authority:
+    skills:
+    - adversarial-repository-reader
+    - alternative-hypothesis-explorer
+    - authority-source-finder
+    - git-history-forensics
+    - instruction-trust-auditor
+  investigation/configuration:
+    skills:
+    - configuration-auditor
+    - schema-drift-auditor
+  investigation/dependencies:
+    skills:
+    - build-system-debugger
+    - compiler-linker-debugger
+    - dependency-doctor
+    - dependency-tracer
+    - incremental-build-debugger
+    - makefile-debugger
+    - node-package-debugger
+  investigation/entrypoints:
+    skills:
+    - entrypoint-tracer
+    - repository-cartographer
+    - root-cause-first
+    - traceback-triage
+  investigation/history:
+    skills:
+    - git-history-forensics
+  investigation/repository:
+    skills:
+    - adversarial-repository-reader
+    - alternative-hypothesis-explorer
+    - evidence-before-editing
+    - repository-cartographer
+    - test-surface-mapper
+  investigation/web-research:
+    skills:
+    - technical-web-researcher
+  observability/runtime-events:
+    skills:
+    - async-control-flow-debugger
+    - battle-runtime-observability
+    - realtime-execution-streaming
+    - runtime-inspector
+    - sandbox-runtime-engineer
+  observability/streaming:
+    skills:
+    - realtime-execution-streaming
+    - terminal-sandbox-ui
+  observability/traces:
+    skills:
+    - battle-runtime-observability
+  roles/breaker:
+    skills:
+    - attack-surface-mapper
+    - exploit-evidence-builder
+    - handoff-integrity-auditor
+    - invariant-breaker
+  roles/builder:
+    skills:
+    - defensive-builder
+    - handoff-integrity-auditor
+    - minimal-change-repair
+  runtime/dependencies:
+    skills:
+    - dependency-doctor
+    - dependency-tracer
+    - failure-classifier
+    - package-recovery
+    - runtime-inspector
+  runtime/documentation:
+    skills:
+    - dependency-doctor
+    - technical-web-researcher
+  runtime/execution:
+    skills:
+    - injection-tester
+    - sandbox-runtime-engineer
+    - secure-code-execution
+  runtime/packages:
+    skills:
+    - configuration-auditor
+    - node-package-debugger
+    - package-recovery
+  runtime/processes:
+    skills:
+    - async-control-flow-debugger
+    - battle-runtime-observability
+    - build-system-debugger
+    - compiler-linker-debugger
+    - concurrency-race-debugger
+    - runtime-inspector
+    - sandbox-runtime-engineer
+    - subprocess-command-debugger
+  runtime/sandboxes:
+    skills:
+    - sandbox-runtime-engineer
+    - secure-code-execution
+    - terminal-sandbox-ui
+  runtime/workspaces:
+    skills:
+    - artifact-workspace-versioning
+    - filesystem-path-auditor
+  security/adversarial-instructions:
+    skills:
+    - adversarial-repository-reader
+    - authority-source-finder
+    - instruction-trust-auditor
+  security/attack-surface:
+    skills:
+    - attack-surface-mapper
+    - exploit-evidence-builder
+    - invariant-breaker
+  security/authentication:
+    skills:
+    - auth-flow-debugger
+    - session-replay-attacker
+  security/authorization:
+    skills:
+    - authorization-boundary-auditor
+  security/code-execution:
+    skills:
+    - secure-code-execution
+    - subprocess-command-debugger
+    - trust-boundary-auditor
+  security/filesystem:
+    skills:
+    - filesystem-path-auditor
+  security/injection:
+    skills:
+    - injection-tester
+    - sql-query-debugger
+  security/input-validation:
+    skills:
+    - api-contract-auditor
+    - edge-case-hunter
+    - injection-tester
+    - input-validation-auditor
+  security/replay:
+    skills:
+    - session-lifecycle-debugger
+    - session-replay-attacker
+  security/trust-boundaries:
+    skills:
+    - attack-surface-mapper
+    - authorization-boundary-auditor
+    - defensive-builder
+    - filesystem-path-auditor
+    - handoff-integrity-auditor
+    - secure-code-execution
+    - trust-boundary-auditor
+  strategy/evidence:
+    skills:
+    - authority-source-finder
+    - evidence-before-editing
+    - git-history-forensics
+    - instruction-trust-auditor
+    - regression-test-designer
+    - technical-web-researcher
+  strategy/hypothesis:
+    skills:
+    - alternative-hypothesis-explorer
+    - failure-driven-replanning
+    - hypothesis-driven-debugging
+    - minimal-reproduction-builder
+  strategy/repair-style:
+    skills:
+    - defensive-builder
+    - minimal-change-repair
+    - root-cause-first
+  strategy/replanning:
+    skills:
+    - failure-driven-replanning
+    - hypothesis-driven-debugging
+  testing/harnesses/python-kata:
+    skills:
+    - python-kata-fixer
+  testing/regression:
+    skills:
+    - edge-case-hunter
+    - idempotency-auditor
+    - minimal-change-repair
+    - regression-test-designer
+  testing/verification:
+    skills:
+    - api-contract-auditor
+    - browser-ui-debugger
+    - concurrency-race-debugger
+    - data-integrity-checker
+    - evidence-before-editing
+    - exploit-evidence-builder
+    - failure-classifier
+    - frontend-state-debugger
+    - minimal-reproduction-builder
+    - regression-test-designer
+    - test-surface-mapper
+  testing/visible-tests:
+    skills:
+    - test-surface-mapper

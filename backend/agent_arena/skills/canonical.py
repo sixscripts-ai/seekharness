@@ -27,6 +27,24 @@ def normalize_skill_ref(ref: str) -> str:
     return slugify(str(ref or "").strip())
 
 
+def _string_list(value: Any) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _discovery_from_data(value: Any) -> dict[str, list[str]]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for bucket in ("strong", "normal", "weak"):
+        if bucket in value:
+            out[bucket] = _string_list(value.get(bucket))
+    return out
+
+
 @dataclass
 class SkillRecord:
     id: str  # Unique canonical ID (usually slugified name)
@@ -45,6 +63,20 @@ class SkillRecord:
     elo: int = 1200
     path: str = ""
     body: str = ""
+    # Skill Graph v0.3 metadata (D0). Empty/default until catalog overlay.
+    schema_version: int = 0
+    summary: str = ""
+    indexes: list[str] = field(default_factory=list)
+    roles: list[str] = field(default_factory=list)
+    runtimes: list[str] = field(default_factory=list)
+    domains: list[str] = field(default_factory=list)
+    related_skills: list[str] = field(default_factory=list)
+    suggested_foundations: list[str] = field(default_factory=list)
+    capability_affinity: list[str] = field(default_factory=list)
+    context_cost_class: str = ""
+    visibility: str = ""
+    benchmark_safe: bool = False
+    discovery: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +96,21 @@ class SkillRecord:
             "elo": self.elo,
             "path": self.path,
             "body": self.body,
+            "schema_version": self.schema_version,
+            "summary": self.summary,
+            "indexes": list(self.indexes),
+            "roles": list(self.roles),
+            "runtimes": list(self.runtimes),
+            "domains": list(self.domains),
+            "related_skills": list(self.related_skills),
+            "suggested_foundations": list(self.suggested_foundations),
+            "capability_affinity": list(self.capability_affinity),
+            "context_cost_class": self.context_cost_class,
+            "visibility": self.visibility,
+            "benchmark_safe": self.benchmark_safe,
+            "discovery": {
+                bucket: list(values) for bucket, values in self.discovery.items()
+            },
         }
 
     @classmethod
@@ -91,6 +138,19 @@ class SkillRecord:
             elo=int(data.get("elo") or 1200),
             path=str(data.get("path") or ""),
             body=str(data.get("body") or ""),
+            schema_version=int(data.get("schema_version") or 0),
+            summary=str(data.get("summary") or ""),
+            indexes=_string_list(data.get("indexes")),
+            roles=_string_list(data.get("roles")),
+            runtimes=_string_list(data.get("runtimes")),
+            domains=_string_list(data.get("domains")),
+            related_skills=_string_list(data.get("related_skills")),
+            suggested_foundations=_string_list(data.get("suggested_foundations")),
+            capability_affinity=_string_list(data.get("capability_affinity")),
+            context_cost_class=str(data.get("context_cost_class") or ""),
+            visibility=str(data.get("visibility") or ""),
+            benchmark_safe=bool(data.get("benchmark_safe") or False),
+            discovery=_discovery_from_data(data.get("discovery")),
         )
 
 

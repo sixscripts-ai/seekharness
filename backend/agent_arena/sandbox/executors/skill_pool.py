@@ -11,6 +11,8 @@ import os
 import re
 from pathlib import Path
 
+from ...skills import apply_canonical_metadata
+
 BATTLE_SKILL_NAMES = (
     "secure-code-execution",
     "sandbox-runtime-engineer",
@@ -123,9 +125,11 @@ def _skill_dict(name: str, path: Path, text: str) -> dict:
     desc = (str(meta.get("description") or "")).strip() or f"Skill {name}"
     if len(desc) > 240:
         desc = desc[:237] + "..."
-    return {
+    skill_id = _slugify(str(meta.get("name") or name))
+    legacy = {
+        "id": skill_id,
         "name": str(meta.get("name") or name),
-        "slug": _slugify(str(meta.get("name") or name)),
+        "slug": skill_id,
         "desc": desc,
         "description": str(meta.get("description") or desc),
         "version": str(meta.get("version") or "0.1.0"),
@@ -139,6 +143,7 @@ def _skill_dict(name: str, path: Path, text: str) -> dict:
         "path": str(path),
         "body": text,
     }
+    return apply_canonical_metadata(legacy)
 
 
 def _slugify(name: str) -> str:
