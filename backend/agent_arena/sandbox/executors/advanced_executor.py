@@ -89,84 +89,55 @@ def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
     return command_block_reason(command, allow_network=allow_network)
 
 
+from ...skills import (
+    CanonicalSkillResolver,
+    SkillLifecycleTracker,
+    SkillRecord,
+    compute_skill_attributions,
+    curate_shortlist,
+    rank_skills,
+)
+
+
 def rank_skills_for_context(
-    pool: list[dict],
+    pool: list[dict | SkillRecord],
     format_config: dict | None = None,
     limit: int = 5,
+    context_mode: str = "strict",
+    skill_elos: dict[str, float] | None = None,
 ) -> list[dict]:
     """Rank skills using tokenized relevance across target objectives, runtime, tags, and category."""
-    cfg = format_config or {}
-    recommended = set(cfg.get("recommended_skills") or [])
-
-    objectives = cfg.get("objectives") or []
-    target_name = str(cfg.get("name") or cfg.get("target_id") or "")
-    category = str(cfg.get("category") or "")
-    runtime = str(cfg.get("runtime") or "")
-    tags = cfg.get("tags") or []
-
-    context_text = f"{target_name} {category} {runtime} {' '.join(objectives)} {' '.join(tags)}".lower()
-    tokens = set(re.findall(r"[a-z0-9_-]{3,}", context_text))
-
-    scored_skills = []
-    for skill in pool:
-        score = 0.0
-        name = skill["name"].lower()
-        slug = skill["slug"].lower()
-        desc = skill.get("description", "").lower()
-        skill_tags = [t.lower() for t in skill.get("tags", [])]
-        skill_cat = skill.get("category", "").lower()
-
-        if skill["name"] in recommended or skill["slug"] in recommended:
-            score += 100.0
-
-        for tok in tokens:
-            if tok in name or tok in slug:
-                score += 5.0
-            if tok in skill_tags:
-                score += 4.0
-            if tok in skill_cat:
-                score += 3.0
-            if tok in desc:
-                score += 1.0
-
-        if runtime and (runtime.lower() in name or runtime.lower() in desc):
-            score += 4.0
-        if category and category.lower() in skill_cat:
-            score += 3.0
-
-        scored_skills.append((score, skill))
-
-    scored_skills.sort(key=lambda x: (x[0], -len(x[1]["name"])), reverse=True)
-    return [s for score, s in scored_skills[:limit]]
+    records = [s if isinstance(s, SkillRecord) else SkillRecord.from_dict(s) for s in pool]
+    ranked = rank_skills(
+        records,
+        format_config,
+        context_mode=context_mode,
+        skill_elos=skill_elos,
+        limit=limit,
+    )
+    return [s.to_dict() for s, score, reason in ranked]
 
 
 def select_skills(
-    format_config: dict | None = None, pool: list[dict] | None = None
+    format_config: dict | None = None,
+    pool: list[dict | SkillRecord] | None = None,
+    context_mode: str = "strict",
+    skill_elos: dict[str, float] | None = None,
 ) -> list[dict]:
-    """Selection protocol: curate a relevant shortlist of 4-6 candidate skills
-    via recommended_skills or tokenized keyword relevance, resolve prerequisites,
-    and return the candidate pool for the battle.
+    """Selection protocol: curate a relevant shortlist of candidate skills
+    via tokenized keyword relevance and prerequisite resolution.
     """
     pool = pool if pool is not None else (load_skill_pool() or SKILL_POOL)
-    ranked = rank_skills_for_context(pool, format_config, limit=5)
+    records = [s if isinstance(s, SkillRecord) else SkillRecord.from_dict(s) for s in pool]
+    shortlist = curate_shortlist(
+        records,
+        format_config,
+        context_mode=context_mode,
+        skill_elos=skill_elos,
+        max_shortlist=5,
+    )
+    return [s.to_dict() for s, reason in shortlist] or [s.to_dict() for s in records[:5]]
 
-    ordered: list[dict] = []
-    seen: set[str] = set()
-
-    for s in ranked:
-        if s["name"] not in seen:
-            seen.add(s["name"])
-            ordered.append(s)
-
-    by_name = {s["name"]: s for s in pool}
-    by_slug = {s["slug"]: s for s in pool}
-    for prereq in resolve_prerequisites(ordered, pool):
-        prereq_skill = by_name.get(prereq) or by_slug.get(prereq.lower())
-        if prereq_skill and prereq_skill["name"] not in seen:
-            seen.add(prereq_skill["name"])
-            ordered.append(prereq_skill)
-
-    return ordered or pool[:5]
 
 
 DEFAULT_TEST_CODE = (
@@ -2064,6 +2035,9 @@ class AdvancedExecutor(Executor):
         required_artifacts: list[str] | None = None,
         phase_type: str | None = None,
         emit_action=None,
+        context_mode: str = "strict",
+        skills_telemetry: dict | None = None,
+        memory_telemetry: dict | None = None,
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -2100,6 +2074,7 @@ class AdvancedExecutor(Executor):
                 "role": role,
                 "phase": phase,
                 "phase_type": phase_type or phase,
+                "context_mode": context_mode,
                 "outcome": outcome,
                 "terminal_reason": terminal_reason or ("step_budget_exhausted" if budget_exceeded else "completed"),
                 "passed": None,
@@ -2116,10 +2091,13 @@ class AdvancedExecutor(Executor):
                 "skill_read_ok": bool(chosen_skills) and set(chosen_skills).issubset(
                     sess.skill_reads
                 ),
+                "skills_telemetry": skills_telemetry or {},
+                "memory_telemetry": memory_telemetry or {},
                 "preview_url": preview_url,
                 "spec_hash": spec_hash,
                 "evaluation_mode": evaluation_mode or "quick",
             }
+
             files_json = json.dumps(
                 {
                     "files": files,
@@ -2331,6 +2309,7 @@ class AdvancedExecutor(Executor):
             "role": role,
             "phase": phase,
             "phase_type": phase_type or phase,
+            "context_mode": context_mode,
             "outcome": outcome,
             "terminal_reason": resolved_terminal_reason,
             "passed": passed,
@@ -2348,6 +2327,8 @@ class AdvancedExecutor(Executor):
             "chosen_skills": chosen_skills,
             "theory": theory[:2000],
             "skill_read_ok": skill_read_ok,
+            "skills_telemetry": skills_telemetry or {},
+            "memory_telemetry": memory_telemetry or {},
             "preview_url": preview_url,
             "spec_hash": str((format_config or {}).get("spec_hash") or ""),
             "evaluation_mode": str((format_config or {}).get("evaluation_mode") or ""),
@@ -2470,7 +2451,8 @@ class AdvancedExecutor(Executor):
         tool_timeout = int(raw_timeout) if raw_timeout else None
         pick_n = int(_budget("pick_per_battle", 3, ["pick_n"]))
         race_tokens = int(_budget("race_max_tokens", RACE_MAX_TOKENS, ["max_tokens"]) or RACE_MAX_TOKENS)
-        pool = select_skills(format_config) or load_skill_pool() or SKILL_POOL
+        context_mode = str((format_config or {}).get("context_mode") or "strict").lower().strip()
+        pool = select_skills(format_config, context_mode=context_mode) or load_skill_pool() or SKILL_POOL
         seq = {"n": 0}
         phase_name = tool_phase_name(format_config)
         fighters = fighter_roles(format_config)
@@ -2733,6 +2715,62 @@ class AdvancedExecutor(Executor):
             chosen_skills: list[str] = []
             last_test = ""
 
+            skill_resolver = CanonicalSkillResolver([SkillRecord.from_dict(s) for s in pool])
+            tracker = SkillLifecycleTracker(role=role, model_id=model_id)
+            for s in pool:
+                cid = skill_resolver.canonical_id(s.get("name") or s.get("id") or "")
+                if cid:
+                    tracker.record_eligible(cid)
+                    tracker.record_offered(cid)
+
+            records = [SkillRecord.from_dict(s) for s in pool]
+            from agent_arena.skills.ranking import rank_skills_detailed
+            ranked_candidates = rank_skills_detailed(records, format_config, context_mode=context_mode, limit=len(records))
+            for item in ranked_candidates:
+                tracker.record_ranked(
+                    item.skill.id,
+                    item.final_score,
+                    item.reason,
+                    semantic_score=item.semantic_score,
+                    historical_adjustment=item.historical_adjustment,
+                )
+
+            memory_candidates = 0
+            memory_supplied_ids = []
+            memory_prompt_text = ""
+            if context_mode in ("adaptive", "assisted"):
+                from agent_arena.memory import retrieve
+                try:
+                    retrieved_mems = retrieve(
+                        databases=getattr(self, "databases", None),
+                        database_id=getattr(self, "database_id", ""),
+                        query=f"{format_config.get('name', '')} {mission}",
+                        context_mode=context_mode,
+                        user_id=str(format_config.get("user_id") or "villain"),
+                        model_id=model_id,
+                        role=role,
+                        target_id=str(format_config.get("target_id") or format_config.get("name") or ""),
+                        limit=3,
+                    )
+                except Exception:
+                    retrieved_mems = []
+                memory_candidates = len(retrieved_mems)
+                memory_supplied_ids = [str(m.get("$id") or m.get("id") or f"mem_{i}") for i, m in enumerate(retrieved_mems)]
+                if retrieved_mems:
+                    insights = [f"- {m.get('insight', '')[:300]}" for m in retrieved_mems if m.get("insight")]
+                    if insights:
+                        memory_prompt_text = "\nPrior Lessons (Model Memory):\n" + "\n".join(insights) + "\n"
+
+
+            memory_telemetry = {
+                "context_mode": context_mode,
+                "memory_enabled": (context_mode in ("adaptive", "assisted")),
+                "memory_candidates": memory_candidates,
+                "memory_supplied_ids": memory_supplied_ids,
+                "memory_count": len(memory_supplied_ids),
+                "memory_scope": f"user:{format_config.get('user_id', 'villain')},model:{model_id}" if context_mode in ("adaptive", "assisted") else "none",
+            }
+
             metrics = {"tool_errors": 0, "parse_errors": 0, "tool_calls": 0}
             consecutive_parse_failures = 0
             max_consecutive_parse_failures = 3
@@ -2772,8 +2810,12 @@ class AdvancedExecutor(Executor):
                     canonical_test_code=test_code,
                     required_artifacts=required_outputs,
                     emit_action=emit_action,
+                    context_mode=context_mode,
+                    skills_telemetry=tracker.to_telemetry(),
+                    memory_telemetry=memory_telemetry,
                     **extra,
                 )
+
 
             last_test: str | None = None
             if preview_url:
@@ -3054,6 +3096,10 @@ class AdvancedExecutor(Executor):
                             chosen_skills = [
                                 c for c in chosen_skills if c in pool_names
                             ][:pick_n]
+                            for c in chosen_skills:
+                                cid = skill_resolver.canonical_id(c)
+                                if cid:
+                                    tracker.record_selected(cid)
                             res = sess.exec_tool(call, count_step=True)
                             failed = not res.success
                             if failed:
@@ -3077,6 +3123,7 @@ class AdvancedExecutor(Executor):
                                 finalize(
                                     budget_exceeded=True,
                                     terminal_reason="step_budget_exhausted",
+                                    outcome_override="STEP_BUDGET_EXCEEDED",
                                 )
                                 break
                             continue
@@ -3147,6 +3194,31 @@ class AdvancedExecutor(Executor):
                         failed = not tool_res.success
                         if failed:
                             metrics["tool_errors"] += 1
+
+                        if tool_name_now == "use_skill":
+                            skill_arg = str(call.get("name") or "").strip()
+                            canon = skill_resolver.resolve(skill_arg)
+                            if canon:
+                                tracker.record_selected(canon.id)
+                                if not failed:
+                                    tracker.record_loaded(canon.id)
+                                    tracker.record_used(canon.id)
+                                    if canon.name not in chosen_skills and canon.id not in chosen_skills:
+                                        chosen_skills.append(canon.name)
+                                else:
+                                    tracker.record_load_failed(canon.id, tool_res.error or "load_failed")
+                            else:
+                                tracker.record_selected(skill_arg)
+                                tracker.record_load_failed(skill_arg, "unknown_skill")
+                        elif tool_name_now == "read":
+                            read_path = str(call.get("path") or "")
+                            if ".agents/skills" in read_path or "SKILL.md" in read_path:
+                                for s in pool:
+                                    if s["name"] in read_path or (s.get("slug") and s["slug"] in read_path):
+                                        canon = skill_resolver.resolve(s["name"])
+                                        if canon:
+                                            tracker.record_used(canon.id)
+
                         exec_ms = int((time.time() - exec_start) * 1000)
                         exec_res_sanitized = sanitize_artifact(tool_res.output[:10000])
                         turn_tool_outputs.append(f"[{tool_name_now} {target_now or command_now}]:\n{exec_res_sanitized[:3000]}")
@@ -3166,6 +3238,7 @@ class AdvancedExecutor(Executor):
                             workspace=work.name,
                         )
                         record_artifact(model_id, exec_res_sanitized, role)
+
 
                         tool_name = call.get("tool")
                         run_path = str(call.get("path") or "").replace("\\", "/")
@@ -3442,32 +3515,13 @@ class AdvancedExecutor(Executor):
             if late:
                 mark_halted(late)
 
-        # In-memory skill Elo nudge. A fighter only "wins" if it actually passed
-        # the harness; when nobody passes there is no winner, so a lower-step
-        # failure is never rewarded. Durable self-learning (Appwrite memory +
-        # skill registry) happens once on the backend in /internal/finalize,
-        # which re-parses the persisted EXECUTOR_RESULT events — so we do not
-        # write to Appwrite here (the sandbox has no credentials anyway).
-        try:
-            passed_results = [
-                r
-                for r in results
-                if r.get("passed")
-                and (r.get("policy") or {}).get("status") != "invalid"
-            ]
-            winner = (
-                min(passed_results, key=lambda x: x.get("steps", 999))
-                if passed_results
-                else None
-            )
-            for r in results:
-                delta = 5 if (winner is not None and r is winner) else -5
-                for chosen in r.get("chosen_skills", [])[:5]:
-                    for s in SKILL_POOL:
-                        if s["name"] == chosen:
-                            s["elo"] = max(800, min(2000, s["elo"] + delta))
-        except Exception:
-            pass
+        # Authoritative learning boundary: The execution kernel produces verified
+        # results with telemetry and attributions. Persistent learning mutation (skill
+        # Elo and model memory) is applied exactly once downstream on the backend
+        # in /internal/finalize via _apply_self_learning() when context_mode == "adaptive".
+        # This prevents redundant in-memory mutation or double-application.
+
+
 
         # Convert results to history for judge
         for r in results:

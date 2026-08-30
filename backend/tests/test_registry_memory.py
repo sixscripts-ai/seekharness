@@ -97,7 +97,7 @@ def test_memory_remember_retrieve_and_novelty():
         format_name="WAF",
     )
     assert r is not None
-    hits = retrieve(db, "d", "how to bypass waf unicode")
+    hits = retrieve(db, "d", "how to bypass waf unicode", context_mode="adaptive")
     assert hits and hits[0]["battle_id"] == "b1"
     # duplicate is blocked by novelty gate
     dup = maybe_remember(

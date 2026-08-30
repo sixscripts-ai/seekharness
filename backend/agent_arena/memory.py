@@ -1,10 +1,11 @@
-"""Appwrite-backed battle memory (D13): store winner insights + retrieval.
+"""Appwrite / Postgres-backed battle memory (Change Set B Hardened).
 
-Collection: `memories`. Each doc stores a free-text insight plus structured
-metadata (battle_id, format, model_id, skills, theory excerpt, timestamp) and a
-tokenized keyword index for cheap substring/lexical retrieval without a vector DB.
-
-Replaces the dormant mem0 push with an Appwrite-native store.
+Provides provenance-first, model-scoped, user-scoped, mode-gated, and safety-sanitized battle memory.
+- Strict Benchmark Mode: Zero memories are retrieved (returns []).
+- Adaptive Mode: Retrieves compact, safe model-scoped and user-scoped lessons.
+- Provenance Gate: Evaluator-private, opponent-private, cross-user, or unverified memories
+  are structurally rejected before content is even examined.
+- Secondary Safety Filtering: Rejects hidden tests, reference solutions, secrets, and credentials.
 """
 
 from __future__ import annotations
@@ -12,69 +13,128 @@ from __future__ import annotations
 import json
 import re
 import time
+from dataclasses import dataclass, field
+from typing import Any
 
 from appwrite.query import Query
 
 _STOPWORDS = {
-    "a",
-    "an",
-    "the",
-    "and",
-    "or",
-    "of",
-    "to",
-    "in",
-    "on",
-    "for",
-    "with",
-    "by",
-    "as",
-    "at",
-    "from",
-    "into",
-    "that",
-    "this",
-    "which",
-    "was",
-    "were",
-    "is",
-    "are",
-    "be",
-    "been",
-    "have",
-    "has",
-    "had",
-    "it",
-    "its",
-    "their",
-    "they",
-    "we",
-    "you",
-    "your",
-    "our",
-    "not",
-    "no",
-    "but",
-    "do",
-    "does",
-    "did",
-    "then",
-    "than",
-    "also",
-    "each",
-    "every",
-    "after",
-    "before",
-    "between",
-    "during",
-    "will",
-    "would",
-    "should",
-    "could",
-    "can",
-    "may",
+    "a", "an", "the", "and", "or", "of", "to", "in", "on", "for", "with",
+    "by", "as", "at", "from", "into", "that", "this", "which", "was", "were",
+    "is", "are", "be", "been", "have", "has", "had", "it", "its", "their",
+    "they", "we", "you", "your", "our", "not", "no", "but", "do", "does",
+    "did", "then", "than", "also", "each", "every", "after", "before",
+    "between", "during", "will", "would", "should", "could", "can", "may",
 }
 _TOKEN_RE = re.compile(r"[a-z0-9]{3,}")
+
+# Safety patterns for forbidden content (secondary defense-in-depth)
+_FORBIDDEN_PATTERNS = [
+    re.compile(r"FLAG\{[^\}]+\}", re.IGNORECASE),
+    re.compile(r"\b(?:sk-[a-zA-Z0-9_-]{20,}|bearer\s+[a-zA-Z0-9_\-\.]{20,})\b", re.IGNORECASE),
+    re.compile(r"\b(?:appwrite_api_key|fernet_key|internal_api_key|host_credentials)\b", re.IGNORECASE),
+    re.compile(r"\b(?:test_target\.py|test_verifier|verifier_environment)\b", re.IGNORECASE),
+    re.compile(r"\b(?:reference_solution|hidden_tests?|challenge_secret)\b", re.IGNORECASE),
+    re.compile(r"\b(?:opponent_private|breaker_private|builder_private_pre_handoff)\b", re.IGNORECASE),
+]
+
+# Learnable vs unlearnable outcomes
+LEARNABLE_OUTCOMES = {
+    "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED", "JUDGE_ONLY", "PASS", "FAIL", "WIN", "LOSS"
+}
+UNLEARNABLE_OUTCOMES = {
+    "PROVIDER_ERROR", "PROVIDER_TIMEOUT", "SANDBOX_ERROR", "CANCELLED", "TIMEOUT", "VERIFY_ERROR", "INVALID"
+}
+
+
+@dataclass
+class MemoryProvenance:
+    user_id: str = "villain"
+    model_id: str = ""
+    battle_id: str = ""
+    target_id: str = ""
+    role: str = "general"
+    visibility_class: str = "model_private"  # public, model_private, evaluator_private, opponent_private
+    authoritative_status: str = "verified_pass"  # verified_pass, verified_fail, unverified, infra_failure
+    context_mode: str = "adaptive"
+    created_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "user_id": self.user_id,
+            "model_id": self.model_id,
+            "battle_id": self.battle_id,
+            "target_id": self.target_id,
+            "role": self.role,
+            "visibility_class": self.visibility_class,
+            "authoritative_status": self.authoritative_status,
+            "context_mode": self.context_mode,
+            "created_at": self.created_at,
+        }
+
+
+def is_provenance_eligible(
+    memory_data: dict[str, Any],
+    *,
+    user_id: str,
+    model_id: str,
+    role: str = "",
+    target_id: str = "",
+) -> bool:
+    """Primary Security Boundary: Check provenance and visibility rules.
+
+    Evaluates structural eligibility BEFORE looking at textual content.
+    """
+    visibility = str(memory_data.get("visibility_class") or "model_private").lower()
+    auth_status = str(memory_data.get("authoritative_status") or "verified_pass").lower()
+    mem_user = str(memory_data.get("user_id") or "")
+    mem_model = str(memory_data.get("model_id") or "")
+    mem_role = str(memory_data.get("role") or "").lower()
+
+    # Rule 1: Evaluator-private, opponent-private, and infra failures are structurally blocked
+    if visibility in ("evaluator_private", "opponent_private", "forbidden"):
+        return False
+    if auth_status in ("infra_failure", "unverified", "invalid"):
+        return False
+
+    # Rule 2: User isolation (different user is always blocked)
+    if user_id and mem_user and mem_user != user_id:
+        return False
+
+    # Rule 3: Model isolation (different model is blocked unless explicitly public)
+    if visibility != "public":
+        if model_id and mem_model and mem_model != model_id:
+            return False
+
+    # Rule 4: Cross-role boundary in asymmetric battles (Builder vs Breaker)
+    if role:
+        req_role = role.lower()
+        if req_role == "breaker" and mem_role == "builder":
+            return False
+        if req_role == "builder" and mem_role == "breaker":
+            return False
+
+    return True
+
+
+def is_memory_content_safe(text: str) -> bool:
+    """Secondary defense: Verify text does not contain secrets, hidden tests, or private artifacts."""
+    if not text:
+        return True
+    for pattern in _FORBIDDEN_PATTERNS:
+        if pattern.search(text):
+            return False
+    return True
+
+
+def sanitize_memory_content(text: str) -> str:
+    """Redact any potential credentials, tokens, or private tags from memory text."""
+    if not text:
+        return ""
+    sanitized = text
+    for pattern in _FORBIDDEN_PATTERNS:
+        sanitized = pattern.sub("[REDACTED_SAFEGUARD]", sanitized)
+    return sanitized
 
 
 def _tokens(text: str) -> list[str]:
@@ -89,27 +149,52 @@ def remember(
     insight: str,
     battle_id: str = "",
     model_id: str = "",
+    target_id: str = "",
+    role: str = "general",
+    visibility_class: str = "model_private",
+    authoritative_status: str = "verified_pass",
     format_name: str = "",
     chosen_skills: list[str] | None = None,
     theory: str = "",
     outcome: str = "",
     user_id: str = "",
-) -> dict:
-    """Persist one battle memory. Returns the created doc payload."""
+    context_mode: str = "adaptive",
+    policy_status: str = "clean",
+    **extra: Any,
+) -> dict | None:
+    """Persist one provenance-tagged and safety-sanitized battle memory."""
+    combined = f"{insight} {theory}"
+    if not is_memory_content_safe(combined):
+        insight = sanitize_memory_content(insight)
+        theory = sanitize_memory_content(theory)
+
+    prov = MemoryProvenance(
+        user_id=user_id or "villain",
+        model_id=model_id,
+        battle_id=battle_id,
+        target_id=target_id or format_name,
+        role=role or "general",
+        visibility_class=visibility_class,
+        authoritative_status=authoritative_status,
+        context_mode=context_mode,
+        created_at=time.time(),
+    )
+
     payload = {
-        "user_id": user_id or "villain",
+        **prov.to_dict(),
         "insight": insight[:2000],
         "tokens": _tokens(insight + " " + theory),
-        "battle_id": battle_id,
-        "model_id": model_id,
         "format": format_name,
         "chosen_skills": chosen_skills or [],
         "theory": (theory or "")[:500],
         "outcome": outcome,
-        "created_at": time.time(),
     }
-    doc = databases.create_document(database_id, "memories", "unique()", payload)
-    return doc.data
+    try:
+        doc = databases.create_document(database_id, "memories", "unique()", payload)
+        return doc.data
+    except Exception:
+        return payload
+
 
 
 def retrieve(
@@ -117,21 +202,58 @@ def retrieve(
     database_id: str,
     query: str,
     *,
+    context_mode: str = "strict",
     limit: int = 5,
     user_id: str = "",
+    model_id: str = "",
+    role: str = "",
+    target_id: str = "",
     skills: list[str] | None = None,
 ) -> list[dict]:
-    """Lexical retrieval: score memories by token overlap + skill + recency."""
+    """Retrieve relevant memories with provenance as primary security boundary.
+
+    Strict Mode: Mode-gated to ALWAYS return [] (zero memories).
+    Adaptive Mode: Enforces provenance boundaries (user, model, role, visibility)
+    prior to secondary content safety filtering.
+    """
+    mode = str(context_mode or "strict").lower().strip()
+    if mode not in ("adaptive", "assisted"):
+        # Strict benchmark mode: strictly zero historical memory supplied
+        return []
+
     q_tokens = set(_tokens(query))
     skills = skills or []
-    res = databases.list_documents(
-        database_id,
-        "memories",
-        queries=[Query.limit(limit * 10 if limit else 50)],
-    )
+    try:
+        res = databases.list_documents(
+            database_id,
+            "memories",
+            queries=[Query.limit(limit * 10 if limit else 50)],
+        )
+        docs = res.documents
+    except Exception:
+        docs = []
+
     scored: list[dict] = []
-    for d in res.documents:
-        data = d.data
+    for d in docs:
+        data = dict(d.data if hasattr(d, "data") else d)
+
+        # Primary Boundary: Provenance & visibility gate
+        if not is_provenance_eligible(
+            data,
+            user_id=user_id,
+            model_id=model_id,
+            role=role,
+            target_id=target_id,
+        ):
+            continue
+
+        insight = str(data.get("insight") or "")
+        theory = str(data.get("theory") or "")
+
+        # Secondary Boundary: Content safety filter
+        if not is_memory_content_safe(insight) or not is_memory_content_safe(theory):
+            continue
+
         doc_tokens = set(data.get("tokens") or [])
         overlap = len(q_tokens & doc_tokens) if q_tokens else 0
         skill_bonus = 3 * len(set(skills) & set(data.get("chosen_skills") or []))
@@ -141,23 +263,28 @@ def retrieve(
         score = overlap + skill_bonus
         if score <= 0:
             continue
-        if user_id and data.get("user_id") and data["user_id"] != user_id:
-            continue
         scored.append({"score": round(score / recency, 3), **data})
+
     scored.sort(key=lambda m: m["score"], reverse=True)
     return scored[:limit]
+
 
 
 def forget(databases, database_id: str, older_than_days: int = 180) -> int:
     """Best-effort cleanup of stale memories. Returns number deleted."""
     cutoff = time.time() - older_than_days * 86400
-    res = databases.list_documents(
-        database_id,
-        "memories",
-        queries=[Query.limit(100)],
-    )
+    try:
+        res = databases.list_documents(
+            database_id,
+            "memories",
+            queries=[Query.limit(100)],
+        )
+        docs = res.documents
+    except Exception:
+        docs = []
+
     removed = 0
-    for d in res.documents:
+    for d in docs:
         if float(d.data.get("created_at") or 0) < cutoff:
             try:
                 databases.delete_document(database_id, "memories", d.id)
@@ -169,13 +296,18 @@ def forget(databases, database_id: str, older_than_days: int = 180) -> int:
 
 def dump(databases, database_id: str, limit: int = 20) -> list[dict]:
     """Recent memories as plain JSON (for stats/debug endpoints)."""
-    res = databases.list_documents(
-        database_id,
-        "memories",
-        queries=[Query.limit(limit)],
-    )
+    try:
+        res = databases.list_documents(
+            database_id,
+            "memories",
+            queries=[Query.limit(limit)],
+        )
+        docs = res.documents
+    except Exception:
+        docs = []
+
     out = []
-    for d in res.documents:
+    for d in docs:
         data = dict(d.data)
         data.pop("tokens", None)
         data.pop("theory", None)
@@ -202,23 +334,23 @@ def novelty_score(
     skills: list[str] | None = None,
     theory: str = "",
 ) -> float:
-    """E15 novelty fingerprint: 0.0 (duplicate) .. 1.0 (novel).
-
-    Compares token overlap against recent memories, then applies a skill
-    diversity bonus. Used to gate whether a memory is worth persisting and to
-    surface fresh tactics to judges/agents.
-    """
+    """Novelty fingerprint: 0.0 (duplicate) .. 1.0 (novel)."""
     q_tokens = set(_tokens(insight + " " + theory))
     if not q_tokens:
         return 1.0
-    res = databases.list_documents(
-        database_id,
-        "memories",
-        queries=[Query.limit(100)],
-    )
+    try:
+        res = databases.list_documents(
+            database_id,
+            "memories",
+            queries=[Query.limit(100)],
+        )
+        docs = res.documents
+    except Exception:
+        docs = []
+
     best_sim = 0.0
     seen_skills: set[str] = set()
-    for d in res.documents:
+    for d in docs:
         data = d.data
         doc_tokens = set(data.get("tokens") or [])
         if not doc_tokens:
@@ -227,7 +359,7 @@ def novelty_score(
         union = len(q_tokens | doc_tokens)
         best_sim = max(best_sim, inter / union)
         seen_skills.update(data.get("chosen_skills") or [])
-    if not res.documents:
+    if not docs:
         return 1.0
     skills = skills or []
     diversity = (
@@ -243,7 +375,20 @@ def novelty_score(
 def maybe_remember(
     databases, database_id: str, *, novelty_threshold: float = 0.25, **kwargs
 ) -> dict | None:
-    """Persist a memory only if it clears the novelty threshold. Returns doc or None."""
+    """Persist a memory only if it represents a learnable authoritative outcome and clears novelty & safety gates."""
+    outcome = str(kwargs.get("outcome") or "").strip().upper()
+    policy_status = str(kwargs.get("policy_status") or "clean").lower()
+
+    # Reject unlearnable infrastructure failures, crashes, and invalid policy violations
+    if outcome in UNLEARNABLE_OUTCOMES or policy_status == "invalid":
+        return None
+
+    # Classify authoritative status
+    if outcome in ("TEST_PASS", "PASS", "WIN", "JUDGE_ONLY"):
+        kwargs.setdefault("authoritative_status", "verified_pass")
+    elif outcome in ("TEST_FAIL", "STEP_BUDGET_EXCEEDED", "FAIL", "LOSS"):
+        kwargs.setdefault("authoritative_status", "verified_fail")
+
     score = novelty_score(
         databases,
         database_id,

@@ -258,16 +258,19 @@ def load_skill_pool(root: Path | None = None) -> list[dict]:
     return pool
 
 
-def mount_skills(dest: Path, pool: list[dict]) -> Path:
+def mount_skills(dest: Path, pool: list[dict | object]) -> Path:
     """Copy skill bodies into a participant workspace (read-only copies)."""
     skills_dir = dest / ".agents" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
     for s in pool:
-        d = skills_dir / s["name"]
+        name = s.name if hasattr(s, "name") else s["name"]
+        body = s.body if hasattr(s, "body") else s.get("body")
+        desc = s.desc if hasattr(s, "desc") else s.get("desc", "")
+        d = skills_dir / name
         d.mkdir(parents=True, exist_ok=True)
         target = d / "SKILL.md"
         target.write_text(
-            s.get("body") or f"# {s['name']}\n{s['desc']}\n", encoding="utf-8"
+            body or f"# {name}\n{desc}\n", encoding="utf-8"
         )
         try:
             target.chmod(0o444)

@@ -258,10 +258,20 @@ def _record_skill_outcome_pg(skill_name: str, outcome: str, tier: str = "general
 def _apply_self_learning(
     databases, database_id: str, battle: dict, battle_id: str, results: list[dict]
 ) -> None:
-    """Persist skill Elo + memory from executor results (runs on backend, not sandbox)."""
+    """Persist skill Elo + memory from executor results (runs on backend, not sandbox).
+
+    Mode-gated: Strict Benchmark mode has 0 historical side-effects.
+    Adaptive Mode: Updates skill Elo and persists compact, model-scoped lessons.
+    """
     if not results:
         return
+    context_mode = str(battle.get("context_mode") or "strict").lower().strip()
+    if context_mode not in ("adaptive", "assisted"):
+        # Strict mode: strictly zero historical persistence or learning mutation
+        return
+
     from .persistence import service
+    from .skills import compute_skill_attributions
 
     # Only fighters that actually passed are eligible to win
     passed_results = [r for r in results if r.get("passed")]
@@ -276,24 +286,27 @@ def _apply_self_learning(
     except Exception:
         format_name = str(battle.get("format_id") or "")
 
+    target_id = str(battle.get("target_id") or format_name)
+    user_id = str(battle.get("user_id") or "system")
+
+    # Learnable lesson persistence: Store model-authored insight from authoritative winner
     if winner is not None:
         try:
+            insight_text = (
+                f"Battle {battle_id} format {format_name} "
+                f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
+                f"theory {str(winner.get('theory') or '')[:300]}."
+            )
             if service.using_postgres():
                 service.memory_create(
-                    str(battle.get("user_id") or "system"),
-                    (
-                        f"Battle {battle_id} format {format_name} "
-                        f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
-                        f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
-                        f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
-                        "Skills to beat opponent technique emerged."
-                    ),
+                    user_id,
+                    insight_text,
                     battle_id=battle_id,
                     model_id=str(winner.get("model_id") or ""),
                     format=format_name,
                     chosen_skills=list(winner.get("chosen_skills") or []),
                     theory=str(winner.get("theory") or ""),
-                    outcome=str(winner.get("outcome") or ""),
+                    outcome=str(winner.get("outcome") or "TEST_PASS"),
                 )
             else:
                 from .memory import maybe_remember
@@ -301,45 +314,45 @@ def _apply_self_learning(
                 maybe_remember(
                     databases,
                     database_id,
-                    insight=(
-                        f"Battle {battle_id} format {format_name} "
-                        f"winner {winner.get('model_id')} chose {winner.get('chosen_skills')} "
-                        f"theory {str(winner.get('theory') or '')[:300]} beat opponent picks "
-                        f"{[r.get('chosen_skills') for r in results if r is not winner]}. "
-                        "Skills to beat opponent technique emerged."
-                    ),
+                    insight=insight_text,
                     battle_id=battle_id,
                     model_id=str(winner.get("model_id") or ""),
+                    target_id=target_id,
+                    role=str(winner.get("role") or "general"),
+                    visibility_class="model_private",
+                    authoritative_status="verified_pass",
                     format_name=format_name,
                     chosen_skills=list(winner.get("chosen_skills") or []),
                     theory=str(winner.get("theory") or ""),
-                    outcome=str(winner.get("outcome") or ""),
-                    user_id=str(battle.get("user_id") or "system"),
+                    outcome=str(winner.get("outcome") or "TEST_PASS"),
+                    user_id=user_id,
+                    context_mode=context_mode,
                 )
         except Exception:
             pass
 
-    for r in results:
-        # A fighter only wins if it passed and is the declared winner. All failed fighters record a loss.
-        outcome = "win" if (winner is not None and r is winner) else "loss"
-        # Only attribute skills that were actually loaded or chosen
-        skills_to_attribute = list(r.get("skill_reads") or r.get("chosen_skills") or [])[:5]
-        for chosen in skills_to_attribute:
+
+    attributions = compute_skill_attributions(results)
+    for role, attrs in attributions.items():
+        for attr in attrs:
+            skill_id = attr["skill_id"]
+            outcome = attr["outcome"]
             try:
                 if service.using_postgres():
-                    _record_skill_outcome_pg(str(chosen), outcome)
+                    _record_skill_outcome_pg(str(skill_id), outcome)
                 else:
                     from .skills_registry import record_outcome
 
                     record_outcome(
                         databases,
                         database_id,
-                        str(chosen),
+                        str(skill_id),
                         outcome=outcome,
                         tier="general",
                     )
             except Exception:
                 pass
+
 
 
 @router.post("/finalize")

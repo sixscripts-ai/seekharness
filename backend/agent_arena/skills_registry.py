@@ -26,19 +26,34 @@ _DIFFICULTY_OFFSET = {
 }
 
 
+from .skills.canonical import slugify
+
+
 def _find(databases, database_id, skill_name):
+    clean = slugify(skill_name)
     res = databases.list_documents(
         database_id,
         "skills",
-        queries=[Query.equal("skill", skill_name), Query.limit(1)],
+        queries=[Query.equal("skill", clean), Query.limit(1)],
     )
     docs = res.documents
-    return docs[0] if docs else None
+    if docs:
+        return docs[0]
+    if clean != skill_name:
+        res2 = databases.list_documents(
+            database_id,
+            "skills",
+            queries=[Query.equal("skill", skill_name), Query.limit(1)],
+        )
+        if res2.documents:
+            return res2.documents[0]
+    return None
 
 
 def _defaults(skill_name: str) -> dict:
+    clean = slugify(skill_name)
     return {
-        "skill": skill_name,
+        "skill": clean,
         "elo": INITIAL_RATING,
         "wins": 0,
         "losses": 0,
@@ -49,6 +64,7 @@ def _defaults(skill_name: str) -> dict:
         "tags": [],
         "last_used": time.time(),
     }
+
 
 
 def _with_decay(entry: dict, now: float | None = None) -> dict:
