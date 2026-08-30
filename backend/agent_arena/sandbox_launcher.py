@@ -12,8 +12,19 @@ from pathlib import Path
 from . import db, event_bus
 from .battle_token import issue_battle_token
 from .config import settings
+from .runtime_packaging import (
+    attach_canonical_skill_yaml,
+    canonical_skill_runtime_env,
+    fighter_sandbox_pip_packages,
+)
 from .sandbox.client import HttpTransport, InternalClient
 from .sandbox.runner import run_battle_loop
+
+PUBLIC_SANDBOX_BOOT_FAILURE = "SANDBOX_BOOT_FAILURE"
+
+
+class SandboxBootError(RuntimeError):
+    """Sandbox process exited before useful execution."""
 
 
 def _backend_public_url() -> str:
@@ -270,8 +281,8 @@ def _finalize_scores(databases, database_id, battle_id, battle, scores) -> None:
     )
 
 
-def try_spawn_modal_sandbox(battle_id: str) -> str:
-    """Spawn Modal Sandbox running the runner. Returns sandbox_id or raises."""
+def try_spawn_modal_sandbox(battle_id: str) -> tuple[str, object]:
+    """Spawn Modal Sandbox running the runner. Returns (sandbox_id, sandbox) or raises."""
     from .hermetic import assert_not_hermetic
 
     assert_not_hermetic("modal")
@@ -312,9 +323,10 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
             "npm",
             "ca-certificates",
         )
-        .pip_install("httpx", "pytest")
+        .pip_install(*fighter_sandbox_pip_packages())
         .add_local_python_source("agent_arena")
     )
+    image = attach_canonical_skill_yaml(image)
     if skills_dir.is_dir():
         image = image.add_local_dir(str(skills_dir), remote_path="/opt/arena-skills")
     public_targets = None
@@ -334,6 +346,7 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
             "BATTLE_BOOTSTRAP_JSON": json.dumps(bootstrap),
             "ARENA_SKILLS_ROOT": "/opt/arena-skills",
             "ARENA_TARGETS_DIR": "/opt/arena-targets",
+            **canonical_skill_runtime_env(),
         }
     )
     preview_on = (
@@ -362,7 +375,7 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
             raise RuntimeError("Modal sandbox created without an id")
         if preview_on:
             _persist_preview_urls(battle_id, list(battle.get("model_ids") or []), sb)
-        return sandbox_id
+        return sandbox_id, sb
     finally:
         if public_targets is not None:
             import shutil
@@ -413,6 +426,97 @@ def _persist_preview_urls(battle_id: str, model_ids: list[str], sb) -> None:
         pass
 
 
+def _boot_wait_seconds() -> float:
+    raw = os.environ.get("ARENA_SANDBOX_BOOT_WAIT_SECONDS", "15")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 15.0
+
+
+def _sandbox_exit_code(sb: object) -> int | None:
+    poll = getattr(sb, "poll", None)
+    if callable(poll):
+        try:
+            code = poll()
+        except Exception:
+            code = None
+        if code is not None:
+            return int(code)
+    code = getattr(sb, "returncode", None)
+    if code is not None:
+        return int(code)
+    return None
+
+
+def await_sandbox_bootstrap(sb: object, *, timeout_seconds: float | None = None) -> None:
+    """Fail if the sandbox process dies before useful execution starts."""
+    wait = _boot_wait_seconds() if timeout_seconds is None else max(0.0, timeout_seconds)
+    deadline = time.monotonic() + wait
+    while True:
+        if _sandbox_exit_code(sb) is not None:
+            raise SandboxBootError("sandbox exited before useful execution")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.25, remaining))
+
+
+def fail_sandbox_boot(battle_id: str, *, sandbox_id: str | None = None) -> None:
+    """Mark a boot failure immediately. No verify, no Elo, no fighter-visible details."""
+    if sandbox_id:
+        stop_sandbox(sandbox_id)
+    from .finalization import finalize_battle
+    from .persistence import service
+
+    battle: dict = {}
+    try:
+        battle = service.battle_get("", battle_id) or {}
+    except Exception:
+        battle = {}
+    model_ids = [str(mid) for mid in (battle.get("model_ids") or []) if str(mid)]
+    if not model_ids:
+        model_ids = ["unknown"]
+    overrides = [
+        {
+            "model_id": mid,
+            "role": "fighter",
+            "phase": "main",
+            "outcome": PUBLIC_SANDBOX_BOOT_FAILURE,
+            "executor_outcome": PUBLIC_SANDBOX_BOOT_FAILURE,
+            "passed": False,
+            "verification_status": "infra_failure",
+            "_trusted": True,
+            "steps": 0,
+            "turns": 0,
+            "artifact_checks": {"present": [], "missing": []},
+        }
+        for mid in model_ids
+    ]
+    try:
+        finalize_battle(battle_id, override_results=overrides)
+    except Exception:
+        pass
+    try:
+        service.battle_update(
+            battle_id,
+            {"status": "failed", "failure_reason": PUBLIC_SANDBOX_BOOT_FAILURE},
+        )
+    except Exception:
+        pass
+    event_bus.publish(
+        battle_id,
+        {"type": "error", "data": {"message": PUBLIC_SANDBOX_BOOT_FAILURE}},
+    )
+    event_bus.publish(
+        battle_id,
+        {
+            "type": "battle_status",
+            "data": {"status": "failed", "reason": PUBLIC_SANDBOX_BOOT_FAILURE},
+        },
+    )
+
+
 def _fail_with_reason(battle_id: str, reason: str) -> None:
     from .persistence import service
 
@@ -430,19 +534,20 @@ def _fail_with_reason(battle_id: str, reason: str) -> None:
 def start_battle(battle_id: str) -> None:
     """Entry used by BackgroundTasks / Modal."""
     if os.environ.get("ARENA_USE_MODAL_SANDBOX") == "1":
+        sandbox_id = ""
         try:
-            sandbox_id = try_spawn_modal_sandbox(battle_id)
-        except Exception as exc:
-            reason = f"Sandbox spawn failed: {type(exc).__name__}: {exc}"
-            print(reason)
-            _fail_with_reason(battle_id, reason)
-            return
-        try:
-            from .persistence import service
+            sandbox_id, sb = try_spawn_modal_sandbox(battle_id)
+            try:
+                from .persistence import service
 
-            service.battle_update(battle_id, {"sandbox_id": sandbox_id})
+                service.battle_update(battle_id, {"sandbox_id": sandbox_id})
+            except Exception:
+                pass
+            await_sandbox_bootstrap(sb)
         except Exception:
-            pass
+            print(f"{PUBLIC_SANDBOX_BOOT_FAILURE} battle_id={battle_id}")
+            fail_sandbox_boot(battle_id, sandbox_id=sandbox_id or None)
+            return
         _set_status(None, None, battle_id, "running")
         return
     # No sandbox available: a target battle must not silently degrade to a

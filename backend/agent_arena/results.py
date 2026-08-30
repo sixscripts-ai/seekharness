@@ -49,6 +49,7 @@ INFRA_OUTCOMES = frozenset(
         "VERIFICATION_ERROR",
         "EXECUTOR_CRASH",
         "INFRASTRUCTURE_FAILURE",
+        "SANDBOX_BOOT_FAILURE",
         "INVALID",
     }
 )

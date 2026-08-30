@@ -265,6 +265,7 @@ _SAFE_EXECUTOR_OUTCOMES = frozenset(
         "CANCELLED",
         "CANCELED",
         "TIMEOUT",
+        "SANDBOX_BOOT_FAILURE",
     }
 )
 

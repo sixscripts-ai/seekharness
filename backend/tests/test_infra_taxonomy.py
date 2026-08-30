@@ -16,6 +16,7 @@ def test_infra_outcomes_are_not_learnable():
         "VERIFICATION_ERROR",
         "EXECUTOR_CRASH",
         "INFRASTRUCTURE_FAILURE",
+        "SANDBOX_BOOT_FAILURE",
         "TIMEOUT",
         "CANCELLED",
     ):

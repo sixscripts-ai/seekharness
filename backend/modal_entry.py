@@ -21,6 +21,10 @@ EVALUATOR_VOLUME_NAME = os.environ.get("ARENA_EVALUATOR_VOLUME", "arena-evaluato
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
+from agent_arena.runtime_packaging import (
+    attach_canonical_skill_yaml,
+    canonical_skill_runtime_env,
+)
 from agent_arena.target_library import materialize_fighter_visible_library
 
 image = (
@@ -28,6 +32,8 @@ image = (
     .pip_install_from_pyproject(str(Path(__file__).resolve().parent / "pyproject.toml"))
     .add_local_python_source("agent_arena")
 )
+# add_local_python_source ships .py only. Attach D0 YAML after that overlay.
+image = attach_canonical_skill_yaml(image)
 if _SKILLS_DIR.is_dir():
     image = image.add_local_dir(str(_SKILLS_DIR), remote_path="/opt/arena-skills")
 
@@ -73,6 +79,7 @@ if _CURRENT_SHA == "unknown":
         "ARENA_TARGETS_DIR": "/opt/arena-targets",
         "ARENA_EVALUATOR_DIR": EVALUATOR_MOUNT_PATH,
         "ARENA_BUILD_SHA": _CURRENT_SHA,
+        **canonical_skill_runtime_env(),
     },
 )
 @modal.concurrent(max_inputs=100)
