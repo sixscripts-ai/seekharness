@@ -115,7 +115,9 @@ def rank_skills_for_context(
     skill_elos: dict[str, float] | None = None,
 ) -> list[dict]:
     """Rank skills using tokenized relevance across target objectives, runtime, tags, and category."""
-    records = [s if isinstance(s, SkillRecord) else SkillRecord.from_dict(s) for s in pool]
+    records = [
+        s if isinstance(s, SkillRecord) else SkillRecord.from_dict(s) for s in pool
+    ]
     ranked = rank_skills(
         records,
         format_config,
@@ -136,7 +138,9 @@ def select_skills(
     via tokenized keyword relevance and prerequisite resolution.
     """
     pool = pool if pool is not None else (load_skill_pool() or SKILL_POOL)
-    records = [s if isinstance(s, SkillRecord) else SkillRecord.from_dict(s) for s in pool]
+    records = [
+        s if isinstance(s, SkillRecord) else SkillRecord.from_dict(s) for s in pool
+    ]
     shortlist = curate_shortlist(
         records,
         format_config,
@@ -144,8 +148,9 @@ def select_skills(
         skill_elos=skill_elos,
         max_shortlist=5,
     )
-    return [s.to_dict() for s, reason in shortlist] or [s.to_dict() for s in records[:5]]
-
+    return [s.to_dict() for s, reason in shortlist] or [
+        s.to_dict() for s in records[:5]
+    ]
 
 
 DEFAULT_TEST_CODE = (
@@ -225,9 +230,32 @@ _ARG_TOOLS = {
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", re.I | re.S)
 _JSON_TOOL_KEYS = {
-    "cmd", "command", "content", "code", "name", "id", "path", "pattern",
-    "query", "q", "url", "src", "source", "from", "dst", "dest", "to",
-    "tail", "skills", "chosen", "list",
+    "cmd",
+    "command",
+    "content",
+    "code",
+    "name",
+    "id",
+    "path",
+    "pattern",
+    "query",
+    "q",
+    "url",
+    "src",
+    "source",
+    "from",
+    "dst",
+    "dest",
+    "to",
+    "tail",
+    "skills",
+    "chosen",
+    "list",
+    "index",
+    "idx",
+    "search",
+    "find",
+    "skill",
 }
 _ALL_JSON_TOOLS = _BODY_TOOLS | _ARG_TOOLS | {"skills", "done"}
 
@@ -254,7 +282,9 @@ def _normalize_json_call(obj) -> dict | None:
         call["content"] = call.get("content") or ""
     if tool in ("write", "run", "bg"):
         call["content"] = (
-            args.get("content") if args.get("content") is not None else args.get("code", "")
+            args.get("content")
+            if args.get("content") is not None
+            else args.get("code", "")
         )
         call["cmd"] = args.get("cmd") or args.get("command") or ""
         call["name"] = args.get("name") or args.get("id") or ""
@@ -264,9 +294,13 @@ def _normalize_json_call(obj) -> dict | None:
         call["pattern"] = args.get("pattern") or args.get("query") or ""
         call["path"] = args.get("path") or "."
     if tool == "skills":
-        call["chosen"] = list(args.get("chosen") or args.get("skills") or [])
+        if "chosen" in args or "skills" in args:
+            call["chosen"] = list(args.get("chosen") or args.get("skills") or [])
         if args.get("list"):
             call["list"] = True
+        for key in ("index", "search", "skill"):
+            if args.get(key) is not None:
+                call[key] = args[key]
     if tool == "done":
         call = {"tool": "done"}
     return call
@@ -843,7 +877,13 @@ class ToolSession:
                 truncated=False,
             )
 
-    def run(self, path: str | None = None, inline: str | None = None, *, count_step: bool = True) -> ToolResult:
+    def run(
+        self,
+        path: str | None = None,
+        inline: str | None = None,
+        *,
+        count_step: bool = True,
+    ) -> ToolResult:
         t0 = time.time()
         if count_step:
             self.steps += 1
@@ -960,8 +1000,12 @@ class ToolSession:
 
     def test(self, path: str = "", *, count_step: bool = True) -> ToolResult:
         t0 = time.time()
-        if self.test_cmd and (not path or path in {".", "tests/test_target.py", "test"}):
-            res = self._run_command(self.test_cmd, tool_name="test", count_step=count_step)
+        if self.test_cmd and (
+            not path or path in {".", "tests/test_target.py", "test"}
+        ):
+            res = self._run_command(
+                self.test_cmd, tool_name="test", count_step=count_step
+            )
             out = res.output
             rc = res.exit_code if res.exit_code is not None else 1
             passed = rc == 0 or "TEST_PASS" in out
@@ -1064,9 +1108,7 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
-        blocked = _shell_command_blocked(
-            command, allow_network=self.allow_network
-        )
+        blocked = _shell_command_blocked(command, allow_network=self.allow_network)
         if blocked:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -1164,7 +1206,9 @@ class ToolSession:
             count_step=count_step,
         )
 
-    def grep(self, pattern: str, path: str = ".", *, count_step: bool = True) -> ToolResult:
+    def grep(
+        self, pattern: str, path: str = ".", *, count_step: bool = True
+    ) -> ToolResult:
         t0 = time.time()
         if count_step:
             self.steps += 1
@@ -1717,7 +1761,9 @@ class ToolSession:
             truncated=False,
         )
 
-    def logs(self, name: str, tail: str = "8000", *, count_step: bool = True) -> ToolResult:
+    def logs(
+        self, name: str, tail: str = "8000", *, count_step: bool = True
+    ) -> ToolResult:
         t0 = time.time()
         if count_step:
             self.steps += 1
@@ -1760,19 +1806,33 @@ class ToolSession:
                 )
             skill_path = self.workdir / ".agents" / "skills" / name / "SKILL.md"
             if not skill_path.is_file():
-                elapsed_ms = int((time.time() - t0) * 1000)
-                return ToolResult(
-                    tool="use_skill",
-                    success=False,
-                    output=f"ERROR: skill not mounted: {name}",
-                    error=f"skill not mounted: {name}",
-                    exit_code=1,
-                    error_type="not_found",
-                    duration_ms=elapsed_ms,
-                    mutated=False,
-                    step_charged=count_step,
-                    truncated=False,
-                )
+                from .skill_pool import skills_root
+
+                source_path = skills_root() / name / "SKILL.md"
+                if source_path.is_file():
+                    skill_path.parent.mkdir(parents=True, exist_ok=True)
+                    skill_path.write_text(
+                        source_path.read_text(encoding="utf-8", errors="ignore"),
+                        encoding="utf-8",
+                    )
+                    try:
+                        skill_path.chmod(0o444)
+                    except OSError:
+                        pass
+                else:
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    return ToolResult(
+                        tool="use_skill",
+                        success=False,
+                        output=f"ERROR: skill not mounted: {name}",
+                        error=f"skill not mounted: {name}",
+                        exit_code=1,
+                        error_type="not_found",
+                        duration_ms=elapsed_ms,
+                        mutated=False,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
             body, is_truncated = self._maybe_cap(
                 skill_path.read_text(encoding="utf-8", errors="ignore")
             )
@@ -1838,13 +1898,102 @@ class ToolSession:
         self,
         chosen: list[str] | None = None,
         *,
+        index: str | None = None,
+        search: str | None = None,
+        skill: str | None = None,
         list: bool = False,
         count_step: bool = True,
     ) -> ToolResult:
+        if list and any(value is not None for value in (index, search, skill)):
+            if count_step:
+                self.steps += 1
+            return ToolResult(
+                tool="skills",
+                success=False,
+                output="ERROR [invalid_request]: list cannot be combined with index, search, or skill",
+                error="list cannot be combined with index, search, or skill",
+                error_type="invalid_request",
+                exit_code=1,
+                duration_ms=0,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+        if chosen and any(value is not None for value in (index, search, skill)):
+            if count_step:
+                self.steps += 1
+            return ToolResult(
+                tool="skills",
+                success=False,
+                output="ERROR [invalid_request]: chosen cannot be combined with discovery selectors",
+                error="chosen cannot be combined with discovery selectors",
+                error_type="invalid_request",
+                exit_code=1,
+                duration_ms=0,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         if list:
             return self.list_skills(count_step=count_step)
         if count_step:
             self.steps += 1
+        if (
+            index is not None
+            or search is not None
+            or skill is not None
+            or chosen is None
+        ):
+            from ...skills import (
+                DiscoveryErrorView,
+                DiscoveryRequestError,
+                UnknownIndexError,
+                UnknownSkillError,
+                discover_skills,
+                format_discovery_text,
+            )
+
+            try:
+                view = discover_skills(
+                    index=index,
+                    search=search,
+                    skill=skill,
+                )
+                output = format_discovery_text(view)
+                return ToolResult(
+                    tool="skills",
+                    success=True,
+                    output=output,
+                    exit_code=0,
+                    duration_ms=0,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            except (DiscoveryRequestError, UnknownIndexError, UnknownSkillError) as exc:
+                if isinstance(exc, DiscoveryRequestError):
+                    error_type = "invalid_request"
+                elif isinstance(exc, UnknownIndexError):
+                    error_type = "unknown_index"
+                else:
+                    error_type = "unknown_skill"
+                error_view = DiscoveryErrorView(
+                    error=str(exc),
+                    error_type=error_type,
+                    requested=str(index or search or skill or ""),
+                )
+                return ToolResult(
+                    tool="skills",
+                    success=False,
+                    output=format_discovery_text(error_view),
+                    error=str(exc),
+                    error_type=error_type,
+                    exit_code=1,
+                    duration_ms=0,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
         chosen_list = chosen or []
         return ToolResult(
             tool="skills",
@@ -1860,7 +2009,9 @@ class ToolSession:
     def exec_tool(self, call: dict, *, count_step: bool = True) -> ToolResult:
         tool = str(call.get("tool") or "").strip().lower()
         if tool == "write":
-            return self.write(call.get("path", ""), call.get("content", ""), count_step=count_step)
+            return self.write(
+                call.get("path", ""), call.get("content", ""), count_step=count_step
+            )
         if tool == "read":
             return self.read(call.get("path", ""), count_step=count_step)
         if tool == "ls":
@@ -1878,17 +2029,27 @@ class ToolSession:
         if tool == "test":
             return self.test(call.get("path", ""), count_step=count_step)
         if tool == "shell":
-            return self.shell(call.get("cmd") or call.get("content", ""), count_step=count_step)
+            return self.shell(
+                call.get("cmd") or call.get("content", ""), count_step=count_step
+            )
         if tool == "install":
-            return self.install(call.get("content", "") or call.get("cmd", ""), count_step=count_step)
+            return self.install(
+                call.get("content", "") or call.get("cmd", ""), count_step=count_step
+            )
         if tool == "grep":
-            return self.grep(call.get("pattern", ""), call.get("path", "."), count_step=count_step)
+            return self.grep(
+                call.get("pattern", ""), call.get("path", "."), count_step=count_step
+            )
         if tool == "tree":
             return self.tree(call.get("path", "."), count_step=count_step)
         if tool == "cp":
-            return self.cp(call.get("src", ""), call.get("dst", ""), count_step=count_step)
+            return self.cp(
+                call.get("src", ""), call.get("dst", ""), count_step=count_step
+            )
         if tool == "mv":
-            return self.mv(call.get("src", ""), call.get("dst", ""), count_step=count_step)
+            return self.mv(
+                call.get("src", ""), call.get("dst", ""), count_step=count_step
+            )
         if tool == "rm":
             return self.rm(call.get("path", ""), count_step=count_step)
         if tool == "fetch":
@@ -1896,17 +2057,28 @@ class ToolSession:
         if tool == "search":
             return self.search(call.get("query", ""), count_step=count_step)
         if tool == "bg":
-            return self.bg(call.get("name", ""), call.get("content", ""), count_step=count_step)
+            return self.bg(
+                call.get("name", ""), call.get("content", ""), count_step=count_step
+            )
         if tool == "ps":
             return self.ps(count_step=count_step)
         if tool == "kill":
             return self.kill(call.get("name", ""), count_step=count_step)
         if tool == "logs":
-            return self.logs(call.get("name", ""), call.get("tail", "8000"), count_step=count_step)
+            return self.logs(
+                call.get("name", ""), call.get("tail", "8000"), count_step=count_step
+            )
         if tool == "use_skill":
             return self.use_skill(call.get("name", ""), count_step=count_step)
         if tool == "skills":
-            return self.skills(call.get("chosen"), list=bool(call.get("list")), count_step=count_step)
+            return self.skills(
+                call.get("chosen"),
+                index=call.get("index"),
+                search=call.get("search"),
+                skill=call.get("skill"),
+                list=bool(call.get("list")),
+                count_step=count_step,
+            )
         if tool == "done":
             return ToolResult(
                 tool="done",
@@ -2168,7 +2340,10 @@ class AdvancedExecutor(Executor):
                 return data, "VERIFY_ERROR"
             return data, None
 
-        from agent_arena.target_library import get_target_library, get_trusted_library_root
+        from agent_arena.target_library import (
+            get_target_library,
+            get_trusted_library_root,
+        )
         from agent_arena.target_verifier import (
             verify_builder_breaker_submission,
             verify_target_submission,
@@ -2322,7 +2497,8 @@ class AdvancedExecutor(Executor):
             required_artifacts = list(
                 required_artifacts
                 if required_artifacts is not None
-                else ((format_config or {}).get("artifacts") or {}).get("required") or []
+                else ((format_config or {}).get("artifacts") or {}).get("required")
+                or []
             )
             artifact_checks = {
                 "required": list(required_artifacts),
@@ -2348,7 +2524,8 @@ class AdvancedExecutor(Executor):
                 "phase_type": phase_type or phase,
                 "context_mode": context_mode,
                 "outcome": outcome,
-                "terminal_reason": terminal_reason or ("step_budget_exhausted" if budget_exceeded else "completed"),
+                "terminal_reason": terminal_reason
+                or ("step_budget_exhausted" if budget_exceeded else "completed"),
                 "passed": None,
                 "steps": sess.steps,
                 "turns": turns,
@@ -2360,9 +2537,8 @@ class AdvancedExecutor(Executor):
                 "policy": {"status": "clean", "violations": []},
                 "chosen_skills": chosen_skills,
                 "theory": theory[:2000],
-                "skill_read_ok": bool(chosen_skills) and set(chosen_skills).issubset(
-                    sess.skill_reads
-                ),
+                "skill_read_ok": bool(chosen_skills)
+                and set(chosen_skills).issubset(sess.skill_reads),
                 "skills_telemetry": skills_telemetry or {},
                 "memory_telemetry": memory_telemetry or {},
                 "preview_url": preview_url,
@@ -2434,9 +2610,7 @@ class AdvancedExecutor(Executor):
             )
         canonical_test_code = str(canonical_test_code or DEFAULT_TEST_CODE)
         harness_path = work / "tests" / "test_target.py"
-        canonical_hash = hashlib.sha256(
-            canonical_test_code.encode("utf-8")
-        ).hexdigest()
+        canonical_hash = hashlib.sha256(canonical_test_code.encode("utf-8")).hexdigest()
         try:
             harness_tampered = (
                 hashlib.sha256(harness_path.read_bytes()).hexdigest() != canonical_hash
@@ -2488,7 +2662,9 @@ class AdvancedExecutor(Executor):
 
         if target_id and not is_builder_breaker(format_config):
             # FAIL-CLOSED: if target verification was required but errored/unavailable, FAIL CLOSED
-            evidence_status = str((target_evidence or {}).get("verification_status") or "")
+            evidence_status = str(
+                (target_evidence or {}).get("verification_status") or ""
+            )
             if target_verification_error:
                 outcome = "VERIFY_ERROR"
                 passed = False
@@ -2711,9 +2887,18 @@ class AdvancedExecutor(Executor):
         raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
         tool_timeout = int(raw_timeout) if raw_timeout else None
         pick_n = int(_budget("pick_per_battle", 3, ["pick_n"]))
-        race_tokens = int(_budget("race_max_tokens", RACE_MAX_TOKENS, ["max_tokens"]) or RACE_MAX_TOKENS)
-        context_mode = str((format_config or {}).get("context_mode") or "strict").lower().strip()
-        pool = select_skills(format_config, context_mode=context_mode) or load_skill_pool() or SKILL_POOL
+        race_tokens = int(
+            _budget("race_max_tokens", RACE_MAX_TOKENS, ["max_tokens"])
+            or RACE_MAX_TOKENS
+        )
+        context_mode = (
+            str((format_config or {}).get("context_mode") or "strict").lower().strip()
+        )
+        pool = (
+            select_skills(format_config, context_mode=context_mode)
+            or load_skill_pool()
+            or SKILL_POOL
+        )
         seq = {"n": 0}
         phase_name = tool_phase_name(format_config)
         fighters = fighter_roles(format_config)
@@ -2893,7 +3078,9 @@ class AdvancedExecutor(Executor):
             mount_skills(work, pool)
             (work / "TARGET.md").write_text(target_code, encoding="utf-8")
             tests_dir = work / "tests"
-            test_code = fighter_test_code or role_test_code.get(role) or default_test_code
+            test_code = (
+                fighter_test_code or role_test_code.get(role) or default_test_code
+            )
             if _judge_only(format_config):
                 test_code = fighter_test_code or role_test_code.get(role) or ""
             if test_code:
@@ -2976,7 +3163,9 @@ class AdvancedExecutor(Executor):
             chosen_skills: list[str] = []
             last_test = ""
 
-            skill_resolver = CanonicalSkillResolver([SkillRecord.from_dict(s) for s in pool])
+            skill_resolver = CanonicalSkillResolver(
+                [SkillRecord.from_dict(s) for s in pool]
+            )
             tracker = SkillLifecycleTracker(role=role, model_id=model_id)
             for s in pool:
                 cid = skill_resolver.canonical_id(s.get("name") or s.get("id") or "")
@@ -2986,7 +3175,10 @@ class AdvancedExecutor(Executor):
 
             records = [SkillRecord.from_dict(s) for s in pool]
             from agent_arena.skills.ranking import rank_skills_detailed
-            ranked_candidates = rank_skills_detailed(records, format_config, context_mode=context_mode, limit=len(records))
+
+            ranked_candidates = rank_skills_detailed(
+                records, format_config, context_mode=context_mode, limit=len(records)
+            )
             for item in ranked_candidates:
                 tracker.record_ranked(
                     item.skill.id,
@@ -3001,6 +3193,7 @@ class AdvancedExecutor(Executor):
             memory_prompt_text = ""
             if context_mode in ("adaptive", "assisted"):
                 from agent_arena.memory import retrieve
+
                 try:
                     retrieved_mems = retrieve(
                         databases=getattr(self, "databases", None),
@@ -3010,18 +3203,32 @@ class AdvancedExecutor(Executor):
                         user_id=str(format_config.get("user_id") or "villain"),
                         model_id=model_id,
                         role=role,
-                        target_id=str(format_config.get("target_id") or format_config.get("name") or ""),
+                        target_id=str(
+                            format_config.get("target_id")
+                            or format_config.get("name")
+                            or ""
+                        ),
                         limit=3,
                     )
                 except Exception:
                     retrieved_mems = []
                 memory_candidates = len(retrieved_mems)
-                memory_supplied_ids = [str(m.get("$id") or m.get("id") or f"mem_{i}") for i, m in enumerate(retrieved_mems)]
+                memory_supplied_ids = [
+                    str(m.get("$id") or m.get("id") or f"mem_{i}")
+                    for i, m in enumerate(retrieved_mems)
+                ]
                 if retrieved_mems:
-                    insights = [f"- {m.get('insight', '')[:300]}" for m in retrieved_mems if m.get("insight")]
+                    insights = [
+                        f"- {m.get('insight', '')[:300]}"
+                        for m in retrieved_mems
+                        if m.get("insight")
+                    ]
                     if insights:
-                        memory_prompt_text = "\nPrior Lessons (Model Memory):\n" + "\n".join(insights) + "\n"
-
+                        memory_prompt_text = (
+                            "\nPrior Lessons (Model Memory):\n"
+                            + "\n".join(insights)
+                            + "\n"
+                        )
 
             memory_telemetry = {
                 "context_mode": context_mode,
@@ -3029,7 +3236,9 @@ class AdvancedExecutor(Executor):
                 "memory_candidates": memory_candidates,
                 "memory_supplied_ids": memory_supplied_ids,
                 "memory_count": len(memory_supplied_ids),
-                "memory_scope": f"user:{format_config.get('user_id', 'villain')},model:{model_id}" if context_mode in ("adaptive", "assisted") else "none",
+                "memory_scope": f"user:{format_config.get('user_id', 'villain')},model:{model_id}"
+                if context_mode in ("adaptive", "assisted")
+                else "none",
             }
 
             metrics = {"tool_errors": 0, "parse_errors": 0, "tool_calls": 0}
@@ -3077,7 +3286,6 @@ class AdvancedExecutor(Executor):
                     **extra,
                 )
 
-
             last_test: str | None = None
             if preview_url:
                 emit_action(
@@ -3105,9 +3313,7 @@ class AdvancedExecutor(Executor):
                         ]
                     )
                     fmt_name = format_config.get("name") or "a tool-using battle"
-                    mission_line = (
-                        f"Your mission: {mission}\n" if mission else ""
-                    )
+                    mission_line = f"Your mission: {mission}\n" if mission else ""
                     tool_lines = (
                         "Tools (structured tool_calls or line-grammar TOOL name arg=...):\n"
                         "TOOL read path=... | TOOL ls [path=...] | TOOL write path=... content=... | "
@@ -3115,7 +3321,7 @@ class AdvancedExecutor(Executor):
                         "TOOL grep pattern=... [path=...] | TOOL tree [path=...] | TOOL cp from=... to=... | "
                         "TOOL mv from=... to=... | TOOL rm path=... | TOOL fetch url=... | "
                         "TOOL bg name=... content=... | TOOL ps | TOOL kill name=... | TOOL logs name=... | "
-                        "TOOL use_skill name=... | TOOL skills list | TOOL test | DONE\n"
+                        "TOOL use_skill name=... | TOOL skills [index=...] [search=...] [skill=...] | TOOL test | DONE\n"
                     )
                     if format_config.get("custom") or _judge_only(format_config):
                         closeout = (
@@ -3241,7 +3447,8 @@ class AdvancedExecutor(Executor):
                             tool_step=sess.steps,
                             tool_call_id="",
                             exec_id=None,
-                            reason=norm.error_code or "no tool calls parsed from model response",
+                            reason=norm.error_code
+                            or "no tool calls parsed from model response",
                             response_hash=hashlib.sha256(
                                 (content or "").encode("utf-8", errors="ignore")
                             ).hexdigest()[:16],
@@ -3267,15 +3474,22 @@ class AdvancedExecutor(Executor):
                             break
 
                         # Provide structured feedback to model (interface guidance only, no free workspace disclosure)
-                        conversation_messages.append({"role": "assistant", "content": content or "(empty response)"})
-                        conversation_messages.append({
-                            "role": "user",
-                            "content": (
-                                f"Notice: No valid tool calls were parsed from your response (error: {norm.error_code or 'unrecognized_format'}).\n"
-                                "Please emit your actions as standard tool calls or using the TOOL line grammar.\n\n"
-                                f"Turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}."
-                            ),
-                        })
+                        conversation_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": content or "(empty response)",
+                            }
+                        )
+                        conversation_messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Notice: No valid tool calls were parsed from your response (error: {norm.error_code or 'unrecognized_format'}).\n"
+                                    "Please emit your actions as standard tool calls or using the TOOL line grammar.\n\n"
+                                    f"Turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}."
+                                ),
+                            }
+                        )
                         continue
 
                     # Reset consecutive parse failures on successful parse
@@ -3312,11 +3526,15 @@ class AdvancedExecutor(Executor):
 
                         # Validate call arguments via REGISTRY
                         if tool_name not in ("done",):
-                            norm_args, val_errors = REGISTRY.validate_call(tool_name, call)
+                            norm_args, val_errors = REGISTRY.validate_call(
+                                tool_name, call
+                            )
                             if val_errors:
                                 metrics["tool_errors"] += 1
                                 sess.steps += 1
-                                err_msg = f"ERROR: validation failed: {'; '.join(val_errors)}"
+                                err_msg = (
+                                    f"ERROR: validation failed: {'; '.join(val_errors)}"
+                                )
                                 val_result = ToolResult(
                                     tool=tool_name,
                                     success=False,
@@ -3329,11 +3547,18 @@ class AdvancedExecutor(Executor):
                                     step_charged=True,
                                     truncated=False,
                                 )
-                                turn_tool_outputs.append(f"[{tool_name}]: {val_result.output}")
+                                turn_tool_outputs.append(
+                                    f"[{tool_name}]: {val_result.output}"
+                                )
                                 emit_action(
                                     model_id,
                                     tool_name,
-                                    target=str(call.get("path") or call.get("name") or call.get("url") or ""),
+                                    target=str(
+                                        call.get("path")
+                                        or call.get("name")
+                                        or call.get("url")
+                                        or ""
+                                    ),
                                     state="failed",
                                     turn_id=turn + 1,
                                     tool_step=sess.steps,
@@ -3341,7 +3566,9 @@ class AdvancedExecutor(Executor):
                                     role=role,
                                     workspace=work.name,
                                 )
-                                record_artifact(model_id, sanitize_artifact(val_result.output), role)
+                                record_artifact(
+                                    model_id, sanitize_artifact(val_result.output), role
+                                )
                                 if sess.steps >= max_steps:
                                     finalize(
                                         budget_exceeded=True,
@@ -3365,9 +3592,7 @@ class AdvancedExecutor(Executor):
                             failed = not res.success
                             if failed:
                                 metrics["tool_errors"] += 1
-                            record_artifact(
-                                model_id, sanitize_artifact(str(res)), role
-                            )
+                            record_artifact(model_id, sanitize_artifact(str(res)), role)
                             turn_tool_outputs.append(f"[SKILLS]: {res}")
                             emit_action(
                                 model_id,
@@ -3410,7 +3635,11 @@ class AdvancedExecutor(Executor):
                             command_now = f"python {call.get('path') or ''}".strip()
                         elif tool_name_now == "test":
                             test_target = str(call.get("path") or "").strip()
-                            command_now = f"pytest {test_target}".strip() if test_target else "pytest -q"
+                            command_now = (
+                                f"pytest {test_target}".strip()
+                                if test_target
+                                else "pytest -q"
+                            )
                         elif tool_name_now == "read":
                             command_now = f"cat {call.get('path') or ''}".strip()
                         elif tool_name_now == "write":
@@ -3428,7 +3657,11 @@ class AdvancedExecutor(Executor):
                         else:
                             command_now = str(tool_name_now)
                         process_tool = tool_name_now in {
-                            "shell", "install", "run", "test", "bg",
+                            "shell",
+                            "install",
+                            "run",
+                            "test",
+                            "bg",
                         }
                         exec_id = (
                             "exec_" + uuid.uuid4().hex[:12] if process_tool else None
@@ -3464,10 +3697,15 @@ class AdvancedExecutor(Executor):
                                 if not failed:
                                     tracker.record_loaded(canon.id)
                                     tracker.record_used(canon.id)
-                                    if canon.name not in chosen_skills and canon.id not in chosen_skills:
+                                    if (
+                                        canon.name not in chosen_skills
+                                        and canon.id not in chosen_skills
+                                    ):
                                         chosen_skills.append(canon.name)
                                 else:
-                                    tracker.record_load_failed(canon.id, tool_res.error or "load_failed")
+                                    tracker.record_load_failed(
+                                        canon.id, tool_res.error or "load_failed"
+                                    )
                             else:
                                 tracker.record_selected(skill_arg)
                                 tracker.record_load_failed(skill_arg, "unknown_skill")
@@ -3475,14 +3713,18 @@ class AdvancedExecutor(Executor):
                             read_path = str(call.get("path") or "")
                             if ".agents/skills" in read_path or "SKILL.md" in read_path:
                                 for s in pool:
-                                    if s["name"] in read_path or (s.get("slug") and s["slug"] in read_path):
+                                    if s["name"] in read_path or (
+                                        s.get("slug") and s["slug"] in read_path
+                                    ):
                                         canon = skill_resolver.resolve(s["name"])
                                         if canon:
                                             tracker.record_used(canon.id)
 
                         exec_ms = int((time.time() - exec_start) * 1000)
                         exec_res_sanitized = sanitize_artifact(tool_res.output[:10000])
-                        turn_tool_outputs.append(f"[{tool_name_now} {target_now or command_now}]:\n{exec_res_sanitized[:3000]}")
+                        turn_tool_outputs.append(
+                            f"[{tool_name_now} {target_now or command_now}]:\n{exec_res_sanitized[:3000]}"
+                        )
                         emit_action(
                             model_id,
                             tool_name_now,
@@ -3500,15 +3742,13 @@ class AdvancedExecutor(Executor):
                         )
                         record_artifact(model_id, exec_res_sanitized, role)
 
-
                         tool_name = call.get("tool")
                         run_path = str(call.get("path") or "").replace("\\", "/")
                         if run_path.startswith("./"):
                             run_path = run_path[2:]
                         harness_like = tool_name == "test" or (
                             tool_name == "run"
-                            and run_path
-                            in {"tests/test_target.py", "test_target.py"}
+                            and run_path in {"tests/test_target.py", "test_target.py"}
                         )
                         if harness_like:
                             last_test = exec_res_sanitized
@@ -3517,18 +3757,25 @@ class AdvancedExecutor(Executor):
                                 break
 
                     if turn_tool_outputs:
-                        conversation_messages.append({"role": "assistant", "content": content or json.dumps(calls)})
+                        conversation_messages.append(
+                            {
+                                "role": "assistant",
+                                "content": content or json.dumps(calls),
+                            }
+                        )
                         tool_feedback_text = "\n\n".join(turn_tool_outputs)
                         listing_after = str(sess.ls(count_step=False))
-                        conversation_messages.append({
-                            "role": "user",
-                            "content": (
-                                f"Tool Output (Turn {turn + 1}/{max_turns}, step {sess.steps}/{max_steps}):\n"
-                                f"{tool_feedback_text[:4000]}\n\n"
-                                f"Workdir files:\n{listing_after}\n\n"
-                                "Emit your next TOOL calls or DONE."
-                            ),
-                        })
+                        conversation_messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Tool Output (Turn {turn + 1}/{max_turns}, step {sess.steps}/{max_steps}):\n"
+                                    f"{tool_feedback_text[:4000]}\n\n"
+                                    f"Workdir files:\n{listing_after}\n\n"
+                                    "Emit your next TOOL calls or DONE."
+                                ),
+                            }
+                        )
 
                     if is_finalized or role_recorded(model_id, record_token):
                         break
@@ -3583,9 +3830,7 @@ class AdvancedExecutor(Executor):
                         "preview_url": "",
                     }
                     with io_lock:
-                        self.emit_result(
-                            client, battle_id, phase.phase_id, result
-                        )
+                        self.emit_result(client, battle_id, phase.phase_id, result)
                         results.append(result)
 
                 for idx, phase in enumerate(plan.phases):
@@ -3615,7 +3860,9 @@ class AdvancedExecutor(Executor):
                         record_missing_handoff(phase, missing)
                         snapshots[phase.phase_id] = {
                             "files": {},
-                            "manifest": [{"path": rel, "missing": True} for rel in missing],
+                            "manifest": [
+                                {"path": rel, "missing": True} for rel in missing
+                            ],
                         }
                         continue
                     protected = {
@@ -3717,22 +3964,32 @@ class AdvancedExecutor(Executor):
                         if bb_evidence:
                             corrected["builder_breaker_verification"] = {
                                 "passed": bool(bb_evidence.get("passed")),
-                                "builder_passed": bool(bb_evidence.get("builder_passed")),
-                                "breaker_passed": bool(bb_evidence.get("breaker_passed")),
+                                "builder_passed": bool(
+                                    bb_evidence.get("builder_passed")
+                                ),
+                                "breaker_passed": bool(
+                                    bb_evidence.get("breaker_passed")
+                                ),
                             }
                         if bb_error:
                             corrected["outcome"] = "VERIFY_ERROR"
                             corrected["passed"] = False
                             corrected.setdefault("policy", {})["status"] = "invalid"
-                            corrected.setdefault("policy", {}).setdefault("violations", [])
-                            corrected["policy"]["violations"].append("target-verifier-error")
+                            corrected.setdefault("policy", {}).setdefault(
+                                "violations", []
+                            )
+                            corrected["policy"]["violations"].append(
+                                "target-verifier-error"
+                            )
                         elif bb_evidence:
                             role_passed = (
                                 bb_evidence["builder_passed"]
                                 if r.get("role") == "builder"
                                 else bb_evidence["breaker_passed"]
                             )
-                            corrected["outcome"] = "TEST_PASS" if role_passed else "TEST_FAIL"
+                            corrected["outcome"] = (
+                                "TEST_PASS" if role_passed else "TEST_FAIL"
+                            )
                             corrected["passed"] = role_passed
                         with io_lock:
                             self.emit_result(
@@ -3768,8 +4025,6 @@ class AdvancedExecutor(Executor):
         # Elo and model memory) is applied exactly once downstream on the backend
         # in /internal/finalize via _apply_self_learning() when context_mode == "adaptive".
         # This prevents redundant in-memory mutation or double-application.
-
-
 
         # Convert results to history for judge
         for r in results:

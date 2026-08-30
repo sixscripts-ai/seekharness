@@ -59,7 +59,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": "Read the text contents of a file in the workspace.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Relative path to file"}},
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path to file"}
+                },
                 "required": ["path"],
                 "additionalProperties": False,
             },
@@ -74,7 +76,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "Relative path to file"},
-                    "content": {"type": "string", "description": "Full file content to write"},
+                    "content": {
+                        "type": "string",
+                        "description": "Full file content to write",
+                    },
                 },
                 "required": ["path", "content"],
                 "additionalProperties": False,
@@ -89,7 +94,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "cmd": {"type": "string", "description": "The shell command to execute"}
+                    "cmd": {
+                        "type": "string",
+                        "description": "The shell command to execute",
+                    }
                 },
                 "required": ["cmd"],
                 "additionalProperties": False,
@@ -104,7 +112,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Optional test file or command path"}
+                    "path": {
+                        "type": "string",
+                        "description": "Optional test file or command path",
+                    }
                 },
                 "additionalProperties": False,
             },
@@ -118,7 +129,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Directory path (defaults to .)"}
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path (defaults to .)",
+                    }
                 },
                 "additionalProperties": False,
             },
@@ -132,7 +146,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path to file to remove"}
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path to file to remove",
+                    }
                 },
                 "required": ["path"],
                 "additionalProperties": False,
@@ -147,8 +164,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Relative path to python script"},
-                    "content": {"type": "string", "description": "Inline python code to execute"},
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path to python script",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Inline python code to execute",
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -177,8 +200,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "pattern": {"type": "string", "description": "Search pattern or regex"},
-                    "path": {"type": "string", "description": "Directory or file to search (defaults to .)"},
+                    "pattern": {
+                        "type": "string",
+                        "description": "Search pattern or regex",
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Directory or file to search (defaults to .)",
+                    },
                 },
                 "required": ["pattern"],
                 "additionalProperties": False,
@@ -193,7 +222,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "Directory path (defaults to .)"}
+                    "path": {
+                        "type": "string",
+                        "description": "Directory path (defaults to .)",
+                    }
                 },
                 "additionalProperties": False,
             },
@@ -238,7 +270,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "description": "Delete a file or directory in the workspace.",
             "parameters": {
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Path to delete"}},
+                "properties": {
+                    "path": {"type": "string", "description": "Path to delete"}
+                },
                 "required": ["path"],
                 "additionalProperties": False,
             },
@@ -282,8 +316,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Identifier name for background process"},
-                    "content": {"type": "string", "description": "Shell command to run in background"},
+                    "name": {
+                        "type": "string",
+                        "description": "Identifier name for background process",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Shell command to run in background",
+                    },
                 },
                 "required": ["name", "content"],
                 "additionalProperties": False,
@@ -310,7 +350,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Process name or ID to terminate"}
+                    "name": {
+                        "type": "string",
+                        "description": "Process name or ID to terminate",
+                    }
                 },
                 "required": ["name"],
                 "additionalProperties": False,
@@ -326,7 +369,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Process name or ID"},
-                    "tail": {"type": "string", "description": "Number of bytes to tail (default 8000)"},
+                    "tail": {
+                        "type": "string",
+                        "description": "Number of bytes to tail (default 8000)",
+                    },
                 },
                 "required": ["name"],
                 "additionalProperties": False,
@@ -341,7 +387,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "description": "Name of the skill to activate"}
+                    "name": {
+                        "type": "string",
+                        "description": "Name of the skill to activate",
+                    }
                 },
                 "required": ["name"],
                 "additionalProperties": False,
@@ -352,12 +401,31 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "skills",
-            "description": "List available skills or select skills for the battle.",
+            "description": "Discover and browse available agent skills across the Skill Graph hierarchy, search by keywords, or inspect a specific skill card.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "list": {"type": "boolean", "description": "If true, list available skills"},
-                    "chosen": {"type": "array", "items": {"type": "string"}, "description": "List of skill names to select"},
+                    "index": {
+                        "type": "string",
+                        "description": "Graph index path to browse (e.g. 'security' or 'security/authentication')",
+                    },
+                    "search": {
+                        "type": "string",
+                        "description": "Search query terms to find relevant public skills",
+                    },
+                    "skill": {
+                        "type": "string",
+                        "description": "Canonical skill ID to inspect compact metadata card",
+                    },
+                    "list": {
+                        "type": "boolean",
+                        "description": "If true, list available skills or root indexes",
+                    },
+                    "chosen": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of skill names to select",
+                    },
                 },
                 "additionalProperties": False,
             },
@@ -379,26 +447,58 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 
 TOOL_METADATA: dict[str, dict[str, Any]] = {
     "read": {"classification": "executable", "handler": "read", "default_step_cost": 1},
-    "write": {"classification": "executable", "handler": "write", "default_step_cost": 1},
-    "shell": {"classification": "executable", "handler": "shell", "default_step_cost": 1},
+    "write": {
+        "classification": "executable",
+        "handler": "write",
+        "default_step_cost": 1,
+    },
+    "shell": {
+        "classification": "executable",
+        "handler": "shell",
+        "default_step_cost": 1,
+    },
     "test": {"classification": "executable", "handler": "test", "default_step_cost": 1},
     "ls": {"classification": "executable", "handler": "ls", "default_step_cost": 1},
-    "clean": {"classification": "executable", "handler": "clean", "default_step_cost": 1},
+    "clean": {
+        "classification": "executable",
+        "handler": "clean",
+        "default_step_cost": 1,
+    },
     "run": {"classification": "executable", "handler": "run", "default_step_cost": 1},
-    "install": {"classification": "executable", "handler": "install", "default_step_cost": 1},
+    "install": {
+        "classification": "executable",
+        "handler": "install",
+        "default_step_cost": 1,
+    },
     "grep": {"classification": "executable", "handler": "grep", "default_step_cost": 1},
     "tree": {"classification": "executable", "handler": "tree", "default_step_cost": 1},
     "cp": {"classification": "executable", "handler": "cp", "default_step_cost": 1},
     "mv": {"classification": "executable", "handler": "mv", "default_step_cost": 1},
     "rm": {"classification": "executable", "handler": "rm", "default_step_cost": 1},
-    "fetch": {"classification": "executable", "handler": "fetch", "default_step_cost": 1},
-    "search": {"classification": "executable", "handler": "search", "default_step_cost": 1},
+    "fetch": {
+        "classification": "executable",
+        "handler": "fetch",
+        "default_step_cost": 1,
+    },
+    "search": {
+        "classification": "executable",
+        "handler": "search",
+        "default_step_cost": 1,
+    },
     "bg": {"classification": "executable", "handler": "bg", "default_step_cost": 1},
     "ps": {"classification": "executable", "handler": "ps", "default_step_cost": 1},
     "kill": {"classification": "executable", "handler": "kill", "default_step_cost": 1},
     "logs": {"classification": "executable", "handler": "logs", "default_step_cost": 1},
-    "use_skill": {"classification": "context", "handler": "use_skill", "default_step_cost": 1},
-    "skills": {"classification": "context", "handler": "skills", "default_step_cost": 1},
+    "use_skill": {
+        "classification": "context",
+        "handler": "use_skill",
+        "default_step_cost": 1,
+    },
+    "skills": {
+        "classification": "context",
+        "handler": "skills",
+        "default_step_cost": 1,
+    },
     "done": {
         "classification": "control",
         "handler": "done",
@@ -439,6 +539,12 @@ def _normalize_args(tool_name: str, raw_args: dict[str, Any]) -> dict[str, Any]:
             args["name"] = v
         elif tool == "skills" and lk in ("skills", "chosen"):
             args["chosen"] = v
+        elif tool == "skills" and lk in ("index", "idx", "path", "category"):
+            args["index"] = v
+        elif tool == "skills" and lk in ("search", "query", "q", "find"):
+            args["search"] = v
+        elif tool == "skills" and lk in ("skill", "name", "id"):
+            args["skill"] = v
         else:
             canonical_k = _ARG_ALIASES.get(lk, lk)
             args[canonical_k] = v
@@ -510,7 +616,9 @@ class ToolRegistry:
     def openai_schemas(self) -> list[dict[str, Any]]:
         return list(self._schemas)
 
-    def validate_call(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    def validate_call(
+        self, name: str, args: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[str]]:
         """Validate and normalize tool arguments against canonical typed schema.
 
         Enforces:
@@ -529,7 +637,9 @@ class ToolRegistry:
             return {}, [f"Unknown tool: '{name}'"]
 
         if not isinstance(args, dict):
-            return {}, [f"Tool arguments for '{canonical_name}' must be an object/dict, got {type(args).__name__}"]
+            return {}, [
+                f"Tool arguments for '{canonical_name}' must be an object/dict, got {type(args).__name__}"
+            ]
 
         norm_args = _normalize_args(canonical_name, dict(args))
         func = schema.get("function") or {}
@@ -544,14 +654,20 @@ class ToolRegistry:
         if not additional_allowed:
             for k in list(norm_args.keys()):
                 if k not in properties:
-                    errors.append(f"Unexpected parameter '{k}' for tool '{canonical_name}'")
+                    errors.append(
+                        f"Unexpected parameter '{k}' for tool '{canonical_name}'"
+                    )
 
         # 2. Check required parameters
         for req in required:
             if req not in norm_args or norm_args[req] is None:
-                errors.append(f"Missing required parameter '{req}' for tool '{canonical_name}'")
+                errors.append(
+                    f"Missing required parameter '{req}' for tool '{canonical_name}'"
+                )
             elif isinstance(norm_args[req], str) and not norm_args[req].strip():
-                errors.append(f"Missing required parameter '{req}' (empty string) for tool '{canonical_name}'")
+                errors.append(
+                    f"Missing required parameter '{req}' (empty string) for tool '{canonical_name}'"
+                )
 
         # 3. Check property types, item types, and enums
         for k, val in norm_args.items():
@@ -610,7 +726,9 @@ def parse_kimi_token_xml(text: str) -> list[CanonicalToolCall]:
             val = arg_match.group(2).strip()
             raw_args[key] = val
         args = _normalize_args(tool_name, raw_args)
-        calls.append(CanonicalToolCall(name=tool_name, arguments=args, dialect="kimi_token_xml"))
+        calls.append(
+            CanonicalToolCall(name=tool_name, arguments=args, dialect="kimi_token_xml")
+        )
     return calls
 
 
@@ -619,8 +737,13 @@ _XML_TAG_RE = re.compile(
     r"<(?:tool_call|invoke|function_call)(?:\s+name=[\"']([a-zA-Z0-9_-]+)[\"'])?[^>]*>(.*?)</(?:tool_call|invoke|function_call)>",
     re.DOTALL | re.IGNORECASE,
 )
-_XML_NAME_RE = re.compile(r"<(?:name|tool_name|tool)>([a-zA-Z0-9_-]+)</(?:name|tool_name|tool)>", re.I)
-_XML_ARGS_RE = re.compile(r"<(?:arguments|parameters|args)>(.*?)</(?:arguments|parameters|args)>", re.DOTALL | re.I)
+_XML_NAME_RE = re.compile(
+    r"<(?:name|tool_name|tool)>([a-zA-Z0-9_-]+)</(?:name|tool_name|tool)>", re.I
+)
+_XML_ARGS_RE = re.compile(
+    r"<(?:arguments|parameters|args)>(.*?)</(?:arguments|parameters|args)>",
+    re.DOTALL | re.I,
+)
 
 
 def parse_xml_tags(text: str) -> list[CanonicalToolCall]:
@@ -643,10 +766,16 @@ def parse_xml_tags(text: str) -> list[CanonicalToolCall]:
                 raw_args = json.loads(raw_content)
             except Exception:
                 # Fallback: key-value extraction
-                for kv in re.finditer(r"<([a-zA-Z0-9_-]+)>(.*?)</\1>", raw_content, re.DOTALL):
+                for kv in re.finditer(
+                    r"<([a-zA-Z0-9_-]+)>(.*?)</\1>", raw_content, re.DOTALL
+                ):
                     raw_args[kv.group(1)] = kv.group(2).strip()
-        args = _normalize_args(tool_name, raw_args if isinstance(raw_args, dict) else {})
-        calls.append(CanonicalToolCall(name=tool_name, arguments=args, dialect="xml_tag"))
+        args = _normalize_args(
+            tool_name, raw_args if isinstance(raw_args, dict) else {}
+        )
+        calls.append(
+            CanonicalToolCall(name=tool_name, arguments=args, dialect="xml_tag")
+        )
     return calls
 
 
@@ -662,7 +791,9 @@ def parse_arena_json(text: str) -> list[CanonicalToolCall]:
     for m in _JSON_FENCE_RE.finditer(t):
         candidates.append(m.group(1).strip())
     if not candidates:
-        if (t.startswith("[") and t.endswith("]")) or (t.startswith("{") and t.endswith("}")):
+        if (t.startswith("[") and t.endswith("]")) or (
+            t.startswith("{") and t.endswith("}")
+        ):
             candidates.append(t)
     calls: list[CanonicalToolCall] = []
     for raw in candidates:
@@ -677,15 +808,33 @@ def parse_arena_json(text: str) -> list[CanonicalToolCall]:
         for obj in payload:
             if not isinstance(obj, dict):
                 continue
-            name = str(obj.get("name") or obj.get("tool") or obj.get("action") or "").strip().lower()
+            name = (
+                str(obj.get("name") or obj.get("tool") or obj.get("action") or "")
+                .strip()
+                .lower()
+            )
             if not name:
                 continue
-            raw_args = obj.get("arguments") or obj.get("parameters") or obj.get("args") or obj.get("action_input") or {}
+            raw_args = (
+                obj.get("arguments")
+                or obj.get("parameters")
+                or obj.get("args")
+                or obj.get("action_input")
+                or {}
+            )
             if not isinstance(raw_args, dict):
-                raw_args = {k: v for k, v in obj.items() if k not in ("name", "tool", "action", "type", "call_id", "id")}
+                raw_args = {
+                    k: v
+                    for k, v in obj.items()
+                    if k not in ("name", "tool", "action", "type", "call_id", "id")
+                }
             args = _normalize_args(name, raw_args)
             call_id = str(obj.get("call_id") or obj.get("id") or "")
-            calls.append(CanonicalToolCall(name=name, arguments=args, call_id=call_id, dialect="arena_json"))
+            calls.append(
+                CanonicalToolCall(
+                    name=name, arguments=args, call_id=call_id, dialect="arena_json"
+                )
+            )
     return calls
 
 
@@ -700,12 +849,20 @@ def parse_arena_legacy(text: str) -> list[CanonicalToolCall]:
             i += 1
             continue
         if line.upper() == "DONE":
-            calls.append(CanonicalToolCall(name="done", arguments={}, dialect="arena_legacy"))
+            calls.append(
+                CanonicalToolCall(name="done", arguments={}, dialect="arena_legacy")
+            )
             break
         if line.upper().startswith("SKILLS:"):
             skills_part = line[7:].strip()
-            chosen = [s.strip() for s in skills_part.replace(",", " ").split() if s.strip()]
-            calls.append(CanonicalToolCall(name="skills", arguments={"chosen": chosen}, dialect="arena_legacy"))
+            chosen = [
+                s.strip() for s in skills_part.replace(",", " ").split() if s.strip()
+            ]
+            calls.append(
+                CanonicalToolCall(
+                    name="skills", arguments={"chosen": chosen}, dialect="arena_legacy"
+                )
+            )
             i += 1
             continue
         if line.upper().startswith("TOOL "):
@@ -723,7 +880,9 @@ def parse_arena_legacy(text: str) -> list[CanonicalToolCall]:
             if not raw_args and arg_str:
                 # Positional argument fallback
                 if name in ("read", "rm", "tree", "ls", "use_skill"):
-                    raw_args["path" if name != "use_skill" else "name"] = arg_str.strip()
+                    raw_args["path" if name != "use_skill" else "name"] = (
+                        arg_str.strip()
+                    )
                 elif name in ("shell", "install"):
                     raw_args["cmd"] = arg_str.strip()
             # Body tool continuation check (e.g. write path=... until END_TOOL)
@@ -743,7 +902,9 @@ def parse_arena_legacy(text: str) -> list[CanonicalToolCall]:
             args = _normalize_args(name, raw_args)
             if raw_args.get("error"):
                 args["error"] = raw_args["error"]
-            calls.append(CanonicalToolCall(name=name, arguments=args, dialect="arena_legacy"))
+            calls.append(
+                CanonicalToolCall(name=name, arguments=args, dialect="arena_legacy")
+            )
         i += 1
     return calls
 
@@ -767,38 +928,56 @@ def normalize_response(
                 try:
                     raw_args = json.loads(raw_args_str)
                 except Exception:
-                    raw_args = {"cmd": raw_args_str} if name == "shell" else {"raw": raw_args_str}
+                    raw_args = (
+                        {"cmd": raw_args_str}
+                        if name == "shell"
+                        else {"raw": raw_args_str}
+                    )
             elif isinstance(raw_args_str, dict):
                 raw_args = raw_args_str
             else:
                 raw_args = {}
             args = _normalize_args(name, raw_args)
             call_id = str(tc.get("id") or tc.get("call_id") or "")
-            calls.append(CanonicalToolCall(name=name, arguments=args, call_id=call_id, dialect="openai_native"))
+            calls.append(
+                CanonicalToolCall(
+                    name=name, arguments=args, call_id=call_id, dialect="openai_native"
+                )
+            )
         if calls:
-            return NormalizedToolResponse(calls=calls, dialect="openai_native", parse_status="native")
+            return NormalizedToolResponse(
+                calls=calls, dialect="openai_native", parse_status="native"
+            )
 
     text = response.text or ""
 
     # 2. Moonshot / Kimi Token XML
     kimi_calls = parse_kimi_token_xml(text)
     if kimi_calls:
-        return NormalizedToolResponse(calls=kimi_calls, dialect="kimi_token_xml", parse_status="parsed")
+        return NormalizedToolResponse(
+            calls=kimi_calls, dialect="kimi_token_xml", parse_status="parsed"
+        )
 
     # 3. Standard XML tags (<tool_call>, <invoke>)
     xml_calls = parse_xml_tags(text)
     if xml_calls:
-        return NormalizedToolResponse(calls=xml_calls, dialect="xml_tag", parse_status="parsed")
+        return NormalizedToolResponse(
+            calls=xml_calls, dialect="xml_tag", parse_status="parsed"
+        )
 
     # 4. Arena Fenced / Bare JSON
     json_calls = parse_arena_json(text)
     if json_calls:
-        return NormalizedToolResponse(calls=json_calls, dialect="arena_json", parse_status="parsed")
+        return NormalizedToolResponse(
+            calls=json_calls, dialect="arena_json", parse_status="parsed"
+        )
 
     # 5. Legacy TOOL line grammar
     legacy_calls = parse_arena_legacy(text)
     if legacy_calls:
-        return NormalizedToolResponse(calls=legacy_calls, dialect="arena_legacy", parse_status="parsed")
+        return NormalizedToolResponse(
+            calls=legacy_calls, dialect="arena_legacy", parse_status="parsed"
+        )
 
     # 6. Deterministic syntax repairs
     # Attempt to wrap bare JSON without fences
@@ -808,7 +987,15 @@ def normalize_response(
             repaired = parse_arena_json(m.group(1))
             if repaired:
                 return NormalizedToolResponse(
-                    calls=repaired, dialect="arena_json", parse_status="repaired", repair_kind="json_substring_extraction"
+                    calls=repaired,
+                    dialect="arena_json",
+                    parse_status="repaired",
+                    repair_kind="json_substring_extraction",
                 )
 
-    return NormalizedToolResponse(calls=[], dialect="none", parse_status="failed", error_code="no_valid_tool_invocation")
+    return NormalizedToolResponse(
+        calls=[],
+        dialect="none",
+        parse_status="failed",
+        error_code="no_valid_tool_invocation",
+    )
