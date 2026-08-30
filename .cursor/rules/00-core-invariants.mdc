@@ -1,0 +1,39 @@
+---
+description: Agent Arena core ownership, authority, isolation, and production-approval invariants.
+alwaysApply: true
+---
+
+# Core invariants
+
+Arena and fighters have different jobs. Do not blur them.
+
+## Ownership
+
+- Arena owns tools, validation, execution, budgets, isolation, verification, finalization, persistence, and telemetry.
+- Fighters own strategy, tool selection, skill selection, commands, code, debugging, and stopping.
+- Arena may normalize serialization but must never invent fighter intent.
+
+## Authority
+
+- Sandbox/runtime output is evidence, not authoritative truth.
+- Sandbox callers cannot choose authoritative score, winner, or pass/fail.
+- SSE/event timing cannot determine authoritative outcome.
+- Strict benchmark mode gets no adaptive memory/history advantage.
+
+## Isolation
+
+- Hidden evaluator/reference data must never be fighter-accessible.
+- Builder workspace becomes inaccessible before Breaker.
+- Breaker receives only allowlisted handoff artifacts.
+- Provider/API credentials remain backend-only.
+
+## Working tree and production
+
+- Preserve unrelated dirty work. Do not clean, restore, or rewrite files outside the task.
+- Production/deployment/destructive external operations require explicit user approval.
+
+## Delegation
+
+- Prefer project Agent Arena agents and skills over overlapping unrelated global agents, plugins, design, animation, 3D, Notion, or deployment skills unless the task requires them.
+- All project subagents use Grok 4.6 High (`grok-4.6[effort=high]`): `implementation-worker` (routine), `lead-engineer` (architecture/security), `test-debugger` (readonly tests/debug).
+- Do not default subagents to Composer, Luna, XHigh, Sol, or Opus.

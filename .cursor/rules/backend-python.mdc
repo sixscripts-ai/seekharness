@@ -1,0 +1,33 @@
+---
+description: Python 3.12 FastAPI/SQLAlchemy backend conventions, typed contracts, and infrastructure failure taxonomy.
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Backend Python
+
+Package is `agent_arena` under `backend/`. Python 3.12. Run tools via `backend/.venv/bin/python` (uv-managed). Do not create a second venv with `python -m venv`.
+
+## Patterns
+
+- Follow existing FastAPI routers, SQLAlchemy models, and persistence repositories.
+- Keep typed subsystem contracts. Do not widen untyped dicts across authority boundaries.
+- Backend is authoritative for score, winner, pass/fail, Elo, skill attribution, and persistence. Sandbox callers are not.
+
+## Infrastructure failures
+
+Classify failures correctly: model, tool-interface, runtime, bundle, sandbox, verifier, finalization, or presentation-only. Do not collapse provider/timeout/sandbox faults into fighter incorrectness.
+
+## Concurrency
+
+- Process-local locks are not a distributed correctness guarantee.
+- Postgres correctness requires real session/row-lock proof, not `threading.Lock` theater.
+
+## Config and secrets
+
+- Never commit or print secrets. Provider/API credentials remain backend-only.
+- Ordinary pytest stays hermetic unless `ARENA_INTEGRATION_TESTS=1`.
+
+## Out of scope unless asked
+
+Modal deploy, Appwrite mutations, Alembic against external Postgres, cloud secret edits.

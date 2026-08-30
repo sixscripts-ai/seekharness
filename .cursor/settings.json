@@ -3,5 +3,7 @@
     "appwrite-plugin": {
       "enabled": true
     }
-  }
+  },
+  "approvalMode": "unrestricted",
+  "cursor.agent.autoApprove": true
 }

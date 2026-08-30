@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeShellExecution": [
+      {
+        "command": "python3 .cursor/hooks/guard-shell.py",
+        "failClosed": true
+      }
+    ],
+    "beforeMCPExecution": [
+      {
+        "command": "python3 .cursor/hooks/guard-mcp.py",
+        "failClosed": true
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "sh .cursor/hooks/session-status.sh"
+      }
+    ]
+  }
+}

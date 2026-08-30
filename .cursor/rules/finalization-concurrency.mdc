@@ -1,0 +1,31 @@
+---
+description: Audit or change battle finalization, authoritative results, Elo/skill races, memory provenance, idempotent finalize, or Postgres transaction boundaries.
+alwaysApply: false
+---
+
+# Finalization and concurrency
+
+Authoritative outcome lives in `finalization.py`, `results.py`, and `scoring.py`. Persist it in one database transaction. Sandbox JSON is not a result.
+
+## Identity and authority
+
+- Authoritative result identity is `(battle_id, phase, role, model_id)`.
+- Caller scores are untrusted. Discard untrusted hint scores.
+- Sandbox callers cannot choose winner, score, or pass/fail.
+
+## Terminal state and duplicates
+
+- Terminal battles (`completed`, `failed`, `cancelled`) are protected.
+- Duplicate finalize is idempotent: return existing authoritative state with zero extra side effects.
+
+## Database concurrency
+
+- Use database-level concurrency (row locks, sorted lock order, one transaction).
+- Guard Elo races, missing-row races, and skill races in that same transaction.
+- Change Set B memory provenance applies. Do not insert raw winner memories.
+- Rollback must leave no partial Elo, skill, result, or memory writes. Retry must be idempotent.
+
+## Proof
+
+- Real DB proof is required for concurrency claims. In-process locks are not sufficient.
+- SSE/event timing cannot determine the stored outcome.

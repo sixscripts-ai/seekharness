@@ -1,0 +1,26 @@
+---
+description: Audit or change target bundles, hidden evaluators, Builder/Breaker handoff, sandbox filesystem isolation, or verifier seatbelts.
+alwaysApply: false
+---
+
+# Target security
+
+Targets load from `targets/library/<id>/` via `target_library.py`. Hidden tests and reference overlays are Arena-private.
+
+## Public / private material
+
+- Public starter and visible tests may be fighter-accessible.
+- Hidden evaluator and reference material must be absent from the fighter filesystem.
+- Path guards (`..`, `~`, absolute paths) are not sufficient isolation. Also audit Python, subprocess, symlink, and direct-read escape paths.
+
+## Handoff and runtime
+
+- Builder workspace becomes inaccessible before Breaker.
+- Breaker receives only allowlisted handoff artifacts.
+- Honor declared runtime and target harness integrity. Do not let fighters rewrite evaluator commands or private overlays.
+
+## Verifier
+
+- Runtime output is evidence. Verifier/finalization decide pass/fail.
+- Do not run the verifier outside the sandbox unless `ARENA_VERIFIER_ALLOW_INPROCESS=1` (unit tests only).
+- Do not leak hidden paths through public Git, fighter listings, or SSE payloads.

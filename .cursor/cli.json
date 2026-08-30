@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(*)",
+      "Read(**/*)",
+      "Write(**/*)",
+      "WebFetch(*)"
+    ],
+    "deny": [
+      "Write(**/.env)",
+      "Write(**/.env.*)",
+      "Write(**/*.key)",
+      "Write(**/*.pem)"
+    ]
+  }
+}

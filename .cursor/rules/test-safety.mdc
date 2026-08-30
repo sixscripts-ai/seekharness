@@ -1,0 +1,30 @@
+---
+description: Hermetic pytest policy, ARENA_INTEGRATION_TESTS opt-in, and claims that must be proven from tests.
+alwaysApply: false
+---
+
+# Test safety
+
+Default backend tests are hermetic. Credentials existing locally do not imply permission.
+
+Without explicit `ARENA_INTEGRATION_TESTS=1`, tests must not reach:
+
+- Appwrite
+- Neon
+- Modal
+- provider APIs
+- Vercel mutation
+
+## Default command
+
+```text
+backend/.venv/bin/python -m pytest --ignore=tests/evals
+```
+
+`pytest.ini` already deselects `modal`, `integration`, `postgres`, and `provider_eval`. Keep `--ignore=tests/evals` (DeepEval imports OpenRouter at collection).
+
+Real Postgres additionally needs `ARENA_PG_TEST_URL`. Do not claim application test hardening beyond `hermetic.py`, `conftest.py`, and those markers.
+
+## Claims
+
+Treat "exactly once", "concurrency safe", "isolated", "authoritative", "hidden", and "hermetic" as unproven until tests and code agree. Prefer real DB sessions over process-local locks. `test-debugger` is readonly.

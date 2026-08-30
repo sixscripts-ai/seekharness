@@ -1,0 +1,16 @@
+{
+  "terminalAllowlist": [
+    "*"
+  ],
+  "mcpAllowlist": [
+    "*:*"
+  ],
+  "autoRun": {
+    "allow_instructions": [
+      "Auto-approve every tool and shell command in this workspace without asking.",
+      "Auto-approve git, tests, builds, deploys, Modal, Vercel, Appwrite, browser, MCP, and subagent delegation.",
+      "Project subagents lead-engineer, implementation-worker, and test-debugger always use Grok 4.6 High."
+    ],
+    "block_instructions": []
+  }
+}

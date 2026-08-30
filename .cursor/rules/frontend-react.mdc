@@ -1,0 +1,23 @@
+---
+description: Vite React TypeScript frontend is presentation and control, not authoritative result or security logic.
+globs: frontend/src/**/*.ts, frontend/src/**/*.tsx
+alwaysApply: false
+---
+
+# Frontend React
+
+Vite + React + TypeScript SPA. Scripts: `pnpm -C frontend dev`, `pnpm -C frontend build`, `pnpm -C frontend lint`, `pnpm -C frontend check`.
+
+## Authority
+
+- Frontend remains presentation and control. It does not compute winner, Elo, pass/fail, or security verdicts.
+- Display Arena-persisted results. SSE/event timing is not authoritative outcome.
+- Do not send provider/API credentials to the browser.
+
+## Contracts
+
+- Reuse existing pages, hooks, and `src/lib/api.ts`.
+- Preserve public API shapes unless the approved plan changes them.
+- Point the local app with `VITE_MODAL_URL`. Do not revive disabled Modal hostnames.
+
+After UI changes, verify the real user flow, not only a screenshot.

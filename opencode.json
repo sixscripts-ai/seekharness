@@ -1,15 +1,32 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "instructions": ["frontend/src/**/*", "backend/agent_arena/**/*.py", "backend/pyproject.toml"],
+  "provider": {
+    "openrouter": {
+      "models": {
+        "deepseek/deepseek-v4-pro-0813": {
+          "name": "DeepSeek V4 Pro",
+          "variants": {
+            "high": {
+              "reasoningEffort": "high"
+            },
+            "max": {
+              "reasoningEffort": "xhigh"
+            }
+          }
+        }
+      }
+    }
+  },
   "agent": {
     "frontend": {
       "description": "Next.js 16 expert for Agent Arena frontend",
-      "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+      "model": "openrouter/deepseek/deepseek-v4-pro-0813#max",
       "prompt": "You work only in frontend/. Stack: Next.js 16, React 19, Tailwind, shadcn/ui, Appwrite. Use src/ structure. Run npm run lint after edits."
     },
     "backend": {
       "description": "FastAPI + Modal + Appwrite backend expert",
-      "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+      "model": "openrouter/deepseek/deepseek-v4-pro-0813#max",
       "prompt": "You work only in backend/. Stack: FastAPI, Python 3.11+, Appwrite Python SDK, Modal deployment, sse-starlette. Check pyproject.toml. Run pytest after edits."
     }
   }
