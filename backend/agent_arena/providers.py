@@ -1,5 +1,6 @@
 import os
 import time
+from dataclasses import dataclass
 
 import httpx
 from appwrite.exception import AppwriteException
@@ -15,216 +16,623 @@ from .ssrf import validate_base_url
 router = APIRouter(prefix="/providers", tags=["providers"])
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_PROVIDER_ID = "openrouter"
+OPENROUTER_CREDENTIAL_ENV = "OPENROUTER_API_KEY"
+OPENROUTER_CREDENTIAL_FALLBACK_ENV = "HOST_OPENROUTER_KEY"
 MODAL_KIMI_BASE = os.environ.get(
     "JUDGE_MODAL_BASE", "https://inference.us-west.modal.direct/v1"
 )
 MODAL_KIMI_MODEL = os.environ.get("JUDGE_MODAL_MODEL", "moonshotai/Kimi-K3")
 HOST_FREE_ID = "host:openrouter-free"
 
-# Multi-backend host catalog. Each entry declares how to resolve credentials.
-# Public list only includes entries whose credentials are present and valid.
-HOST_PROVIDERS: list[dict] = [
-    # --- Modal (Kimi) ---
-    {
-        "id": "host:modal-kimi",
-        "name": "Modal (Kimi-K3)",
-        "base_url": MODAL_KIMI_BASE,
-        "masked_key": "modal-key…",
-        "auth_style": "modal_proxy",
-        "model_name": MODAL_KIMI_MODEL,
-        "cred": "modal_judge",
-    },
-    # --- OpenRouter free tier (HOST_OPENROUTER_KEY) ---
-    {
-        "id": HOST_FREE_ID,
-        "name": "OpenRouter Free (Nemotron Ultra)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-nemotron-lightning",
-        "name": "OpenRouter Free (Nemotron 3.5 Lightning)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "nvidia/nemotron-3.5-lightning:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-laguna-s",
-        "name": "OpenRouter Free (Laguna S)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "poolside/laguna-s-2.1:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-laguna-xs",
-        "name": "OpenRouter Free (Laguna XS)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "poolside/laguna-xs-2.1:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-minimax-m3",
-        "name": "OpenRouter Free (MiniMax M3)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "minimax/minimax-m3:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-minimax-m27",
-        "name": "OpenRouter Free (MiniMax M2.7)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "minimax/minimax-m2.7:free",
-        "cred": "openrouter",
-    },
-    {
-        "id": "host:or-router-free",
-        "name": "OpenRouter Free (Auto)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "openrouter/free",
-        "cred": "openrouter",
-    },
-    # --- DeepSeek Direct ---
-    {
-        "id": "host:deepseek-chat",
-        "name": "DeepSeek (Chat)",
-        "base_url": "https://api.deepseek.com/v1",
-        "masked_key": "sk-…",
-        "auth_style": "bearer",
-        "model_name": "deepseek-v4-flash",
-        "cred": "deepseek",
-    },
-    # --- Groq (Fast Inference) ---
-    {
-        "id": "host:groq-qwen",
-        "name": "Groq (Qwen 3.6 27B)",
-        "base_url": "https://api.groq.com/openai/v1",
-        "masked_key": "gsk_…",
-        "auth_style": "bearer",
-        "model_name": "qwen/qwen3.6-27b",
-        "cred": "groq",
-    },
-    {
-        "id": "host:groq-compound",
-        "name": "Groq (Compound)",
-        "base_url": "https://api.groq.com/openai/v1",
-        "masked_key": "gsk_…",
-        "auth_style": "bearer",
-        "model_name": "groq/compound",
-        "cred": "groq",
-    },
-    # --- Legacy model IDs preserved for historic battle records lookup ---
-    {
-        "id": "host:opencode-go",
-        "name": "OpenCode Go (DeepSeek V4 Flash)",
-        "base_url": "https://opencode.ai/zen/go/v1",
-        "masked_key": "sk-u98...",
-        "auth_style": "bearer",
-        "model_name": "deepseek-v4-flash",
-        "cred": "",
-    },
-    {
-        "id": "host:or-nemotron-super",
-        "name": "OpenRouter Free (Nemotron Super)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "nvidia/nemotron-3-super-120b-a12b:free",
-        "cred": "",
-    },
-    {
-        "id": "host:or-gemma-31b",
-        "name": "OpenRouter Free (Gemma 4 31B)",
-        "base_url": OPENROUTER_BASE,
-        "masked_key": "sk-or-...free",
-        "auth_style": "bearer",
-        "model_name": "google/gemma-4-31b-it:free",
-        "cred": "",
-    },
-    {
-        "id": "host:groq-llama",
-        "name": "Groq (Llama 3.3 70B)",
-        "base_url": "https://api.groq.com/openai/v1",
-        "masked_key": "gsk_…",
-        "auth_style": "bearer",
-        "model_name": "llama-3.3-70b-versatile",
-        "cred": "",
-    },
-    {
-        "id": "host:merge-gateway",
-        "name": "Merge Gateway",
-        "base_url": "https://api-gateway.merge.dev/v1/openai",
-        "masked_key": "mg__…",
-        "auth_style": "bearer",
-        "model_name": "openai/gpt-4o-mini",
-        "cred": "",
-    },
-    {
-        "id": "host:tokenrouter",
-        "name": "TokenRouter",
-        "base_url": "https://api.tokenrouter.com/v1",
-        "masked_key": "sk-…",
-        "auth_style": "bearer",
-        "model_name": "moonshotai/kimi-k3",
-        "cred": "",
-    },
-    {
-        "id": "host:xai-grok",
-        "name": "xAI (Grok)",
-        "base_url": "https://api.x.ai/v1",
-        "masked_key": "xai-…",
-        "auth_style": "bearer",
-        "model_name": "grok-4-1-fast-non-reasoning",
-        "cred": "xai",
-    },
-    {
-        "id": "host:openai-gpt4o-mini",
-        "name": "OpenAI (GPT-4o mini)",
-        "base_url": "https://api.openai.com/v1",
-        "masked_key": "sk-…",
-        "auth_style": "bearer",
-        "model_name": "gpt-4o-mini",
-        "cred": "openai",
-    },
-    {
-        "id": "host:meta-muse",
-        "name": "Meta (Muse Spark)",
-        "base_url": "https://api.meta.ai/v1",
-        "masked_key": "sk-…",
-        "auth_style": "bearer",
-        "model_name": "muse-spark-1.1",
-        "cred": "",
-    },
-]
+REASONING_OFF = "off"
+REASONING_HIGH = "high"
+REASONING_MAX = "max"
+REASONING_XHIGH = "xhigh"
+_REASONING_ALIASES = {
+    REASONING_OFF: REASONING_OFF,
+    REASONING_HIGH: REASONING_HIGH,
+    REASONING_MAX: REASONING_MAX,
+    REASONING_XHIGH: REASONING_MAX,
+}
+REASONING_NONE = (REASONING_OFF,)
+REASONING_OFF_HIGH = (REASONING_OFF, REASONING_HIGH)
+REASONING_FULL = (REASONING_OFF, REASONING_HIGH, REASONING_MAX)
 
+_FIGHTER_JUDGE = ("fighter", "judge")
+_FIGHTER_ONLY = ("fighter",)
+
+
+@dataclass(frozen=True)
+class ProviderSpec:
+    id: str
+    protocol: str
+    base_url: str
+    credential_env: str
+    auth_style: str
+    cred: str
+    masked_key: str
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    arena_model_id: str
+    provider_id: str
+    upstream_model: str
+    display_name: str
+    roles: tuple[str, ...]
+    tier: str
+    context: int | None
+    context_class: str
+    reasoning_support: bool
+    reasoning_efforts: tuple[str, ...]
+    tool_support: bool
+    structured_output_support: bool
+    status: str
+
+
+@dataclass(frozen=True)
+class ResolvedModelCall:
+    arena_model_id: str
+    provider_id: str
+    protocol: str
+    base_url: str
+    auth_style: str
+    api_key: str
+    upstream_model: str
+
+
+def _provider(
+    pid: str,
+    *,
+    protocol: str,
+    base_url: str,
+    credential_env: str,
+    auth_style: str,
+    cred: str,
+    masked_key: str,
+) -> ProviderSpec:
+    return ProviderSpec(
+        id=pid,
+        protocol=protocol,
+        base_url=base_url,
+        credential_env=credential_env,
+        auth_style=auth_style,
+        cred=cred,
+        masked_key=masked_key,
+    )
+
+
+def _model(
+    arena_model_id: str,
+    provider_id: str,
+    upstream_model: str,
+    display_name: str,
+    *,
+    roles: tuple[str, ...] = _FIGHTER_JUDGE,
+    tier: str = "value",
+    context: int | None = 128_000,
+    context_class: str = "medium",
+    reasoning_support: bool = False,
+    reasoning_efforts: tuple[str, ...] = REASONING_NONE,
+    tool_support: bool = True,
+    structured_output_support: bool = False,
+    status: str = "active",
+) -> ModelSpec:
+    return ModelSpec(
+        arena_model_id=arena_model_id,
+        provider_id=provider_id,
+        upstream_model=upstream_model,
+        display_name=display_name,
+        roles=roles,
+        tier=tier,
+        context=context,
+        context_class=context_class,
+        reasoning_support=reasoning_support,
+        reasoning_efforts=reasoning_efforts,
+        tool_support=tool_support,
+        structured_output_support=structured_output_support,
+        status=status,
+    )
+
+
+PROVIDER_SPECS: dict[str, ProviderSpec] = {
+    spec.id: spec
+    for spec in (
+        _provider(
+            "modal",
+            protocol="modal-proxy",
+            base_url=MODAL_KIMI_BASE,
+            credential_env="JUDGE_MODAL_KEY",
+            auth_style="modal_proxy",
+            cred="modal_judge",
+            masked_key="modal-key…",
+        ),
+        _provider(
+            OPENROUTER_PROVIDER_ID,
+            protocol="openai-compatible",
+            base_url=OPENROUTER_BASE,
+            credential_env=OPENROUTER_CREDENTIAL_ENV,
+            auth_style="bearer",
+            cred="openrouter",
+            masked_key="sk-or-…",
+        ),
+        _provider(
+            "deepseek",
+            protocol="openai-compatible",
+            base_url="https://api.deepseek.com/v1",
+            credential_env="HOST_DEEPSEEK_KEY",
+            auth_style="bearer",
+            cred="deepseek",
+            masked_key="sk-…",
+        ),
+        _provider(
+            "groq",
+            protocol="openai-compatible",
+            base_url="https://api.groq.com/openai/v1",
+            credential_env="HOST_GROQ_KEY",
+            auth_style="bearer",
+            cred="groq",
+            masked_key="gsk_…",
+        ),
+        _provider(
+            "xai",
+            protocol="openai-compatible",
+            base_url="https://api.x.ai/v1",
+            credential_env="HOST_XAI_KEY",
+            auth_style="bearer",
+            cred="xai",
+            masked_key="xai-…",
+        ),
+        _provider(
+            "openai",
+            protocol="openai-compatible",
+            base_url="https://api.openai.com/v1",
+            credential_env="HOST_OPENAI_KEY",
+            auth_style="bearer",
+            cred="openai",
+            masked_key="sk-…",
+        ),
+        _provider(
+            "opencode_go",
+            protocol="openai-compatible",
+            base_url="https://opencode.ai/zen/go/v1",
+            credential_env="HOST_OPENCODE_GO_KEY",
+            auth_style="bearer",
+            cred="opencode_go",
+            masked_key="sk-u98...",
+        ),
+        _provider(
+            "merge",
+            protocol="openai-compatible",
+            base_url="https://api-gateway.merge.dev/v1/openai",
+            credential_env="HOST_MERGE_KEY",
+            auth_style="bearer",
+            cred="merge",
+            masked_key="mg__…",
+        ),
+        _provider(
+            "tokenrouter",
+            protocol="openai-compatible",
+            base_url="https://api.tokenrouter.com/v1",
+            credential_env="HOST_TOKENROUTER_KEY",
+            auth_style="bearer",
+            cred="tokenrouter",
+            masked_key="sk-…",
+        ),
+        _provider(
+            "meta",
+            protocol="openai-compatible",
+            base_url="https://api.meta.ai/v1",
+            credential_env="HOST_META_KEY",
+            auth_style="bearer",
+            cred="meta",
+            masked_key="sk-…",
+        ),
+    )
+}
+
+MODEL_SPECS: tuple[ModelSpec, ...] = (
+    _model(
+        "host:modal-kimi",
+        "modal",
+        MODAL_KIMI_MODEL,
+        "Modal (Kimi-K3)",
+        tier="premium",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_OFF_HIGH,
+        structured_output_support=True,
+    ),
+    _model(
+        HOST_FREE_ID,
+        OPENROUTER_PROVIDER_ID,
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "OpenRouter Free (Nemotron Ultra)",
+        tier="free",
+        context=256_000,
+        context_class="long",
+    ),
+    _model(
+        "host:or-nemotron-lightning",
+        OPENROUTER_PROVIDER_ID,
+        "nvidia/nemotron-3.5-lightning:free",
+        "OpenRouter Free (Nemotron 3.5 Lightning)",
+        tier="free",
+    ),
+    _model(
+        "host:or-laguna-s",
+        OPENROUTER_PROVIDER_ID,
+        "poolside/laguna-s-2.1:free",
+        "OpenRouter Free (Laguna S)",
+        tier="free",
+    ),
+    _model(
+        "host:or-laguna-xs",
+        OPENROUTER_PROVIDER_ID,
+        "poolside/laguna-xs-2.1:free",
+        "OpenRouter Free (Laguna XS)",
+        tier="free",
+        roles=_FIGHTER_ONLY,
+        context=64_000,
+        context_class="medium",
+    ),
+    _model(
+        "host:or-minimax-m3",
+        OPENROUTER_PROVIDER_ID,
+        "minimax/minimax-m3:free",
+        "OpenRouter Free (MiniMax M3)",
+        tier="free",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_OFF_HIGH,
+    ),
+    _model(
+        "host:or-minimax-m27",
+        OPENROUTER_PROVIDER_ID,
+        "minimax/minimax-m2.7:free",
+        "OpenRouter Free (MiniMax M2.7)",
+        tier="free",
+    ),
+    _model(
+        "host:or-router-free",
+        OPENROUTER_PROVIDER_ID,
+        "openrouter/free",
+        "OpenRouter Free (Auto)",
+        roles=_FIGHTER_ONLY,
+        tier="free",
+        context=None,
+        context_class="variable",
+        tool_support=False,
+    ),
+    _model(
+        "host:or-glm52",
+        OPENROUTER_PROVIDER_ID,
+        "z-ai/glm-5.2",
+        "OpenRouter (GLM 5.2)",
+        tier="premium",
+        context=200_000,
+        context_class="long",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_FULL,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-glm52-free",
+        OPENROUTER_PROVIDER_ID,
+        "z-ai/glm-5.2:free",
+        "OpenRouter Free (GLM 5.2)",
+        tier="free",
+        context=200_000,
+        context_class="long",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_FULL,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-deepseek-v4-pro",
+        OPENROUTER_PROVIDER_ID,
+        "deepseek/deepseek-v4-pro",
+        "OpenRouter (DeepSeek V4 Pro)",
+        tier="premium",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_FULL,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-deepseek-v4-pro-0813",
+        OPENROUTER_PROVIDER_ID,
+        "deepseek/deepseek-v4-pro-0813",
+        "OpenRouter (DeepSeek V4 Pro 0813)",
+        tier="premium",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_FULL,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-gemini-37-flash",
+        OPENROUTER_PROVIDER_ID,
+        "google/gemini-3.7-flash",
+        "OpenRouter (Gemini 3.7 Flash)",
+        tier="value",
+        context=1_000_000,
+        context_class="long",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_OFF_HIGH,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-qwen3-coder",
+        OPENROUTER_PROVIDER_ID,
+        "qwen/qwen3-coder",
+        "OpenRouter (Qwen3 Coder)",
+        tier="value",
+        context=256_000,
+        context_class="long",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_OFF_HIGH,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-qwen3-coder-flash",
+        OPENROUTER_PROVIDER_ID,
+        "qwen/qwen3-coder-flash",
+        "OpenRouter (Qwen3 Coder Flash)",
+        roles=_FIGHTER_ONLY,
+        tier="value",
+        reasoning_support=False,
+        reasoning_efforts=REASONING_NONE,
+    ),
+    _model(
+        "host:or-gpt5-nano",
+        OPENROUTER_PROVIDER_ID,
+        "openai/gpt-5-nano",
+        "OpenRouter (GPT-5 Nano)",
+        tier="value",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_FULL,
+        structured_output_support=True,
+    ),
+    _model(
+        "host:or-nex-n2-mini",
+        OPENROUTER_PROVIDER_ID,
+        "nex-agi/nex-n2-mini",
+        "OpenRouter (Nex N2 Mini)",
+        roles=_FIGHTER_ONLY,
+        tier="value",
+        context=64_000,
+        context_class="medium",
+    ),
+    _model(
+        "host:or-hy4",
+        OPENROUTER_PROVIDER_ID,
+        "tencent/hy4-preview",
+        "OpenRouter (Hunyuan 4 Preview)",
+        tier="premium",
+        context=256_000,
+        context_class="long",
+        reasoning_support=True,
+        reasoning_efforts=REASONING_OFF_HIGH,
+        status="preview",
+    ),
+    _model(
+        "host:deepseek-chat",
+        "deepseek",
+        "deepseek-v4-flash",
+        "DeepSeek (Chat)",
+        tier="value",
+        context=64_000,
+        context_class="medium",
+        structured_output_support=True,
+    ),
+    _model(
+        "host:groq-qwen",
+        "groq",
+        "qwen/qwen3.6-27b",
+        "Groq (Qwen 3.6 27B)",
+        tier="value",
+    ),
+    _model(
+        "host:groq-compound",
+        "groq",
+        "groq/compound",
+        "Groq (Compound)",
+        tier="value",
+        tool_support=True,
+    ),
+    _model(
+        "host:opencode-go",
+        "opencode_go",
+        "deepseek-v4-flash",
+        "OpenCode Go (DeepSeek V4 Flash)",
+        status="retired",
+    ),
+    _model(
+        "host:or-nemotron-super",
+        OPENROUTER_PROVIDER_ID,
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "OpenRouter Free (Nemotron Super)",
+        tier="free",
+        status="retired",
+    ),
+    _model(
+        "host:or-gemma-31b",
+        OPENROUTER_PROVIDER_ID,
+        "google/gemma-4-31b-it:free",
+        "OpenRouter Free (Gemma 4 31B)",
+        tier="free",
+        status="retired",
+    ),
+    _model(
+        "host:groq-llama",
+        "groq",
+        "llama-3.3-70b-versatile",
+        "Groq (Llama 3.3 70B)",
+        status="retired",
+    ),
+    _model(
+        "host:merge-gateway",
+        "merge",
+        "openai/gpt-4o-mini",
+        "Merge Gateway",
+        status="retired",
+    ),
+    _model(
+        "host:tokenrouter",
+        "tokenrouter",
+        "moonshotai/kimi-k3",
+        "TokenRouter",
+        status="retired",
+    ),
+    _model(
+        "host:xai-grok",
+        "xai",
+        "grok-4-1-fast-non-reasoning",
+        "xAI (Grok)",
+        tier="premium",
+        reasoning_support=False,
+        reasoning_efforts=REASONING_NONE,
+    ),
+    _model(
+        "host:openai-gpt4o-mini",
+        "openai",
+        "gpt-4o-mini",
+        "OpenAI (GPT-4o mini)",
+        tier="value",
+        structured_output_support=True,
+    ),
+    _model(
+        "host:meta-muse",
+        "meta",
+        "muse-spark-1.1",
+        "Meta (Muse Spark)",
+        status="retired",
+    ),
+)
+
+_dupes = [m.arena_model_id for m in MODEL_SPECS]
+if len(_dupes) != len(set(_dupes)):
+    raise RuntimeError("duplicate Arena model IDs in MODEL_SPECS")
+
+MODEL_BY_ID: dict[str, ModelSpec] = {m.arena_model_id: m for m in MODEL_SPECS}
+_PUBLIC_KEYS = (
+    "id",
+    "name",
+    "base_url",
+    "masked_key",
+    "auth_style",
+    "model_name",
+    "provider_id",
+    "roles",
+    "tier",
+    "context",
+    "context_class",
+    "reasoning_support",
+    "reasoning_efforts",
+    "tool_support",
+    "structured_output_support",
+    "status",
+)
+
+
+def _host_row(spec: ModelSpec) -> dict:
+    provider = PROVIDER_SPECS[spec.provider_id]
+    retired = spec.status == "retired"
+    return {
+        "id": spec.arena_model_id,
+        "name": spec.display_name,
+        "base_url": provider.base_url,
+        "masked_key": provider.masked_key,
+        "auth_style": provider.auth_style,
+        "model_name": spec.upstream_model,
+        "cred": "" if retired else provider.cred,
+        "provider_id": spec.provider_id,
+        "roles": list(spec.roles),
+        "tier": spec.tier,
+        "context": spec.context,
+        "context_class": spec.context_class,
+        "reasoning_support": spec.reasoning_support,
+        "reasoning_efforts": list(spec.reasoning_efforts),
+        "tool_support": spec.tool_support,
+        "structured_output_support": spec.structured_output_support,
+        "status": spec.status,
+    }
+
+
+HOST_PROVIDERS: list[dict] = [_host_row(spec) for spec in MODEL_SPECS]
 HOST_FREE = next(p for p in HOST_PROVIDERS if p["id"] == HOST_FREE_ID)
 HOST_BY_ID = {p["id"]: p for p in HOST_PROVIDERS}
-_PUBLIC_KEYS = ("id", "name", "base_url", "masked_key", "auth_style", "model_name")
 
 
 def is_host_model(model_id: str) -> bool:
     return model_id in HOST_BY_ID
 
 
+def get_model_spec(arena_model_id: str) -> ModelSpec:
+    spec = MODEL_BY_ID.get(arena_model_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Unknown model_id")
+    return spec
+
+
+def get_provider_spec(provider_id: str) -> ProviderSpec:
+    spec = PROVIDER_SPECS.get(provider_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Unknown provider_id")
+    return spec
+
+
+def normalize_reasoning_effort(effort: str | None) -> str | None:
+    if effort is None:
+        return None
+    key = str(effort).strip().lower()
+    if not key:
+        return None
+    canonical = _REASONING_ALIASES.get(key)
+    if canonical is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown reasoning effort: {effort}",
+        )
+    return canonical
+
+
+def validate_reasoning_effort(arena_model_id: str, effort: str | None) -> str | None:
+    spec = get_model_spec(arena_model_id)
+    normalized = normalize_reasoning_effort(effort)
+    if normalized is None:
+        return None
+    if normalized not in spec.reasoning_efforts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Model {arena_model_id} does not support reasoning effort "
+                f"{normalized}"
+            ),
+        )
+    return normalized
+
+
+def reasoning_request_fields(arena_model_id: str, effort: str | None) -> dict:
+    """Provider-layer payload fragment. Battle code must not branch on vendor."""
+    spec = get_model_spec(arena_model_id)
+    provider = get_provider_spec(spec.provider_id)
+    normalized = validate_reasoning_effort(arena_model_id, effort)
+    if normalized is None or normalized == REASONING_OFF:
+        return {}
+    if provider.id == OPENROUTER_PROVIDER_ID:
+        or_effort = REASONING_XHIGH if normalized == REASONING_MAX else normalized
+        return {"reasoning": {"effort": or_effort}}
+    return {"reasoning_effort": normalized}
+
+
 def _cred_material(cred: str) -> str | None:
     """Return api_key material for a host cred type, or None if unavailable."""
     s = settings()
     if cred == "openrouter":
-        return s.get("HOST_OPENROUTER_KEY") or None
+        return (
+            s.get(OPENROUTER_CREDENTIAL_FALLBACK_ENV)
+            or os.environ.get(OPENROUTER_CREDENTIAL_ENV)
+            or None
+        )
     if cred == "opencode_go":
         return s.get("HOST_OPENCODE_GO_KEY") or None
     if cred == "modal_judge":
@@ -254,10 +662,60 @@ def _host_configured(p: dict) -> bool:
     return bool(_cred_material(p.get("cred", "")))
 
 
+def _model_available(spec: ModelSpec) -> bool:
+    if spec.status == "retired":
+        return False
+    return bool(_cred_material(PROVIDER_SPECS[spec.provider_id].cred))
+
+
+def _provider_status(spec: ProviderSpec) -> str:
+    return "configured" if _cred_material(spec.cred) else "unconfigured"
+
+
 def configured_host_providers() -> list[dict]:
     return [
         {k: p[k] for k in _PUBLIC_KEYS} for p in HOST_PROVIDERS if _host_configured(p)
     ]
+
+
+def public_provider_catalog() -> list[dict]:
+    return [
+        {
+            "id": spec.id,
+            "protocol": spec.protocol,
+            "base_url": spec.base_url,
+            "credential_env": spec.credential_env,
+            "auth_style": spec.auth_style,
+            "status": _provider_status(spec),
+        }
+        for spec in PROVIDER_SPECS.values()
+    ]
+
+
+def public_model_catalog() -> list[dict]:
+    return [
+        {
+            "arena_model_id": spec.arena_model_id,
+            "provider_id": spec.provider_id,
+            "upstream_model": spec.upstream_model,
+            "display_name": spec.display_name,
+            "roles": list(spec.roles),
+            "tier": spec.tier,
+            "context": spec.context,
+            "context_class": spec.context_class,
+            "reasoning_support": spec.reasoning_support,
+            "reasoning_efforts": list(spec.reasoning_efforts),
+            "tool_support": spec.tool_support,
+            "structured_output_support": spec.structured_output_support,
+            "status": spec.status,
+            "available": _model_available(spec),
+        }
+        for spec in MODEL_SPECS
+    ]
+
+
+def public_catalog() -> dict:
+    return {"providers": public_provider_catalog(), "models": public_model_catalog()}
 
 
 def _fernet_keys() -> list[bytes]:
@@ -336,6 +794,12 @@ def create_provider(body: ProviderCreate, user_id: str = Depends(get_current_use
     )
 
 
+@router.get("/catalog")
+def list_model_catalog(_user_id: str = Depends(get_current_user)):
+    """Authoritative provider + model fleet. Credentials stay backend-only."""
+    return public_catalog()
+
+
 @router.get("")
 def list_providers(user_id: str = Depends(get_current_user)):
     from .persistence import service
@@ -379,21 +843,25 @@ def delete_provider(provider_id: str, user_id: str = Depends(get_current_user)):
     return {"ok": True, "id": provider_id, "name": name}
 
 
-def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str]:
-    """Return (base_url, auth_style, api_key, model_name) for a battle model_id."""
-    host = HOST_BY_ID.get(model_id)
-    if host is not None:
-        key = _cred_material(host.get("cred", ""))
+def resolve_model_call(model_id: str, user_id: str) -> ResolvedModelCall:
+    """Arena model ID → ModelSpec → ProviderSpec → resolved API call."""
+    spec = MODEL_BY_ID.get(model_id)
+    if spec is not None:
+        provider = PROVIDER_SPECS[spec.provider_id]
+        key = _cred_material("" if spec.status == "retired" else provider.cred)
         if not key:
             raise HTTPException(
                 status_code=500,
                 detail=f"Host credentials not configured for {model_id}",
             )
-        return (
-            host["base_url"],
-            host["auth_style"],
-            key,
-            host["model_name"],
+        return ResolvedModelCall(
+            arena_model_id=spec.arena_model_id,
+            provider_id=provider.id,
+            protocol=provider.protocol,
+            base_url=provider.base_url,
+            auth_style=provider.auth_style,
+            api_key=key,
+            upstream_model=spec.upstream_model,
         )
     from .persistence import service
 
@@ -403,11 +871,25 @@ def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str
     if doc.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not your provider")
     api_key = _decrypt_with_any(doc["encrypted_key"])
+    return ResolvedModelCall(
+        arena_model_id=model_id,
+        provider_id="user",
+        protocol="openai-compatible",
+        base_url=doc["base_url"],
+        auth_style=doc["auth_style"],
+        api_key=api_key,
+        upstream_model=doc.get("model_name") or "",
+    )
+
+
+def get_model_call_spec(model_id: str, user_id: str) -> tuple[str, str, str, str]:
+    """Return (base_url, auth_style, api_key, model_name) for a battle model_id."""
+    resolved = resolve_model_call(model_id, user_id)
     return (
-        doc["base_url"],
-        doc["auth_style"],
-        api_key,
-        doc.get("model_name") or "",
+        resolved.base_url,
+        resolved.auth_style,
+        resolved.api_key,
+        resolved.upstream_model,
     )
 
 

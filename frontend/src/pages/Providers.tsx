@@ -28,9 +28,110 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { api, isHostProviderId, type ProviderOut } from "@/lib/api";
+import { ApiError, api, isHostProviderId, type ProviderOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useHiddenProviders } from "@/lib/hiddenProviders";
+
+declare const __DEFAULT_MODAL_URL__: string;
+
+type CatalogModel = {
+  arena_model_id: string;
+  provider_id: string;
+  upstream_model: string;
+  display_name: string;
+  roles: string[];
+  tier: string;
+  context: number | null;
+  context_class: string;
+  reasoning_support: boolean;
+  reasoning_efforts: string[];
+  tool_support: boolean;
+  structured_output_support: boolean;
+  status: string;
+  available: boolean;
+};
+
+type CatalogProvider = {
+  id: string;
+  protocol: string;
+  base_url: string;
+  credential_env: string;
+  auth_style: string;
+  status: string;
+};
+
+type ModelCatalog = {
+  providers: CatalogProvider[];
+  models: CatalogModel[];
+};
+
+async function loadModelCatalog(token: string): Promise<ModelCatalog> {
+  const base = (import.meta.env.VITE_MODAL_URL || __DEFAULT_MODAL_URL__).replace(
+    /\/$/,
+    "",
+  );
+  const res = await fetch(`${base}/providers/catalog`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+  const text = await res.text();
+  if (!res.ok) throw new ApiError(res.status, text);
+  return JSON.parse(text) as ModelCatalog;
+}
+
+function formatContext(model: CatalogModel): string {
+  if (model.context && model.context_class) {
+    const window =
+      model.context >= 1000
+        ? `${Math.round(model.context / 1000)}k`
+        : String(model.context);
+    return `${window} · ${model.context_class}`;
+  }
+  if (model.context_class) return model.context_class;
+  return "n/a";
+}
+
+function formatRoles(roles: string[]): string {
+  if (!roles.length) return "none";
+  return roles
+    .map((role) => role.charAt(0).toUpperCase() + role.slice(1))
+    .join(" · ");
+}
+
+function formatReasoning(model: CatalogModel): string {
+  if (!model.reasoning_support) return "none";
+  return model.reasoning_efforts.join(", ") || "supported";
+}
+
+function catalogStatusLabel(model: CatalogModel): {
+  label: string;
+  className: string;
+} {
+  if (model.status === "retired") {
+    return {
+      label: "RETIRED",
+      className: "border-zinc-600 bg-zinc-900 text-zinc-400",
+    };
+  }
+  if (!model.available) {
+    return {
+      label: "UNAVAILABLE",
+      className: "border-amber-500/40 bg-amber-950/40 text-amber-300",
+    };
+  }
+  if (model.status === "preview") {
+    return {
+      label: "PREVIEW",
+      className: "border-sky-500/40 bg-sky-950/40 text-sky-300",
+    };
+  }
+  return {
+    label: "CONFIGURED",
+    className: "border-emerald-500/40 bg-emerald-950/40 text-emerald-400",
+  };
+}
 
 type AuthoritativeState = "UNTESTED" | "TESTING" | "HEALTHY" | "ERROR";
 
@@ -166,6 +267,10 @@ export default function Providers() {
     useHiddenProviders();
 
   const [items, setItems] = useState<ProviderOut[]>([]);
+  const [catalog, setCatalog] = useState<ModelCatalog>({
+    providers: [],
+    models: [],
+  });
   const [loading, setLoading] = useState(true);
   const [filterQuery, setFilterQuery] = useState("");
   const [activeTab, setActiveTab] = useState<"all" | "personal" | "hidden">(
@@ -217,8 +322,12 @@ export default function Providers() {
     try {
       const token = (await refreshJwt()) || jwt;
       if (!token) return;
-      const data = await api.providers(token);
+      const [data, modelCatalog] = await Promise.all([
+        api.providers(token),
+        loadModelCatalog(token),
+      ]);
       setItems(data);
+      setCatalog(modelCatalog);
     } catch (e) {
       setErr(cleanErrorMessage(e, "Failed to load provider registry"));
     } finally {
@@ -226,14 +335,19 @@ export default function Providers() {
     }
   }
 
+  const providerById = useMemo(
+    () => Object.fromEntries(catalog.providers.map((p) => [p.id, p])),
+    [catalog.providers],
+  );
+
   const { platformModels, personalProviders } = useMemo(() => {
     return {
-      platformModels: items.filter((p) => isHostProviderId(p.id)),
+      platformModels: catalog.models,
       personalProviders: items.filter((p) => !isHostProviderId(p.id)),
     };
-  }, [items]);
+  }, [catalog.models, items]);
 
-  function matchesSearch(p: ProviderOut) {
+  function matchesProviderSearch(p: ProviderOut) {
     if (!filterQuery.trim()) return true;
     const q = filterQuery.toLowerCase();
     return (
@@ -243,29 +357,49 @@ export default function Providers() {
     );
   }
 
+  function matchesCatalogSearch(model: CatalogModel) {
+    if (!filterQuery.trim()) return true;
+    const q = filterQuery.toLowerCase();
+    const provider = providerById[model.provider_id];
+    return (
+      model.display_name.toLowerCase().includes(q) ||
+      model.upstream_model.toLowerCase().includes(q) ||
+      model.provider_id.toLowerCase().includes(q) ||
+      model.tier.toLowerCase().includes(q) ||
+      model.status.toLowerCase().includes(q) ||
+      model.roles.some((role) => role.toLowerCase().includes(q)) ||
+      Boolean(provider?.base_url.toLowerCase().includes(q))
+    );
+  }
+
   const visiblePlatform = useMemo(() => {
-    return platformModels.filter((p) => {
-      if (activeTab === "hidden") return isHidden(p.id) && matchesSearch(p);
-      return !isHidden(p.id) && matchesSearch(p);
+    return platformModels.filter((model) => {
+      const hidden = isHidden(model.arena_model_id);
+      if (activeTab === "hidden") return hidden && matchesCatalogSearch(model);
+      return !hidden && matchesCatalogSearch(model);
     });
-  }, [platformModels, activeTab, isHidden, filterQuery]);
+  }, [platformModels, activeTab, isHidden, filterQuery, providerById]);
 
   const visiblePersonal = useMemo(() => {
     return personalProviders.filter((p) => {
-      if (activeTab === "hidden") return isHidden(p.id) && matchesSearch(p);
-      return !isHidden(p.id) && matchesSearch(p);
+      if (activeTab === "hidden") return isHidden(p.id) && matchesProviderSearch(p);
+      return !isHidden(p.id) && matchesProviderSearch(p);
     });
   }, [personalProviders, activeTab, isHidden, filterQuery]);
 
-  const totalActiveCount = items.filter((p) => !isHidden(p.id)).length;
-  const totalHiddenCount = items.filter((p) => isHidden(p.id)).length;
+  const totalActiveCount =
+    platformModels.filter((model) => !isHidden(model.arena_model_id)).length +
+    personalProviders.filter((p) => !isHidden(p.id)).length;
+  const totalHiddenCount =
+    platformModels.filter((model) => isHidden(model.arena_model_id)).length +
+    personalProviders.filter((p) => isHidden(p.id)).length;
 
-  function handleToggleHide(p: ProviderOut) {
-    const isNowHidden = toggle(p.id);
+  function handleToggleHide(id: string, name: string) {
+    const isNowHidden = toggle(id);
     if (isNowHidden) {
-      setMsg(`Removed "${p.name}" from active arena lineup.`);
+      setMsg(`Removed "${name}" from active arena lineup.`);
     } else {
-      setMsg(`Restored "${p.name}" to active arena lineup.`);
+      setMsg(`Restored "${name}" to active arena lineup.`);
     }
   }
 
@@ -606,55 +740,108 @@ export default function Providers() {
                   </div>
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {visiblePlatform.map((p) => {
-                      const health = healthMap[p.id] || { state: "HEALTHY" };
+                    {visiblePlatform.map((model) => {
+                      const health = healthMap[model.arena_model_id] || {
+                        state: "UNTESTED",
+                      };
                       const isTesting = health.state === "TESTING";
+                      const catalogStatus = catalogStatusLabel(model);
+                      const liveStatus =
+                        health.state === "HEALTHY"
+                          ? {
+                              label: "HEALTHY",
+                              className:
+                                "border-emerald-500/40 bg-emerald-950/40 text-emerald-400",
+                            }
+                          : health.state === "ERROR"
+                            ? {
+                                label: "ERROR",
+                                className:
+                                  "border-red-500/40 bg-red-950/40 text-red-400",
+                              }
+                            : health.state === "TESTING"
+                              ? {
+                                  label: "TESTING",
+                                  className:
+                                    "border-accent/40 bg-accent/10 text-accent",
+                                }
+                              : catalogStatus;
 
                       return (
                         <div
-                          key={p.id}
+                          key={model.arena_model_id}
                           className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-5 shadow-lg space-y-4 transition-all hover:border-accent/40"
                         >
                           <div className="space-y-2">
                             <div className="flex items-start justify-between gap-2">
                               <div>
                                 <div className="mono text-[10px] font-bold uppercase tracking-wider text-accent">
-                                  PLATFORM HOSTED
+                                  {model.provider_id}
                                 </div>
                                 <h3 className="text-sm font-bold text-white">
-                                  {p.name}
+                                  {model.display_name}
                                 </h3>
                               </div>
-                              <span className="mono flex items-center gap-1.5 rounded border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10px] font-bold text-emerald-400">
-                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-                                READY
+                              <span
+                                className={`mono flex items-center gap-1.5 rounded border px-2.5 py-0.5 text-[10px] font-bold ${liveStatus.className}`}
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
+                                {liveStatus.label}
                               </span>
                             </div>
                             <div className="mono text-[11px] text-zinc-400">
-                              {p.model_name || "Auto-routed"}
+                              {model.upstream_model}
                             </div>
                           </div>
 
                           <div className="border-t border-[#1F1F22] pt-3 text-[11px] space-y-1.5 mono text-zinc-400">
                             <div className="flex justify-between">
-                              <span>Capabilities:</span>
+                              <span>Roles:</span>
                               <span className="text-white font-medium">
-                                Fighter ✓ · Judge ✓
+                                {formatRoles(model.roles)}
                               </span>
                             </div>
                             <div className="flex justify-between">
-                              <span>Latency:</span>
-                              <span className="text-emerald-400 font-medium">
-                                {health.latencyMs ? `${health.latencyMs}ms` : "Sub-second"}
+                              <span>Reasoning:</span>
+                              <span className="text-white font-medium">
+                                {formatReasoning(model)}
                               </span>
                             </div>
+                            <div className="flex justify-between">
+                              <span>Context:</span>
+                              <span className="text-white font-medium">
+                                {formatContext(model)}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Tier:</span>
+                              <span className="text-white font-medium uppercase">
+                                {model.tier}
+                              </span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Availability:</span>
+                              <span className="text-white font-medium">
+                                {model.available ? "ready" : "credential missing"}
+                              </span>
+                            </div>
+                            {health.latencyMs ? (
+                              <div className="flex justify-between">
+                                <span>Latency:</span>
+                                <span className="text-emerald-400 font-medium">
+                                  {health.latencyMs}ms
+                                </span>
+                              </div>
+                            ) : null}
                           </div>
 
                           <div className="flex items-center gap-2 pt-1">
                             <button
                               type="button"
-                              onClick={() => testProviderConnection(p.id)}
-                              disabled={isTesting}
+                              onClick={() =>
+                                testProviderConnection(model.arena_model_id)
+                              }
+                              disabled={isTesting || !model.available}
                               className="mono flex-1 h-8 items-center justify-center gap-2 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[11px] font-bold text-zinc-300 transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
                             >
                               {isTesting ? (
@@ -669,7 +856,12 @@ export default function Providers() {
 
                             <button
                               type="button"
-                              onClick={() => handleToggleHide(p)}
+                              onClick={() =>
+                                handleToggleHide(
+                                  model.arena_model_id,
+                                  model.display_name,
+                                )
+                              }
                               title="Remove/Hide from arena selectors"
                               className="mono h-8 px-3 rounded-lg border border-[#2A2A2E] bg-[#0D0D0F] text-[10.5px] font-bold text-zinc-400 hover:border-zinc-600 hover:text-white transition-colors"
                             >
@@ -741,7 +933,7 @@ export default function Providers() {
                               <div className="flex items-center gap-1">
                                 <button
                                   type="button"
-                                  onClick={() => handleToggleHide(p)}
+                                  onClick={() => handleToggleHide(p.id, p.name)}
                                   className="grid h-7 w-7 place-items-center rounded text-zinc-400 hover:bg-[#161619] hover:text-white"
                                   title="Hide from selectors"
                                 >
@@ -876,20 +1068,20 @@ export default function Providers() {
               ) : (
                 <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
                   {/* Hidden Platform Models */}
-                  {visiblePlatform.map((p) => (
+                  {visiblePlatform.map((model) => (
                     <div
-                      key={p.id}
+                      key={model.arena_model_id}
                       className="flex flex-col justify-between rounded-xl border border-[#1F1F22] bg-[#050508] p-6 shadow-xl space-y-4 opacity-80 hover:opacity-100 transition-opacity"
                     >
                       <div className="space-y-1">
                         <div className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-500">
-                          HIDDEN PLATFORM MODEL
+                          HIDDEN PLATFORM MODEL · {model.provider_id}
                         </div>
                         <h3 className="text-base font-bold text-white">
-                          {p.name}
+                          {model.display_name}
                         </h3>
                         <div className="mono text-xs text-zinc-400">
-                          {p.model_name || "Platform"}
+                          {model.upstream_model}
                         </div>
                       </div>
 
@@ -897,7 +1089,12 @@ export default function Providers() {
                         <span className="mono text-[10px] text-zinc-500">Excluded from arena</span>
                         <button
                           type="button"
-                          onClick={() => handleToggleHide(p)}
+                          onClick={() =>
+                            handleToggleHide(
+                              model.arena_model_id,
+                              model.display_name,
+                            )
+                          }
                           className="mono h-8 px-4 rounded-lg border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60 transition-all flex items-center gap-1.5"
                         >
                           <Eye className="h-3.5 w-3.5" />
@@ -935,7 +1132,7 @@ export default function Providers() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => handleToggleHide(p)}
+                          onClick={() => handleToggleHide(p.id, p.name)}
                           className="mono flex-1 h-8 px-4 rounded-lg border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60 transition-all flex items-center justify-center gap-1.5"
                         >
                           <Eye className="h-3.5 w-3.5" />
