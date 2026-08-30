@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.provider_eval
+
 from deepeval import assert_test
 from deepeval.dataset import EvaluationDataset, Golden
 from deepeval.test_case import LLMTestCase

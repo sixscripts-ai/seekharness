@@ -13,6 +13,7 @@ from . import (  # noqa: F401
     leaderboard,
     memories,
     providers,
+    results,
     scores,
     skills,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "providers",
     "drafts",
     "events",
+    "results",
     "scores",
     "leaderboard",
     "formats",

@@ -8,40 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..results import is_learnable_model_outcome
 from .canonical import CanonicalSkillResolver
-
-# Terminal outcomes that qualify for competitive learning attribution
-LEARNABLE_OUTCOMES = {
-    "TEST_PASS",
-    "COMPLETED",
-    "PASSED",
-    "TEST_FAIL",
-    "FAILED",
-    "STEP_BUDGET_EXCEEDED",
-    "MAX_TURNS_EXCEEDED",
-    "PARSE_RECOVERY_EXHAUSTED",
-}
-
-# Non-learnable failure modes (infrastructure/environment/outage errors)
-NON_LEARNABLE_OUTCOMES = {
-    "PROVIDER_ERROR",
-    "PROVIDER_TIMEOUT",
-    "EXECUTOR_CRASH",
-    "SANDBOX_ERROR",
-    "CANCELLED",
-    "INFRASTRUCTURE_FAILURE",
-    "VERIFICATION_ERROR",
-}
 
 
 def is_learnable_outcome(outcome: str) -> bool:
     """Determine whether an execution outcome represents valid model performance."""
-    norm = str(outcome or "").strip().upper()
-    if norm in NON_LEARNABLE_OUTCOMES:
-        return False
-    if any(err in norm for err in ("PROVIDER", "CRASH", "CANCEL", "SANDBOX", "INFRA")):
-        return False
-    return True
+    return is_learnable_model_outcome(outcome)
 
 
 def compute_skill_attributions(

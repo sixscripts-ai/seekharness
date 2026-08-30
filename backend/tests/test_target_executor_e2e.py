@@ -64,6 +64,9 @@ def test_executor_runs_target_bundle_with_trusted_verifier(tmp_path: Path, monke
     artifacts = "\n".join(r.get("artifact", "") for r in transport.rounds)
     assert "TEST_PASS" in artifacts
     assert "broken-package-recovery" in artifacts
+    results = _executor_results(transport.rounds)
+    assert all("target_verification_error" not in r for r in results)
+    assert all("hidden_output" not in r for r in results)
 
 
 def test_executor_fail_closed_on_missing_target(monkeypatch: pytest.MonkeyPatch):
@@ -300,7 +303,8 @@ def test_builder_breaker_executor_runs_asymmetric_phases(
     assert bb_evidence is not None
     assert bb_evidence["builder_passed"] is True
     assert bb_evidence["breaker_passed"] is False
-    assert bb_evidence["breaker_exploit_passed"] is False
+    assert "breaker_exploit_passed" not in bb_evidence
+    assert "builder_hidden_passed" not in bb_evidence
     # The per-role outcomes reflect the asymmetric verdict.
     assert build_result["passed"] is True
     assert break_result["passed"] is False

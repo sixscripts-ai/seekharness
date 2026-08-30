@@ -193,6 +193,7 @@ def test_trusted_verifier_on_reference_solution():
     assert evidence.hidden_exit_code == 0
 
 
+@pytest.mark.integration
 def test_target_battle_creation_solo_and_builder_breaker_contracts(client):
     from agent_arena.auth import get_current_user
     from tests.conftest import make_user_id, playable_format_id

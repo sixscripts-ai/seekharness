@@ -165,6 +165,14 @@ class FakeTransport:
             return {"ok": True, "event_id": "fake", "sequence": json.get("sequence")}
         if path == "/internal/status":
             return {"status": self.battle_status}
+        if path == "/internal/finalize":
+            return {"ok": True, "status": json.get("status") or "completed"}
+        if path == "/internal/verify":
+            return {
+                "ok": True,
+                "passed": False,
+                "error": "fake transport does not run the trusted verifier",
+            }
         raise RuntimeError(f"unknown path {path}")
 
 
@@ -259,3 +267,34 @@ class InternalClient:
                 "scores": scores or {},
             },
         )
+
+    def verify_target(
+        self,
+        battle_id: str,
+        target_id: str,
+        submitted_files: dict[str, str] | None = None,
+        *,
+        kind: str = "solo",
+        builder_files: dict[str, str] | None = None,
+        breaker_files: dict[str, str] | None = None,
+        phase: str = "",
+        role: str = "",
+        model_id: str = "",
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "battle_id": battle_id,
+            "target_id": target_id,
+            "kind": kind,
+            "submitted_files": submitted_files or {},
+        }
+        if builder_files is not None:
+            payload["builder_files"] = builder_files
+        if breaker_files is not None:
+            payload["breaker_files"] = breaker_files
+        if phase:
+            payload["phase"] = phase
+        if role:
+            payload["role"] = role
+        if model_id:
+            payload["model_id"] = model_id
+        return self.t.post("/internal/verify", payload)

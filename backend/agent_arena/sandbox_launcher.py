@@ -274,6 +274,9 @@ def _finalize_scores(databases, database_id, battle_id, battle, scores) -> None:
 
 def try_spawn_modal_sandbox(battle_id: str) -> str:
     """Spawn Modal Sandbox running the runner. Returns sandbox_id or raises."""
+    from .hermetic import assert_not_hermetic
+
+    assert_not_hermetic("modal")
     try:
         import modal
     except ImportError as exc:
@@ -314,8 +317,16 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     )
     if skills_dir.is_dir():
         image = image.add_local_dir(str(skills_dir), remote_path="/opt/arena-skills")
+    public_targets = None
     if targets_dir.is_dir():
-        image = image.add_local_dir(str(targets_dir), remote_path="/opt/arena-targets")
+        import shutil
+        import tempfile
+
+        from .target_library import materialize_fighter_visible_library
+
+        public_targets = Path(tempfile.mkdtemp(prefix="arena-fighter-targets-"))
+        materialize_fighter_visible_library(targets_dir, public_targets)
+        image = image.add_local_dir(str(public_targets), remote_path="/opt/arena-targets")
     secret = modal.Secret.from_dict(
         {
             "BATTLE_TOKEN": sandbox_token,
@@ -337,20 +348,26 @@ def try_spawn_modal_sandbox(battle_id: str) -> str:
     }
     if preview_on:
         create_kwargs["encrypted_ports"] = [8080, 8081]
-    sb = modal.Sandbox.create(
-        "python",
-        "-c",
-        (f"from agent_arena.sandbox.entrypoint import main; main({battle_id!r})"),
-        **create_kwargs,
-    )
-    sandbox_id = (
-        getattr(sb, "object_id", None) or getattr(sb, "sandbox_id", None) or str(sb)
-    )
-    if not sandbox_id:
-        raise RuntimeError("Modal sandbox created without an id")
-    if preview_on:
-        _persist_preview_urls(battle_id, list(battle.get("model_ids") or []), sb)
-    return sandbox_id
+    try:
+        sb = modal.Sandbox.create(
+            "python",
+            "-c",
+            (f"from agent_arena.sandbox.entrypoint import main; main({battle_id!r})"),
+            **create_kwargs,
+        )
+        sandbox_id = (
+            getattr(sb, "object_id", None) or getattr(sb, "sandbox_id", None) or str(sb)
+        )
+        if not sandbox_id:
+            raise RuntimeError("Modal sandbox created without an id")
+        if preview_on:
+            _persist_preview_urls(battle_id, list(battle.get("model_ids") or []), sb)
+        return sandbox_id
+    finally:
+        if public_targets is not None:
+            import shutil
+
+            shutil.rmtree(public_targets, ignore_errors=True)
 
 
 def _persist_preview_urls(battle_id: str, model_ids: list[str], sb) -> None:

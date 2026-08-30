@@ -412,8 +412,11 @@ def test_blocked_submission_path_partitions():
     assert _blocked_submission_path("../x.py") is True
     assert _blocked_submission_path("a/../../x.py") is True
     assert _blocked_submission_path("src/app.py") is False
-    assert _blocked_submission_path("tests/visible/test_x.py") is False
-    assert _blocked_submission_path("tests/breaker_harness.py") is False
+    assert _blocked_submission_path("tests/visible/test_x.py") is True
+    assert _blocked_submission_path("tests/breaker_harness.py") is True
+    assert _blocked_submission_path("conftest.py") is True
+    assert _blocked_submission_path("pytest.ini") is True
+    assert _blocked_submission_path("sitecustomize.py") is True
 
 
 def test_role_objectives_cannot_leak_private_verifier_content(tmp_path: Path):

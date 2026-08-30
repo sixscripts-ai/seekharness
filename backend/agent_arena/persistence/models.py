@@ -124,6 +124,9 @@ class Battle(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    finalized_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     difficulty: Mapped[str | None] = mapped_column(String(32), nullable=True)
     draft_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     battle_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
@@ -145,6 +148,48 @@ class Battle(Base):
         server_default=func.now(),
         onupdate=func.now(),
     )
+
+
+class BattleResult(Base):
+    """Canonical authoritative final result per (battle_id, phase, role, model_id)."""
+
+    __tablename__ = "battle_results"
+    __table_args__ = (
+        UniqueConstraint(
+            "battle_id", "phase", "role", "model_id", name="uq_battle_results_identity"
+        ),
+        Index("ix_battle_results_battle_id", "battle_id"),
+        Index("ix_battle_results_model_id", "model_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    battle_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("battles.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    phase: Mapped[str] = mapped_column(String(64), nullable=False, default="main")
+    role: Mapped[str] = mapped_column(String(64), nullable=False, default="fighter")
+    model_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed")
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unverified"
+    )
+    termination_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    artifact_refs: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), nullable=False, default=list
+    )
+    metrics: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    finalized_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    result_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
 
 
 class BattleParticipant(Base):
@@ -326,6 +371,8 @@ class Memory(Base):
         Index("ix_memories_user_id", "user_id"),
         Index("ix_memories_battle_id", "battle_id"),
         Index("ix_memories_created_at", "created_at"),
+        Index("ix_memories_model_id", "model_id"),
+        Index("ix_memories_target_id", "target_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
@@ -340,6 +387,12 @@ class Memory(Base):
     )
     theory: Mapped[str | None] = mapped_column(Text, nullable=True)
     outcome: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    role: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    visibility_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    authoritative_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    context_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source_result_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

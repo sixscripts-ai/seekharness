@@ -4,8 +4,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .hermetic import should_load_dotenv
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(_REPO_ROOT / ".env")
+if should_load_dotenv():
+    load_dotenv(_REPO_ROOT / ".env")
 
 _REQUIRED = [
     "APPWRITE_ENDPOINT",

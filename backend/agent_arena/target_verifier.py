@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +21,29 @@ from typing import Any, Dict, Optional
 
 from .sandbox.executors._command_guard import command_block_reason
 from .target_library import TargetBundle
+
+# Fighter-authored pytest/Python config must never become the verifier harness.
+_HARNESS_BASENAMES = frozenset(
+    {
+        "conftest.py",
+        "conftest.pyc",
+        "pytest.ini",
+        ".pytest.ini",
+        "pytest.toml",
+        "pyproject.toml",
+        "tox.ini",
+        "setup.cfg",
+        "setup.py",
+        "sitecustomize.py",
+        "usercustomize.py",
+        "noxfile.py",
+    }
+)
+
+_ARENA_PYTEST_INI = """[pytest]
+cache_dir = .arena-pytest-cache
+norecursedirs = .* __pycache__
+"""
 
 _ALLOWED_ENV_VARS = {
     "PATH",
@@ -45,10 +67,8 @@ _STRIP_KEY_PATTERNS = re.compile(
 def _blocked_submission_path(rel_path: str) -> bool:
     """Return True if a fighter-supplied file path must not be written.
 
-    Blocks absolute paths, '..' traversal, and any path targeting the
-    evaluator-only partitions (tests/hidden*, reference*) — case-insensitively,
-    so 'tests/HIDDEN/x' or 'reference_evil/y' cannot smuggle files into the
-    partitions the verifier treats as trusted.
+    Blocks absolute paths, '..' traversal, evaluator partitions, the entire
+    trusted tests/ tree, and pytest/Python harness configuration files.
     """
     clean_rel = str(rel_path).replace("\\", "/").strip()
     if not clean_rel or clean_rel.startswith("/"):
@@ -56,11 +76,47 @@ def _blocked_submission_path(rel_path: str) -> bool:
     parts = [p for p in clean_rel.split("/") if p not in ("", ".")]
     if any(p == ".." for p in parts):
         return True
-    if parts and parts[0].lower().startswith("reference"):
+    if not parts:
         return True
-    if len(parts) >= 2 and parts[0].lower() == "tests" and parts[1].lower().startswith("hidden"):
+    if parts[0].lower().startswith("reference"):
+        return True
+    if parts[0].lower() == "tests":
+        return True
+    if parts[-1].lower() in _HARNESS_BASENAMES:
         return True
     return False
+
+
+def _write_arena_pytest_harness(work: pathlib.Path) -> pathlib.Path:
+    """Install the Arena-owned pytest config. Overwrites any fighter/starter copy."""
+    ini_path = work / "pytest.ini"
+    ini_path.write_text(_ARENA_PYTEST_INI, encoding="utf-8")
+    # Empty trusted conftest so a leftover fighter file cannot occupy this name.
+    (work / "conftest.py").write_text(
+        "# Arena-owned verifier conftest. Fighters cannot supply pytest hooks.\n",
+        encoding="utf-8",
+    )
+    return ini_path
+
+
+def _is_pytest_command(command: str) -> bool:
+    return bool(re.search(r"\bpytest\b", str(command or "")))
+
+
+def _harden_pytest_command(command: str, *, ini_path: pathlib.Path, root: pathlib.Path) -> str:
+    """Force Arena pytest config even when the manifest invokes pytest.
+
+    Flags stay relative to `root` so the command guard does not reject
+    absolute paths.
+    """
+    if not _is_pytest_command(command):
+        return command
+    try:
+        ini_rel = ini_path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        ini_rel = "pytest.ini"
+    extra = f" --noconftest -c {ini_rel} --rootdir=. -p no:cacheprovider"
+    return f"{command.rstrip()} {extra}"
 
 
 def _build_hardened_env(work: pathlib.Path, extra_env: dict[str, str] | None = None) -> dict[str, str]:
@@ -84,6 +140,11 @@ def _build_hardened_env(work: pathlib.Path, extra_env: dict[str, str] | None = N
     clean_env["ARENA_ROOT"] = str(work)
     clean_env["ARENA_WORKDIR"] = str(work)
     clean_env["ARENA_FLAG"] = "FLAG{tinyshop-local-42}"
+    clean_env["PYTHONNOUSERSITE"] = "1"
+    clean_env["PYTHONDONTWRITEBYTECODE"] = "1"
+    clean_env["PYTHONSAFEPATH"] = "1"
+    clean_env.pop("PYTEST_ADDOPTS", None)
+    clean_env.pop("PYTEST_DISABLE_PLUGIN_AUTOLOAD", None)
 
     if extra_env:
         for k, v in extra_env.items():
@@ -137,16 +198,18 @@ def verify_target_submission(
     run_hidden: bool = True,
     extra_env: dict[str, str] | None = None,
     timeout_seconds: int = 15,
+    trusted_host: bool = False,
 ) -> TargetVerificationEvidence:
     """Execute verification against submitted artifacts in an isolated, sanitized workspace."""
     start_time = time.time()
 
     # Seatbelt: manifest-supplied verification commands must never execute in
-    # the backend host process (which holds APPWRITE/HOST_*/FERNET secrets).
-    # Only the sandbox (entrypoint sets ARENA_IN_SANDBOX=1) may run them,
-    # unless an operator explicitly opts in for local testing.
+    # the backend host process (which holds APPWRITE/HOST_*/FERNET secrets)
+    # unless this call is the trusted /internal/verify path (trusted_host) or
+    # an explicit local-test override.
     if (
-        os.environ.get("ARENA_IN_SANDBOX") != "1"
+        not trusted_host
+        and os.environ.get("ARENA_IN_SANDBOX") != "1"
         and os.environ.get("ARENA_VERIFIER_ALLOW_INPROCESS") != "1"
     ):
         return TargetVerificationEvidence(
@@ -211,6 +274,7 @@ def verify_target_submission(
         for script in work.rglob("*.sh"):
             script.chmod(0o755)
 
+        ini_path = _write_arena_pytest_harness(work)
         env = _build_hardened_env(work, extra_env)
 
         vis_exit = 0
@@ -218,9 +282,10 @@ def verify_target_submission(
         vis_passed = True
 
         if run_visible and bundle.verification.visible_command:
-            block_reason = command_block_reason(
-                bundle.verification.visible_command, allow_network=bundle.network
+            vis_cmd = _harden_pytest_command(
+                bundle.verification.visible_command, ini_path=ini_path, root=work
             )
+            block_reason = command_block_reason(vis_cmd, allow_network=bundle.network)
             if block_reason:
                 vis_exit = 126
                 vis_out = f"Visible verification command blocked: {block_reason}"
@@ -228,7 +293,7 @@ def verify_target_submission(
             else:
                 try:
                     r_vis = subprocess.run(
-                        bundle.verification.visible_command,
+                        vis_cmd,
                         cwd=work,
                         shell=True,
                         text=True,
@@ -253,9 +318,10 @@ def verify_target_submission(
         hid_passed = True
 
         if run_hidden and bundle.verification.hidden_command:
-            block_reason = command_block_reason(
-                bundle.verification.hidden_command, allow_network=bundle.network
+            hid_cmd = _harden_pytest_command(
+                bundle.verification.hidden_command, ini_path=ini_path, root=work
             )
+            block_reason = command_block_reason(hid_cmd, allow_network=bundle.network)
             if block_reason:
                 hid_exit = 126
                 hid_out = f"Hidden verification command blocked: {block_reason}"
@@ -263,7 +329,7 @@ def verify_target_submission(
             else:
                 try:
                     r_hid = subprocess.run(
-                        bundle.verification.hidden_command,
+                        hid_cmd,
                         cwd=work,
                         shell=True,
                         text=True,
@@ -314,6 +380,7 @@ def verify_builder_breaker_submission(
     *,
     extra_env: dict[str, str] | None = None,
     timeout_seconds: int = 20,
+    trusted_host: bool = False,
 ) -> BuilderBreakerVerificationEvidence:
     """Asymmetrically evaluate a Builder vs Breaker match.
 
@@ -330,6 +397,7 @@ def verify_builder_breaker_submission(
         run_hidden=True,
         extra_env=extra_env,
         timeout_seconds=timeout_seconds,
+        trusted_host=trusted_host,
     )
 
     # Step 2: Evaluate Breaker against Builder output
@@ -368,6 +436,7 @@ def verify_builder_breaker_submission(
         for script in work.rglob("*.sh"):
             script.chmod(0o755)
 
+        ini_path = _write_arena_pytest_harness(work)
         env = _build_hardened_env(work, extra_env)
 
         # Check for breaker test harness
@@ -385,6 +454,9 @@ def verify_builder_breaker_submission(
             breaker_cmd = bundle.verification.visible_command
 
         if breaker_cmd:
+            breaker_cmd = _harden_pytest_command(
+                breaker_cmd, ini_path=ini_path, root=work
+            )
             block_reason = command_block_reason(breaker_cmd, allow_network=bundle.network)
             if block_reason:
                 breaker_out = f"Breaker command blocked: {block_reason}"

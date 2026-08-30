@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 
+from agent_arena.hermetic import assert_not_hermetic, hermetic_mode
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 _ENV_CANDIDATES = [
@@ -32,6 +34,8 @@ _ENV_CANDIDATES = [
 
 def _load_env() -> None:
     """Load local env files without overriding values already in the process env."""
+    if hermetic_mode():
+        return
     for path in _ENV_CANDIDATES:
         if path.is_file():
             load_dotenv(path, override=False)
@@ -44,6 +48,7 @@ def database_url(unpooled: bool = False) -> str:
     Raises RuntimeError with a clear message when not configured. The value
     itself is never logged.
     """
+    assert_not_hermetic("postgres")
     _load_env()
     key = "DATABASE_URL_UNPOOLED" if unpooled else "DATABASE_URL"
     url = os.environ.get(key) or os.environ.get("DATABASE_URL")

@@ -713,6 +713,10 @@ def battle_get(user_id: str, battle_id: str) -> dict | None:
 
         databases, database_id = _aw()
         doc = databases.get_document(database_id, "battles", battle_id)
+    except RuntimeError as exc:
+        if "External Appwrite" in str(exc):
+            return None
+        raise
     except AppwriteException as exc:
         if not using_postgres() or _is_not_found(exc):
             return None
@@ -1030,9 +1034,100 @@ def scores_exist(battle_id: str) -> bool:
     return bool(res.documents)
 
 
+def battle_result_upsert(
+    battle_id: str,
+    model_id: str,
+    *,
+    phase: str = "main",
+    role: str = "fighter",
+    status: str = "completed",
+    passed: bool = False,
+    score: float = 0.0,
+    verification_status: str = "unverified",
+    termination_reason: str | None = None,
+    artifact_refs: list[str] | None = None,
+    metrics: dict | None = None,
+    result_version: int = 1,
+) -> dict:
+    if using_postgres():
+        with session_scope() as session:
+            row = repositories.results.result_upsert(
+                session,
+                battle_id=battle_id,
+                phase=phase,
+                role=role,
+                model_id=model_id,
+                status=status,
+                passed=passed,
+                score=score,
+                verification_status=verification_status,
+                termination_reason=termination_reason,
+                artifact_refs=artifact_refs,
+                metrics=metrics,
+                result_version=result_version,
+            )
+            return {
+                "id": row.id,
+                "battle_id": row.battle_id,
+                "phase": row.phase,
+                "role": row.role,
+                "model_id": row.model_id,
+                "status": row.status,
+                "passed": row.passed,
+                "score": row.score,
+                "verification_status": row.verification_status,
+                "termination_reason": row.termination_reason,
+                "artifact_refs": row.artifact_refs,
+                "metrics": row.metrics,
+                "result_version": row.result_version,
+                "finalized_at": row.finalized_at.isoformat() if row.finalized_at else None,
+            }
+    return {
+        "battle_id": battle_id,
+        "phase": phase,
+        "role": role,
+        "model_id": model_id,
+        "status": status,
+        "passed": passed,
+        "score": score,
+        "verification_status": verification_status,
+        "termination_reason": termination_reason,
+        "artifact_refs": artifact_refs or [],
+        "metrics": metrics or {},
+        "result_version": result_version,
+    }
+
+
+def battle_results_list(battle_id: str) -> list[dict]:
+    if using_postgres():
+        with session_scope() as session:
+            rows = repositories.results.results_list_by_battle(session, battle_id)
+            return [
+                {
+                    "id": r.id,
+                    "battle_id": r.battle_id,
+                    "phase": r.phase,
+                    "role": r.role,
+                    "model_id": r.model_id,
+                    "status": r.status,
+                    "passed": r.passed,
+                    "score": r.score,
+                    "verification_status": r.verification_status,
+                    "termination_reason": r.termination_reason,
+                    "artifact_refs": r.artifact_refs,
+                    "metrics": r.metrics,
+                    "result_version": r.result_version,
+                    "finalized_at": r.finalized_at.isoformat() if r.finalized_at else None,
+                }
+                for r in rows
+            ]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Stats (SQL aggregation in Postgres)
 # ---------------------------------------------------------------------------
+
 
 
 def stats_snapshot() -> dict:
@@ -1094,6 +1189,12 @@ def memory_create(
     chosen_skills: list[str] | None = None,
     theory: str | None = None,
     outcome: str | None = None,
+    target_id: str | None = None,
+    role: str | None = None,
+    visibility_class: str | None = None,
+    authoritative_status: str | None = None,
+    context_mode: str | None = None,
+    source_result_id: str | None = None,
 ) -> dict:
     if using_postgres():
         with session_scope() as session:
@@ -1108,6 +1209,12 @@ def memory_create(
                 chosen_skills=chosen_skills,
                 theory=theory,
                 outcome=outcome,
+                target_id=target_id,
+                role=role,
+                visibility_class=visibility_class,
+                authoritative_status=authoritative_status,
+                context_mode=context_mode,
+                source_result_id=source_result_id,
             )
             return {"id": row.id}
     databases, database_id = _aw()

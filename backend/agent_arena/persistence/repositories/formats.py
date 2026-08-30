@@ -24,6 +24,10 @@ def format_create(
     return fmt
 
 
+def format_get(session: Session, format_id: str) -> Format | None:
+    return session.get(Format, format_id)
+
+
 def format_list(session: Session) -> list[Format]:
     stmt = select(Format).order_by(Format.name)
     return list(session.scalars(stmt))

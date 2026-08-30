@@ -1,0 +1,4 @@
+# Private evaluator packages (hidden tests, reference solutions) belong here
+# or in $ARENA_EVALUATOR_DIR, not in the fighter-visible sandbox mount.
+# Historical copies under targets/library/*/tests/hidden and reference/
+# remain in git until a dedicated private artifact store is cut over.

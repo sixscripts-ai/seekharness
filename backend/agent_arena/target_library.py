@@ -337,6 +337,14 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
     visible_test_files = _read_directory_files(target_dir, visible_tests_dir_name)
     hidden_test_files = _read_directory_files(target_dir, hidden_tests_dir_name)
     reference_files = _read_directory_files(target_dir, reference_dir_name)
+    overlay = private_evaluator_dir(target_id)
+    if overlay is not None:
+        overlay_hidden = _read_directory_files(overlay, "tests/hidden")
+        overlay_reference = _read_directory_files(overlay, "reference")
+        if overlay_hidden:
+            hidden_test_files = overlay_hidden
+        if overlay_reference:
+            reference_files = overlay_reference
 
     # Compute deterministic hashes
     manifest_hash = hashlib.sha256(raw_manifest_text.encode("utf-8")).hexdigest()
@@ -591,3 +599,154 @@ def compile_target_to_battle_config(
             "phases": phases,
         },
     }
+
+
+# Explicit fighter-visible roots. Unknown directories default to deny.
+FIGHTER_PUBLIC_ROOT_FILES = frozenset({"target.yaml", "README.md", "TARGET.md"})
+
+
+def fighter_public_allowlist(
+    workspace: TargetWorkspaceConfig | dict | None = None,
+) -> tuple[tuple[str, ...], frozenset[str]]:
+    """Return (directory roots, root files) that may appear on the fighter FS."""
+    if isinstance(workspace, TargetWorkspaceConfig):
+        starter = workspace.starter_dir or "starter"
+        visible = workspace.visible_tests_dir or "tests/visible"
+    elif isinstance(workspace, dict):
+        starter = str(workspace.get("starter_dir") or "starter")
+        visible = str(workspace.get("visible_tests_dir") or "tests/visible")
+    else:
+        starter = "starter"
+        visible = "tests/visible"
+    roots = tuple(
+        p.replace("\\", "/").strip().strip("/")
+        for p in (starter, visible)
+        if p and ".." not in p.split("/") and not p.startswith("/")
+    )
+    return roots, FIGHTER_PUBLIC_ROOT_FILES
+
+
+def _workspace_from_manifest_file(manifest_path: Path) -> TargetWorkspaceConfig | None:
+    if yaml is None or not manifest_path.is_file():
+        return None
+    try:
+        raw = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+    ws = raw.get("workspace") or {}
+    if not isinstance(ws, dict):
+        return None
+    return TargetWorkspaceConfig(
+        starter_dir=str(ws.get("starter_dir") or "starter"),
+        visible_tests_dir=str(ws.get("visible_tests_dir") or "tests/visible"),
+        hidden_tests_dir=str(ws.get("hidden_tests_dir") or "tests/hidden"),
+        reference_dir=str(ws.get("reference_dir") or "reference"),
+    )
+
+
+def rel_is_fighter_public(rel: str, roots: tuple[str, ...], root_files: frozenset[str]) -> bool:
+    posix = str(rel).replace("\\", "/").strip().lstrip("./")
+    if not posix or posix.startswith("/") or ".." in posix.split("/"):
+        return False
+    if posix in root_files:
+        return True
+    for root in roots:
+        if posix == root or posix.startswith(root + "/"):
+            return True
+    return False
+
+
+def relpath_is_private_evaluator(rel: str) -> bool:
+    """True when a path is hidden-verifier or reference material.
+
+    Fighter-visible packages must never contain these files. Path guards are
+    not the isolation mechanism; this classifier is used when materializing
+    the public tree so the files are absent from the fighter filesystem.
+    """
+    parts = [p for p in str(rel).replace("\\", "/").split("/") if p and p != "."]
+    if not parts:
+        return False
+    lower = [p.lower() for p in parts]
+    if lower[0] == "reference" or lower[0].startswith("reference"):
+        return True
+    if len(lower) >= 2 and lower[0] == "tests" and lower[1].startswith("hidden"):
+        return True
+    return False
+
+
+def private_evaluator_dir(target_id: str) -> Path | None:
+    """Optional overlay root for private evaluator packages (not fighter-mounted).
+
+    Lookup order:
+    1. $ARENA_EVALUATOR_DIR/<target_id>
+    2. repo targets/evaluators/<target_id>
+    """
+    tid = str(target_id or "").strip()
+    if not tid:
+        return None
+    env_root = os.environ.get("ARENA_EVALUATOR_DIR")
+    if env_root:
+        candidate = Path(env_root) / tid
+        if candidate.is_dir():
+            return candidate.resolve()
+    repo = Path(__file__).resolve().parents[2] / "targets" / "evaluators" / tid
+    if repo.is_dir():
+        return repo.resolve()
+    return None
+
+
+def get_trusted_library_root() -> Path:
+    """Host/verifier library root. Never a fighter-visible public mount."""
+    trusted = os.environ.get("ARENA_TRUSTED_TARGETS_DIR")
+    if trusted and Path(trusted).is_dir():
+        return Path(trusted).resolve()
+    if os.environ.get("ARENA_IN_SANDBOX") == "1":
+        repo = Path(__file__).resolve().parents[2] / "targets" / "library"
+        if repo.is_dir():
+            return repo.resolve()
+    return _get_default_library_root()
+
+
+def materialize_fighter_visible_library(src_root: Path, dest_root: Path) -> Path:
+    """Copy only explicitly public target files into dest_root.
+
+    Public roots come from the target manifest (starter + visible tests) plus
+    a small set of root docs. Unknown directories are denied. Symlinks are
+    never copied; a resolved link must already live inside an allowlisted
+    public root as a regular file to appear. Hidden/reference material stays
+    on the trusted host library for the verifier.
+    """
+    import shutil
+
+    src_root = Path(src_root)
+    dest_root = Path(dest_root)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    if not src_root.is_dir():
+        return dest_root
+    for target_dir in sorted(src_root.iterdir()):
+        if not target_dir.is_dir() or target_dir.name.startswith("."):
+            continue
+        if not (target_dir / "target.yaml").is_file():
+            continue
+        workspace = _workspace_from_manifest_file(target_dir / "target.yaml")
+        roots, root_files = fighter_public_allowlist(workspace)
+        dest_target = dest_root / target_dir.name
+        for path in sorted(target_dir.rglob("*")):
+            if path.is_dir():
+                continue
+            if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+                continue
+            # Reject every symlink. Do not follow into hidden/reference/outside.
+            if path.is_symlink():
+                continue
+            rel = path.relative_to(target_dir).as_posix()
+            if relpath_is_private_evaluator(rel):
+                continue
+            if not rel_is_fighter_public(rel, roots, root_files):
+                continue
+            dest = dest_target / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest, follow_symlinks=False)
+    return dest_root

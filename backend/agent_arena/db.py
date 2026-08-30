@@ -2,9 +2,11 @@ from appwrite.client import Client
 from appwrite.services.databases import Databases
 
 from .config import settings
+from .hermetic import assert_not_hermetic
 
 
 def get_client() -> Client:
+    assert_not_hermetic("appwrite")
     s = settings()
     return (
         Client()

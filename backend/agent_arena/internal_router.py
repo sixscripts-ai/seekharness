@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import re
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ from .battle_token import issue_battle_token, verify_battle_token
 from .config import settings
 from .providers import get_model_call_spec
 from .redact import sanitize_artifact
+from .results import TRUSTED_VERIFICATION_MARKER
 
 router = APIRouter(prefix="/internal", tags=["internal"], include_in_schema=False)
 
@@ -179,6 +181,104 @@ class FinalizeBody(BaseModel):
     battle_id: str
     status: str = "completed"
     scores: dict[str, float] = Field(default_factory=dict)
+    judge_model: str | None = None
+
+
+class VerifyBody(BaseModel):
+    battle_id: str
+    target_id: str = ""
+    kind: str = ""
+    phase: str = ""
+    role: str = ""
+    model_id: str = ""
+    submitted_files: dict[str, str] = Field(default_factory=dict)
+    builder_files: dict[str, str] = Field(default_factory=dict)
+    breaker_files: dict[str, str] = Field(default_factory=dict)
+
+
+_TARGET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _trusted_verifier_kind(fmt_cfg: dict) -> str:
+    fmt_kind = str(fmt_cfg.get("format") or "").strip().lower()
+    phases = (fmt_cfg.get("battle_plan") or {}).get("phases") or []
+    actors = {str(p.get("actor") or "") for p in phases if isinstance(p, dict)}
+    if fmt_kind == "builder_breaker" or actors == {"builder", "breaker"}:
+        return "builder_breaker"
+    return "solo"
+
+
+def _derive_verify_binding(battle: dict, fmt_cfg: dict, body: VerifyBody) -> tuple[str, str, str, str, str]:
+    """target_id and kind come from trusted battle/format/plan, never the sandbox."""
+    target_id = str(battle.get("target_id") or "").strip() or str(
+        fmt_cfg.get("target_id") or ""
+    ).strip()
+    if not target_id:
+        raise HTTPException(status_code=400, detail="battle has no bound target")
+    if not _TARGET_ID_RE.match(target_id):
+        raise HTTPException(status_code=400, detail="invalid bound target_id")
+    hint_target = str(body.target_id or "").strip()
+    if hint_target and hint_target != target_id:
+        raise HTTPException(status_code=400, detail="target_id does not match battle")
+    if "/" in hint_target or "\\" in hint_target or ".." in hint_target:
+        raise HTTPException(status_code=400, detail="target_id does not match battle")
+
+    kind = _trusted_verifier_kind(fmt_cfg)
+    hint_kind = str(body.kind or "").strip().lower()
+    if hint_kind and hint_kind != kind:
+        raise HTTPException(status_code=400, detail="verifier kind does not match battle")
+
+    model_ids = [str(m) for m in (battle.get("model_ids") or [])]
+    roles = [str(r).lower() for r in (fmt_cfg.get("roles") or [])]
+    plan_phases = [
+        str(p.get("phase_id") or p.get("name") or "")
+        for p in ((fmt_cfg.get("battle_plan") or {}).get("phases") or [])
+        if isinstance(p, dict)
+    ]
+
+    model_id = str(body.model_id or "").strip()
+    if kind != "builder_breaker" and model_ids:
+        if not model_id or model_id not in model_ids:
+            raise HTTPException(status_code=400, detail="model is not a battle participant")
+    elif model_id and model_ids and model_id not in model_ids:
+        raise HTTPException(status_code=400, detail="model is not a battle participant")
+    role = str(body.role or "").strip().lower()
+    if role and roles and role not in roles:
+        raise HTTPException(status_code=400, detail="role does not match battle plan")
+    phase = str(body.phase or "").strip()
+    if phase and plan_phases and phase not in plan_phases:
+        raise HTTPException(status_code=400, detail="phase does not match battle plan")
+    return target_id, kind, phase, role, model_id
+
+
+def _persist_trusted_verification(
+    battle_id: str,
+    *,
+    target_id: str,
+    kind: str,
+    phase: str,
+    role: str,
+    model_id: str,
+    payload: dict,
+) -> None:
+    record = {
+        "source": "trusted_verifier",
+        "target_id": target_id,
+        "kind": kind,
+        "phase": phase or "main",
+        "role": role or "fighter",
+        "model_id": model_id,
+        "passed": bool(payload.get("passed")),
+        "builder_passed": payload.get("builder_passed"),
+        "breaker_passed": payload.get("breaker_passed"),
+        "manifest_hash": payload.get("manifest_hash") or "",
+        "outcome": "TEST_PASS" if payload.get("passed") else "TEST_FAIL",
+    }
+    artifact = TRUSTED_VERIFICATION_MARKER + " " + json.dumps(record)
+    from .persistence import service as persist
+
+    persist.round_create(battle_id, phase or "verify", model_id, artifact)
+
 
 
 def _finalize_scores(battle_id: str, scores: dict, source: str = "judged") -> bool:
@@ -298,16 +398,25 @@ def _apply_self_learning(
                 f"theory {str(winner.get('theory') or '')[:300]}."
             )
             if service.using_postgres():
-                service.memory_create(
-                    user_id,
-                    insight_text,
-                    battle_id=battle_id,
-                    model_id=str(winner.get("model_id") or ""),
-                    format=format_name,
-                    chosen_skills=list(winner.get("chosen_skills") or []),
-                    theory=str(winner.get("theory") or ""),
-                    outcome=str(winner.get("outcome") or "TEST_PASS"),
-                )
+                from .memory import maybe_remember_pg
+                from .persistence.session import session_scope
+
+                with session_scope() as session:
+                    maybe_remember_pg(
+                        session,
+                        insight=insight_text,
+                        battle_id=battle_id,
+                        model_id=str(winner.get("model_id") or ""),
+                        target_id=target_id,
+                        role=str(winner.get("role") or "general"),
+                        visibility_class="model_private",
+                        format_name=format_name,
+                        chosen_skills=list(winner.get("chosen_skills") or []),
+                        theory=str(winner.get("theory") or ""),
+                        outcome=str(winner.get("outcome") or "TEST_PASS"),
+                        user_id=user_id,
+                        context_mode=context_mode,
+                    )
             else:
                 from .memory import maybe_remember
 
@@ -361,115 +470,136 @@ def internal_finalize(
     x_sandbox_token: str | None = Header(default=None),
     x_internal_key: str | None = Header(default=None),
 ):
-    """Sandbox reports final outcome: persist scores, update battle status, apply Elo."""
+    """Sandbox reports final outcome: persist scores, update battle status, apply Elo transactionally and idempotently."""
     _require_battle_token(body.battle_id, x_sandbox_token, x_internal_key)
     _rate_limit(body.battle_id)
+
+    from .finalization import finalize_battle
+
+    result = finalize_battle(
+        body.battle_id,
+        caller_status=body.status,
+        caller_scores=body.scores,
+        judge_model=body.judge_model,
+    )
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="Battle not found")
+    return result
+
+
+@router.post("/verify")
+def internal_verify(
+    body: VerifyBody,
+    x_sandbox_token: str | None = Header(default=None),
+    x_internal_key: str | None = Header(default=None),
+):
+    """Trusted target verification. Hidden/reference files live only on the host.
+
+    The fighter sandbox never receives evaluator-private files; it submits
+    workspace contents here. Sandbox-supplied scores are not accepted.
+    """
+    _require_battle_token(body.battle_id, x_sandbox_token, x_internal_key)
+    _rate_limit(body.battle_id)
+    databases = None
+    database_id = ""
     from .persistence import service
 
-    databases = db.get_databases()
-    database_id = db.get_database_id()
-    battle = service.battle_get("", body.battle_id)
-    if battle is None:
-        raise HTTPException(status_code=404, detail="Battle not found")
-    if battle.get("status") not in ("queued", "running"):
-        raise HTTPException(status_code=409, detail="battle not active")
-    status = body.status if body.status in ("completed", "failed") else "completed"
-    effective_scores = body.scores
-    score_source = "judged"
-    results: list[dict] = []
-    if status in ("completed", "failed"):
-        try:
-            results = _parse_executor_results(databases, database_id, body.battle_id)
-        except Exception:
-            results = []
-    if status in ("completed", "failed"):
-        try:
-            fmt_cfg: dict = {}
-            if results:
-                try:
-                    fmt_record = service.format_get(str(battle.get("format_id") or ""))
-                    fmt_cfg = (fmt_record or {}).get("config") or {}
-                except Exception:
-                    fmt_cfg = {}
-                from .custom_battles import FrozenConfigError, resolve_battle_config
+    battle = _active_battle(databases, database_id, body.battle_id)
 
-                try:
-                    fmt_cfg = resolve_battle_config(battle, fmt_cfg)
-                except FrozenConfigError:
-                    fmt_cfg = {}
-                from . import evidence as evidence_mod
-                from . import scoring as scoring_mod
-
-                summary = evidence_mod.build_battle_evidence(
-                    body.battle_id,
-                    results,
-                    fmt_cfg,
-                    judge_scores=dict(body.scores or {}),
-                    format_id=str(battle.get("format_id") or ""),
-                )
-                decision = scoring_mod.decide_winner(summary, fmt_cfg)
-                event_bus.publish(
-                    body.battle_id,
-                    {"type": "evidence_summary", "data": {**summary, "decision": decision}},
-                )
-                det_scores = scoring_mod.deterministic_scores(decision)
-                if det_scores:
-                    battle_mids = set(battle.get("model_ids", []))
-                    result_mids = {str(r.get("model_id") or "") for r in results}
-                    if status == "failed" and result_mids != battle_mids:
-                        # Partial evidence on a failed battle: never fabricate
-                        # an outcome; keep the judge fallback (usually empty).
-                        det_scores = None
-                if det_scores:
-                    effective_scores = det_scores
-                    score_source = "arena-score-v1"
-                    if status == "failed":
-                        # Executable evidence completes the battle even when the
-                        # judge layer returned nothing (e.g. judge outage).
-                        status = "completed"
-            if effective_scores:
-                if _finalize_scores(
-                    body.battle_id,
-                    effective_scores,
-                    source=score_source,
-                ):
-                    from .custom_battles import is_ranked_battle
-
-                    if is_ranked_battle(battle, fmt_cfg):
-                        service.leaderboard_apply_result(
-                            battle["format_id"],
-                            list(battle.get("model_ids", [])),
-                            effective_scores,
-                        )
-        except Exception:
-            pass
-    # Self-learning on backend (sandbox has no datastore credentials)
-    try:
-        from .custom_battles import is_ranked_battle, resolve_battle_config
-
-        cfg = resolve_battle_config(battle, {})
-        if is_ranked_battle(battle, cfg):
-            _apply_self_learning(
-                databases, database_id, battle, body.battle_id, results
-            )
-    except Exception:
-        pass
-    service.battle_update(
-        body.battle_id,
-        {"status": status, "completed_at": datetime.now(timezone.utc)},
+    from .custom_battles import FrozenConfigError, resolve_battle_config
+    from .target_library import get_target_library, get_trusted_library_root
+    from .target_verifier import (
+        verify_builder_breaker_submission,
+        verify_target_submission,
     )
-    if status == "completed" and effective_scores:
-        event_bus.publish(
-            body.battle_id, {"type": "scores", "data": {"scores": effective_scores}}
+
+    fmt_cfg: dict = {}
+    try:
+        fmt_record = service.format_get(str(battle.get("format_id") or ""))
+        fmt_cfg = (fmt_record or {}).get("config") or {}
+    except Exception:
+        fmt_cfg = {}
+    try:
+        fmt_cfg = resolve_battle_config(battle, fmt_cfg)
+    except FrozenConfigError:
+        fmt_cfg = dict(battle.get("battle_config") or {}) or fmt_cfg
+
+    target_id, kind, phase, role, model_id = _derive_verify_binding(battle, fmt_cfg, body)
+
+    bundle = get_target_library(get_trusted_library_root()).get_target(target_id)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="target not found")
+    if str(bundle.format or "").strip().lower() == "builder_breaker":
+        kind = "builder_breaker"
+    hint_kind = str(body.kind or "").strip().lower()
+    if hint_kind and hint_kind != kind:
+        raise HTTPException(status_code=400, detail="verifier kind does not match battle")
+    frozen_manifest = str(
+        battle.get("target_manifest_hash") or fmt_cfg.get("manifest_hash") or ""
+    )
+    frozen_hidden = str(fmt_cfg.get("hidden_hash") or "")
+    if frozen_manifest and bundle.manifest_hash != frozen_manifest:
+        raise HTTPException(status_code=409, detail="target manifest hash mismatch")
+    if frozen_hidden and bundle.hidden_hash != frozen_hidden:
+        raise HTTPException(status_code=409, detail="target hidden hash mismatch")
+
+    if kind == "builder_breaker":
+        ev = verify_builder_breaker_submission(
+            bundle,
+            body.builder_files,
+            body.breaker_files,
+            trusted_host=True,
         )
-    event_bus.publish(
+        public = {
+            "ok": True,
+            "target_id": ev.target_id,
+            "passed": bool(ev.builder_passed),
+            "builder_passed": ev.builder_passed,
+            "breaker_passed": ev.breaker_passed,
+        }
+        _persist_trusted_verification(
+            body.battle_id,
+            target_id=target_id,
+            kind=kind,
+            phase=phase,
+            role=role,
+            model_id=model_id,
+            payload={
+                "passed": ev.builder_passed,
+                "builder_passed": ev.builder_passed,
+                "breaker_passed": ev.breaker_passed,
+                "manifest_hash": ev.manifest_hash,
+            },
+        )
+        return public
+
+    ev = verify_target_submission(
+        bundle,
+        body.submitted_files,
+        run_visible=True,
+        run_hidden=True,
+        trusted_host=True,
+    )
+    public = {
+        "ok": True,
+        "target_id": ev.target_id,
+        "passed": ev.passed,
+        "visible_passed": ev.visible_passed,
+    }
+    _persist_trusted_verification(
         body.battle_id,
-        {
-            "type": "battle_status",
-            "data": {"status": status},
+        target_id=target_id,
+        kind=kind,
+        phase=phase,
+        role=role,
+        model_id=model_id,
+        payload={
+            "passed": ev.passed,
+            "manifest_hash": ev.manifest_hash,
         },
     )
-    return {"ok": True, "status": status}
+    return public
+
 
 
 @router.post("/model")

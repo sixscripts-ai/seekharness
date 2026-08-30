@@ -74,7 +74,14 @@ def _strip_secret_env(env: dict) -> dict:
     in-process runs inherit the full backend env (APPWRITE_API_KEY, HOST_* keys,
     FERNET_KEY, ...). A fighter could otherwise `TOOL SHELL env` them back.
     """
-    _EXACT = {"FERNET_KEY", "FERNET_KEY_OLD", "INTERNAL_API_KEY", "BATTLE_TOKEN"}
+    _EXACT = {
+        "FERNET_KEY",
+        "FERNET_KEY_OLD",
+        "INTERNAL_API_KEY",
+        "BATTLE_TOKEN",
+        "ARENA_EVALUATOR_DIR",
+        "ARENA_TRUSTED_TARGETS_DIR",
+    }
     _SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
     out = dict(env)
     for name in list(out):
@@ -2004,6 +2011,168 @@ class AdvancedExecutor(Executor):
         text = getattr(test_res, "output", str(test_res or ""))
         return "TEST_PASS" in text and "rc=0" in text
 
+    @staticmethod
+    def _files_for_verify(files: dict) -> dict[str, str]:
+        encoded: dict[str, str] = {}
+        for key, value in (files or {}).items():
+            if isinstance(value, bytes):
+                encoded[str(key)] = value.decode("utf-8", errors="ignore")
+            else:
+                encoded[str(key)] = str(value)
+        return encoded
+
+    @staticmethod
+    def _remote_verifier_required() -> bool:
+        return (
+            os.environ.get("ARENA_IN_SANDBOX") == "1"
+            and os.environ.get("ARENA_VERIFIER_ALLOW_INPROCESS") != "1"
+        )
+
+    def _emit_trusted_verification(
+        self,
+        client,
+        battle_id: str,
+        *,
+        target_id: str,
+        kind: str,
+        phase: str,
+        role: str,
+        model_id: str,
+        payload: dict,
+    ) -> None:
+        """Persist host-side in-process verify as TRUSTED_VERIFICATION (not EXECUTOR_RESULT)."""
+        if client is None:
+            return
+        from agent_arena.results import TRUSTED_VERIFICATION_MARKER
+
+        record = {
+            "source": "trusted_verifier",
+            "target_id": target_id,
+            "kind": kind,
+            "phase": phase or "main",
+            "role": role or "fighter",
+            "model_id": model_id,
+            "passed": bool(payload.get("passed")),
+            "builder_passed": payload.get("builder_passed"),
+            "breaker_passed": payload.get("breaker_passed"),
+            "outcome": "TEST_PASS" if payload.get("passed") else "TEST_FAIL",
+        }
+        try:
+            client.round(
+                battle_id,
+                phase or "verify",
+                model_id,
+                TRUSTED_VERIFICATION_MARKER + " " + json.dumps(record),
+            )
+        except Exception:
+            return
+
+    def _verify_target_trusted(
+        self,
+        *,
+        client,
+        battle_id: str,
+        target_id: str,
+        files: dict,
+        format_config: dict,
+        builder_files: dict | None = None,
+        breaker_files: dict | None = None,
+        builder_breaker: bool = False,
+        phase: str = "",
+        role: str = "",
+        model_id: str = "",
+    ) -> tuple[dict | None, str | None]:
+        """Run verification in the trusted host (backend) when in a fighter sandbox.
+
+        Local in-process verify is allowed only with ARENA_VERIFIER_ALLOW_INPROCESS=1
+        (unit tests). Hidden/reference files are never loaded from the fighter mount.
+        """
+        kind = "builder_breaker" if builder_breaker else "solo"
+        if self._remote_verifier_required():
+            if client is None:
+                return None, "VERIFY_ERROR"
+            try:
+                if builder_breaker:
+                    data = client.verify_target(
+                        battle_id,
+                        target_id,
+                        kind="builder_breaker",
+                        builder_files=self._files_for_verify(builder_files or {}),
+                        breaker_files=self._files_for_verify(breaker_files or {}),
+                        phase=phase,
+                        role=role,
+                        model_id=model_id,
+                    )
+                else:
+                    data = client.verify_target(
+                        battle_id,
+                        target_id,
+                        self._files_for_verify(files),
+                        kind="solo",
+                        phase=phase,
+                        role=role,
+                        model_id=model_id,
+                    )
+            except Exception:
+                return None, "VERIFY_ERROR"
+            if not isinstance(data, dict):
+                return None, "VERIFY_ERROR"
+            if data.get("error") and not data.get("ok", True):
+                return None, "VERIFY_ERROR"
+            return data, None
+
+        from agent_arena.target_library import get_target_library, get_trusted_library_root
+        from agent_arena.target_verifier import (
+            verify_builder_breaker_submission,
+            verify_target_submission,
+        )
+
+        bundle = get_target_library(get_trusted_library_root()).get_target(target_id)
+        if bundle is None:
+            return None, "VERIFY_ERROR"
+        frozen_manifest = (format_config or {}).get("manifest_hash")
+        frozen_hidden = (format_config or {}).get("hidden_hash")
+        if frozen_manifest and bundle.manifest_hash != frozen_manifest:
+            return None, "VERIFY_ERROR"
+        if frozen_hidden and bundle.hidden_hash != frozen_hidden:
+            return None, "VERIFY_ERROR"
+        try:
+            if builder_breaker:
+                ev = verify_builder_breaker_submission(
+                    bundle, builder_files or {}, breaker_files or {}
+                )
+                public = {
+                    "target_id": ev.target_id,
+                    "passed": ev.builder_passed,
+                    "builder_passed": ev.builder_passed,
+                    "breaker_passed": ev.breaker_passed,
+                }
+            else:
+                ev = verify_target_submission(
+                    bundle,
+                    files,
+                    run_visible=True,
+                    run_hidden=True,
+                )
+                public = {
+                    "target_id": ev.target_id,
+                    "passed": ev.passed,
+                    "visible_passed": ev.visible_passed,
+                }
+            self._emit_trusted_verification(
+                client,
+                battle_id,
+                target_id=target_id,
+                kind=kind,
+                phase=phase,
+                role=role,
+                model_id=model_id,
+                payload=public,
+            )
+            return public, None
+        except Exception:
+            return None, "VERIFY_ERROR"
+
     def _finalize_role(
         self,
         *,
@@ -2199,46 +2368,18 @@ class AdvancedExecutor(Executor):
         # run_battle via verify_builder_breaker_submission (builder files vs
         # breaker files), not per-phase here.
         if target_id and not is_builder_breaker(format_config):
-            from agent_arena.target_library import get_target_library
-            from agent_arena.target_verifier import verify_target_submission
-
-            bundle = get_target_library().get_target(target_id)
-            if bundle is None:
-                target_verification_error = f"Target '{target_id}' not found in target library"
-            else:
-                # Immutable hash validation: verify loaded bundle matches frozen battle spec
-                frozen_manifest = (format_config or {}).get("manifest_hash")
-                frozen_hidden = (format_config or {}).get("hidden_hash")
-                if frozen_manifest and bundle.manifest_hash != frozen_manifest:
-                    target_verification_error = (
-                        f"Target manifest hash mismatch: loaded {bundle.manifest_hash[:12]} != frozen {frozen_manifest[:12]}"
-                    )
-                elif frozen_hidden and bundle.hidden_hash != frozen_hidden:
-                    target_verification_error = (
-                        f"Target hidden hash mismatch: loaded {bundle.hidden_hash[:12]} != frozen {frozen_hidden[:12]}"
-                    )
-                else:
-                    try:
-                        ev = verify_target_submission(
-                            bundle,
-                            files,
-                            run_visible=True,
-                            run_hidden=True,
-                        )
-                        target_evidence = {
-                            "target_id": ev.target_id,
-                            "target_version": ev.target_version,
-                            "manifest_hash": ev.manifest_hash,
-                            "passed": ev.passed,
-                            "visible_passed": ev.visible_passed,
-                            "hidden_passed": ev.hidden_passed,
-                            "visible_exit_code": ev.visible_exit_code,
-                            "hidden_exit_code": ev.hidden_exit_code,
-                            "duration_seconds": ev.duration_seconds,
-                        }
-                        passed = ev.passed
-                    except Exception as exc:
-                        target_verification_error = f"Verifier execution error: {exc}"
+            target_evidence, target_verification_error = self._verify_target_trusted(
+                client=client,
+                battle_id=battle_id,
+                target_id=str(target_id),
+                files=files,
+                format_config=format_config or {},
+                phase=phase,
+                role=role,
+                model_id=model_id,
+            )
+            if target_evidence and not target_verification_error:
+                passed = bool(target_evidence.get("passed"))
 
         if target_id and not is_builder_breaker(format_config):
             # FAIL-CLOSED: if target verification was required but errored/unavailable, FAIL CLOSED
@@ -2334,12 +2475,9 @@ class AdvancedExecutor(Executor):
             "evaluation_mode": str((format_config or {}).get("evaluation_mode") or ""),
         }
         if target_evidence:
-            result["target_id"] = target_evidence["target_id"]
-            result["target_version"] = target_evidence["target_version"]
-            result["target_verification"] = target_evidence
+            result["target_id"] = target_evidence.get("target_id")
         elif target_verification_error:
             result["target_id"] = target_id
-            result["target_verification_error"] = target_verification_error
         files_json = json.dumps(
             {
                 "files": files,
@@ -3432,34 +3570,19 @@ class AdvancedExecutor(Executor):
                 ):
                     builder_files = phase_files["builder"]
                     breaker_files = phase_files["breaker"]
-                    bb_evidence = None
-                    bb_error = None
-                    try:
-                        from agent_arena.target_library import get_target_library
-                        from agent_arena.target_verifier import (
-                            verify_builder_breaker_submission,
-                        )
-
-                        bundle = get_target_library().get_target(target_id)
-                        if bundle is None:
-                            bb_error = f"Target '{target_id}' not found in target library"
-                        else:
-                            bb_ev = verify_builder_breaker_submission(
-                                bundle, builder_files, breaker_files
-                            )
-                            bb_evidence = {
-                                "target_id": bb_ev.target_id,
-                                "target_version": bb_ev.target_version,
-                                "manifest_hash": bb_ev.manifest_hash,
-                                "builder_functional_passed": bb_ev.builder_functional_passed,
-                                "builder_hidden_passed": bb_ev.builder_hidden_passed,
-                                "breaker_exploit_passed": bb_ev.breaker_exploit_passed,
-                                "builder_passed": bb_ev.builder_passed,
-                                "breaker_passed": bb_ev.breaker_passed,
-                                "duration_seconds": bb_ev.duration_seconds,
-                            }
-                    except Exception as exc:
-                        bb_error = f"Builder/breaker verifier execution error: {exc}"
+                    bb_evidence, bb_error = self._verify_target_trusted(
+                        client=client,
+                        battle_id=battle_id,
+                        target_id=str(target_id),
+                        files={},
+                        format_config=format_config or {},
+                        builder_files=builder_files,
+                        breaker_files=breaker_files,
+                        builder_breaker=True,
+                        phase="verify",
+                        role="",
+                        model_id="",
+                    )
 
                     # Re-emit the per-role results with the asymmetric verdict so
                     # the persisted EXECUTOR_RESULT stream (which downstream
@@ -3468,13 +3591,15 @@ class AdvancedExecutor(Executor):
                         if r.get("role") not in ("builder", "breaker"):
                             continue
                         corrected = dict(r)
-                        corrected["builder_breaker_verification"] = (
-                            bb_evidence.copy() if bb_evidence else None
-                        )
+                        if bb_evidence:
+                            corrected["builder_breaker_verification"] = {
+                                "passed": bool(bb_evidence.get("passed")),
+                                "builder_passed": bool(bb_evidence.get("builder_passed")),
+                                "breaker_passed": bool(bb_evidence.get("breaker_passed")),
+                            }
                         if bb_error:
                             corrected["outcome"] = "VERIFY_ERROR"
                             corrected["passed"] = False
-                            corrected["builder_breaker_verification_error"] = bb_error
                             corrected.setdefault("policy", {})["status"] = "invalid"
                             corrected.setdefault("policy", {}).setdefault("violations", [])
                             corrected["policy"]["violations"].append("target-verifier-error")

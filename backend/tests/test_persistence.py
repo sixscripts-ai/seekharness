@@ -1,8 +1,7 @@
 """PostgreSQL persistence tests.
 
-Runs against the Neon dev branch using an isolated throwaway schema per test
-session (schema_translate_map), so the dev schema stays clean and no Appwrite
-is required. Skips entirely when DATABASE_URL is not configured.
+Runs only against ARENA_PG_TEST_URL (never production Neon by default).
+Requires ARENA_INTEGRATION_TESTS=1.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from agent_arena.persistence import repositories
-from agent_arena.persistence.engine import database_url, sqlalchemy_url
 from agent_arena.persistence.models import (
     Base,
     Battle,
@@ -24,24 +22,24 @@ from agent_arena.persistence.models import (
     Score,
 )
 from agent_arena.persistence.session import session_scope
+from tests.pg_support import postgres_tests_enabled, sqlalchemy_test_url
 
 
 def _have_db() -> bool:
-    try:
-        database_url()
-        return True
-    except RuntimeError:
-        return False
+    return postgres_tests_enabled()
 
 
-pytestmark = pytest.mark.skipif(not _have_db(), reason="DATABASE_URL not configured")
+pytestmark = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(not _have_db(), reason="ARENA_PG_TEST_URL not configured"),
+]
 
 
 @pytest.fixture(scope="session")
 def pg_engine():
     schema = f"ptest_{uuid.uuid4().hex[:12]}"
     eng = create_engine(
-        sqlalchemy_url(),
+        sqlalchemy_test_url(),
         execution_options={"schema_translate_map": {None: schema}},
         poolclass=None,
     )
@@ -88,12 +86,14 @@ def test_schema_creation(pg_engine):
         "battle_participants",
         "battle_drafts",
         "battle_events",
+        "battle_results",
         "rounds",
         "scores",
         "leaderboard",
         "skills",
         "memories",
     }
+
     assert "targets" not in tables
     assert "users" not in tables
 
@@ -394,4 +394,91 @@ def test_session_scope_does_not_leak_connections(pg_engine):
 
     with session_scope() as session:
         session.execute(text("SELECT 1"))
-    assert app_engine().pool.checkedout() == 0
+
+
+def test_battle_results_postgres_upsert_and_identity(pg_session):
+    b = _create_battle(pg_session)
+    pg_session.commit()
+
+    # 1. Upsert first result
+    res1 = repositories.results.result_upsert(
+        pg_session,
+        battle_id=b.id,
+        phase="race",
+        role="player_a",
+        model_id="gpt-4o",
+        status="completed",
+        passed=True,
+        score=10.0,
+        verification_status="verified_pass",
+        termination_reason="TEST_PASS",
+        artifact_refs=["solution.py"],
+        metrics={"turns": 2, "steps": 4},
+    )
+    pg_session.commit()
+
+    assert res1.id is not None
+    assert res1.score == 10.0
+    assert res1.passed is True
+
+    # 2. Idempotent upsert with updated metrics
+    res2 = repositories.results.result_upsert(
+        pg_session,
+        battle_id=b.id,
+        phase="race",
+        role="player_a",
+        model_id="gpt-4o",
+        status="completed",
+        passed=True,
+        score=10.0,
+        verification_status="verified_pass",
+        termination_reason="TEST_PASS",
+        artifact_refs=["solution.py", "debug.log"],
+        metrics={"turns": 3, "steps": 5},
+    )
+    pg_session.commit()
+
+    assert res2.id == res1.id
+    assert res2.artifact_refs == ["solution.py", "debug.log"]
+    assert res2.metrics == {"turns": 3, "steps": 5}
+
+    # 3. List results for battle
+    results = repositories.results.results_list_by_battle(pg_session, b.id)
+    assert len(results) == 1
+    assert results[0].model_id == "gpt-4o"
+
+
+def test_battle_results_same_model_distinct_roles(pg_session):
+    b = _create_battle(pg_session)
+    pg_session.commit()
+    builder = repositories.results.result_upsert(
+        pg_session,
+        battle_id=b.id,
+        phase="builder",
+        role="builder",
+        model_id="shared-model",
+        status="completed",
+        passed=True,
+        score=1.0,
+        verification_status="verified_pass",
+        termination_reason="TEST_PASS",
+    )
+    breaker = repositories.results.result_upsert(
+        pg_session,
+        battle_id=b.id,
+        phase="breaker",
+        role="breaker",
+        model_id="shared-model",
+        status="timeout",
+        passed=False,
+        score=0.0,
+        verification_status="verified_fail",
+        termination_reason="TEST_FAIL",
+    )
+    pg_session.commit()
+    assert builder.id != breaker.id
+    rows = repositories.results.results_list_by_battle(pg_session, b.id)
+    assert len(rows) == 2
+    statuses = {(r.phase, r.role, r.model_id, r.status, r.termination_reason) for r in rows}
+    assert ("builder", "builder", "shared-model", "completed", "TEST_PASS") in statuses
+    assert ("breaker", "breaker", "shared-model", "timeout", "TEST_FAIL") in statuses

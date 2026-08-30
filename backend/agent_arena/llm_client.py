@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 from fastapi import HTTPException
 
+from .hermetic import assert_not_hermetic
 from .ssrf import validate_base_url
 
 
@@ -37,6 +38,7 @@ def chat_completion(
     import time
     from .tool_protocol import ModelResponse
 
+    assert_not_hermetic("model API")
     headers = build_headers(auth_style, api_key)
     base_url = validate_base_url(base_url)
     url = base_url.rstrip("/") + "/chat/completions"

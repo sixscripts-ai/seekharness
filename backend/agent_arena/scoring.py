@@ -244,8 +244,10 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
 def deterministic_scores(decision: dict) -> dict | None:
     """Map a decision to numeric scores (higher = better; ties share value).
 
-    Returns None when the decision carries no usable evidence - callers must
-    then keep their fallback (judge scores), never fabricate zeros.
+    If det_scores:
+        return det_scores
+    Returns None when the decision carries no usable evidence. Callers must
+    not fall back to sandbox/judge scores.
     """
     groups = decision.get("groups") or []
     if not groups:

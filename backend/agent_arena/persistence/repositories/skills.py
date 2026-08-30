@@ -13,6 +13,29 @@ from sqlalchemy.orm import Session
 from ..models import SkillRecord
 
 
+def skill_lock_for_update(session: Session, skill: str) -> SkillRecord:
+    """Race-safe skill row: insert if missing, then SELECT ... FOR UPDATE."""
+    from agent_arena import elo as elo_mod
+
+    session.execute(
+        pg_insert(SkillRecord)
+        .values(
+            skill=skill,
+            elo=elo_mod.INITIAL_RATING,
+            wins=0,
+            losses=0,
+            draws=0,
+            uses=0,
+            success_rate=0.0,
+            tags=[],
+        )
+        .on_conflict_do_nothing(index_elements=["skill"])
+    )
+    return session.scalars(
+        select(SkillRecord).where(SkillRecord.skill == skill).with_for_update()
+    ).one()
+
+
 def skill_upsert(
     session: Session,
     skill: str,
@@ -51,9 +74,12 @@ def skill_upsert(
             constraint="skills_pkey",
             set_=update_set or {"updated_at": SkillRecord.updated_at},
         )
-        .returning(SkillRecord)
+        .returning(SkillRecord.skill)
     )
-    return session.scalars(stmt).one()
+    skill_key = session.execute(stmt).scalar_one()
+    session.expire_all()
+    return session.get(SkillRecord, skill_key)  # type: ignore[return-value]
+
 
 
 def skill_get(session: Session, skill: str) -> SkillRecord | None:

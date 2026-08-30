@@ -38,13 +38,7 @@ _FORBIDDEN_PATTERNS = [
     re.compile(r"\b(?:opponent_private|breaker_private|builder_private_pre_handoff)\b", re.IGNORECASE),
 ]
 
-# Learnable vs unlearnable outcomes
-LEARNABLE_OUTCOMES = {
-    "TEST_PASS", "TEST_FAIL", "STEP_BUDGET_EXCEEDED", "JUDGE_ONLY", "PASS", "FAIL", "WIN", "LOSS"
-}
-UNLEARNABLE_OUTCOMES = {
-    "PROVIDER_ERROR", "PROVIDER_TIMEOUT", "SANDBOX_ERROR", "CANCELLED", "TIMEOUT", "VERIFY_ERROR", "INVALID"
-}
+from .results import is_infra_outcome, is_learnable_model_outcome
 
 
 @dataclass
@@ -221,7 +215,6 @@ def retrieve(
         # Strict benchmark mode: strictly zero historical memory supplied
         return []
 
-    q_tokens = set(_tokens(query))
     skills = skills or []
     try:
         res = databases.list_documents(
@@ -229,15 +222,68 @@ def retrieve(
             "memories",
             queries=[Query.limit(limit * 10 if limit else 50)],
         )
-        docs = res.documents
+        raw_docs = res.documents
     except Exception:
-        docs = []
+        raw_docs = []
 
+    docs = [dict(d.data if hasattr(d, "data") else d) for d in raw_docs]
+    return _score_memory_docs(
+        docs,
+        query,
+        limit=limit,
+        user_id=user_id,
+        model_id=model_id,
+        role=role,
+        target_id=target_id,
+        skills=skills,
+    )
+
+
+def retrieve_pg(
+    session,
+    query: str,
+    *,
+    context_mode: str = "strict",
+    limit: int = 5,
+    user_id: str = "",
+    model_id: str = "",
+    role: str = "",
+    target_id: str = "",
+    skills: list[str] | None = None,
+) -> list[dict]:
+    """Postgres retrieve using the same Change Set B provenance gates."""
+    mode = str(context_mode or "strict").lower().strip()
+    if mode not in ("adaptive", "assisted"):
+        return []
+    from agent_arena.persistence.repositories import memories as mem_repo
+
+    docs = [mem_repo.memory_to_dict(r) for r in mem_repo.memory_list_all(session, limit=200)]
+    return _score_memory_docs(
+        docs,
+        query,
+        limit=limit,
+        user_id=user_id,
+        model_id=model_id,
+        role=role,
+        target_id=target_id,
+        skills=skills or [],
+    )
+
+
+def _score_memory_docs(
+    docs: list[dict],
+    query: str,
+    *,
+    limit: int,
+    user_id: str,
+    model_id: str,
+    role: str,
+    target_id: str,
+    skills: list[str],
+) -> list[dict]:
+    q_tokens = set(_tokens(query))
     scored: list[dict] = []
-    for d in docs:
-        data = dict(d.data if hasattr(d, "data") else d)
-
-        # Primary Boundary: Provenance & visibility gate
+    for data in docs:
         if not is_provenance_eligible(
             data,
             user_id=user_id,
@@ -246,14 +292,10 @@ def retrieve(
             target_id=target_id,
         ):
             continue
-
         insight = str(data.get("insight") or "")
         theory = str(data.get("theory") or "")
-
-        # Secondary Boundary: Content safety filter
         if not is_memory_content_safe(insight) or not is_memory_content_safe(theory):
             continue
-
         doc_tokens = set(data.get("tokens") or [])
         overlap = len(q_tokens & doc_tokens) if q_tokens else 0
         skill_bonus = 3 * len(set(skills) & set(data.get("chosen_skills") or []))
@@ -264,12 +306,8 @@ def retrieve(
         if score <= 0:
             continue
         scored.append({"score": round(score / recency, 3), **data})
-
     scored.sort(key=lambda m: m["score"], reverse=True)
     return scored[:limit]
-
-
-
 def forget(databases, database_id: str, older_than_days: int = 180) -> int:
     """Best-effort cleanup of stale memories. Returns number deleted."""
     cutoff = time.time() - older_than_days * 86400
@@ -380,7 +418,7 @@ def maybe_remember(
     policy_status = str(kwargs.get("policy_status") or "clean").lower()
 
     # Reject unlearnable infrastructure failures, crashes, and invalid policy violations
-    if outcome in UNLEARNABLE_OUTCOMES or policy_status == "invalid":
+    if is_infra_outcome(outcome) or not is_learnable_model_outcome(outcome) or policy_status == "invalid":
         return None
 
     # Classify authoritative status
@@ -399,3 +437,95 @@ def maybe_remember(
     if score < novelty_threshold:
         return None
     return remember(databases, database_id, **kwargs)
+
+
+def _novelty_from_records(
+    records: list[dict],
+    *,
+    insight: str,
+    skills: list[str] | None = None,
+    theory: str = "",
+) -> float:
+    q_tokens = set(_tokens(insight + " " + theory))
+    if not q_tokens:
+        return 1.0
+    best_sim = 0.0
+    seen_skills: set[str] = set()
+    for data in records:
+        doc_tokens = set(data.get("tokens") or [])
+        if not doc_tokens:
+            continue
+        inter = len(q_tokens & doc_tokens)
+        union = len(q_tokens | doc_tokens)
+        best_sim = max(best_sim, inter / union if union else 0.0)
+        seen_skills.update(data.get("chosen_skills") or [])
+    if not records:
+        return 1.0
+    skills = skills or []
+    diversity = (
+        1.0
+        if not seen_skills
+        else min(
+            1.0, 0.5 + 0.5 * len(set(skills) - seen_skills) / max(1, len(set(skills)))
+        )
+    )
+    return round(max(0.0, 1.0 - best_sim) * diversity, 3)
+
+
+def maybe_remember_pg(
+    session,
+    *,
+    novelty_threshold: float = 0.25,
+    **kwargs,
+) -> dict | None:
+    """Persist a Postgres memory only if Change Set B policy would allow it."""
+    outcome = str(kwargs.get("outcome") or "").strip().upper()
+    policy_status = str(kwargs.get("policy_status") or "clean").lower()
+    if is_infra_outcome(outcome) or not is_learnable_model_outcome(outcome) or policy_status == "invalid":
+        return None
+    user_id = str(kwargs.get("user_id") or "").strip()
+    if not user_id:
+        return None
+    if outcome in ("TEST_PASS", "PASS", "WIN", "JUDGE_ONLY"):
+        kwargs.setdefault("authoritative_status", "verified_pass")
+    elif outcome in ("TEST_FAIL", "STEP_BUDGET_EXCEEDED", "FAIL", "LOSS"):
+        kwargs.setdefault("authoritative_status", "verified_fail")
+
+    from agent_arena.persistence.repositories import memories as mem_repo
+
+    existing = [mem_repo.memory_to_dict(r) for r in mem_repo.memory_list_all(session, limit=200)]
+    score = _novelty_from_records(
+        existing,
+        insight=str(kwargs.get("insight") or ""),
+        skills=kwargs.get("chosen_skills"),
+        theory=str(kwargs.get("theory") or ""),
+    )
+    if score < novelty_threshold:
+        return None
+
+    insight = str(kwargs.get("insight") or "")[:2000]
+    theory = str(kwargs.get("theory") or "")[:500]
+    combined = f"{insight} {theory}"
+    if not is_memory_content_safe(combined):
+        insight = sanitize_memory_content(insight)
+        theory = sanitize_memory_content(theory)
+
+    row = mem_repo.memory_create(
+        session,
+        user_id=user_id,
+        insight=insight,
+        tokens=_tokens(insight + " " + theory),
+        battle_id=str(kwargs.get("battle_id") or "") or None,
+        model_id=str(kwargs.get("model_id") or "") or None,
+        format=str(kwargs.get("format_name") or kwargs.get("format") or "") or None,
+        chosen_skills=list(kwargs.get("chosen_skills") or []),
+        theory=theory,
+        outcome=str(kwargs.get("outcome") or "") or None,
+        target_id=str(kwargs.get("target_id") or "") or None,
+        role=str(kwargs.get("role") or "general") or None,
+        visibility_class=str(kwargs.get("visibility_class") or "model_private"),
+        authoritative_status=str(kwargs.get("authoritative_status") or "verified_pass"),
+        context_mode=str(kwargs.get("context_mode") or "adaptive"),
+        source_result_id=str(kwargs.get("source_result_id") or "") or None,
+    )
+    return mem_repo.memory_to_dict(row)
