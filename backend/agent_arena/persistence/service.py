@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, text
@@ -915,11 +915,13 @@ def events_append(
     )
 
 
-def events_load(battle_id: str) -> list[dict]:
+def events_load(battle_id: str, since_created_at: float | None = None) -> list[dict]:
     """Durable events for SSE replay: [{type, data, event_id, created_at}]."""
     if using_postgres():
         with session_scope() as session:
-            rows = repositories.events.event_list(session, battle_id)
+            rows = repositories.events.event_list(
+                session, battle_id, since_created_at=since_created_at
+            )
             out = []
             for row in rows:
                 created = (
@@ -938,6 +940,8 @@ def events_load(battle_id: str) -> list[dict]:
     from agent_arena.event_bus import load_durable
 
     events = load_durable(battle_id)
+    if since_created_at is not None and events:
+        events = [e for e in events if (e.get("created_at") or 0.0) >= since_created_at]
     if events and using_postgres() and appwrite_read_fallback():
         for event in events:
             try:
@@ -952,6 +956,45 @@ def events_load(battle_id: str) -> list[dict]:
             except Exception as exc:
                 _sanitized_log("event read-through", exc)
     return events
+
+
+def event_count(
+    battle_id: str,
+    *,
+    event_type: str | None = None,
+    since_seconds: float | None = None,
+) -> int:
+    """Count events for battle within optional sliding window."""
+    if using_postgres():
+        with session_scope() as session:
+            since_dt = None
+            if since_seconds is not None:
+                since_dt = datetime.now(timezone.utc) - timedelta(seconds=since_seconds)
+            return repositories.events.event_count(
+                session, battle_id, event_type=event_type, since_created_at=since_dt
+            )
+    databases, database_id = _aw()
+    try:
+        from appwrite.query import Query
+
+        queries = [Query.equal("battle_id", battle_id)]
+        if event_type:
+            queries.append(Query.contains("payload", f'"type":"{event_type}"'))
+        queries.append(Query.limit(500))
+        res = databases.list_documents(database_id, "battle_events", queries=queries)
+        if since_seconds is not None:
+            cutoff = time.time() - since_seconds
+            count = 0
+            for doc in res.documents:
+                created = float(doc.data.get("created_at") or 0.0)
+                if created >= cutoff:
+                    count += 1
+            return count
+        return len(res.documents)
+    except Exception as exc:
+        _sanitized_log("event_count fallback", exc)
+        return 0
+
 
 
 def round_create(

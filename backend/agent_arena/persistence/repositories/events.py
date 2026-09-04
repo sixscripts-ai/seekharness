@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -50,14 +51,38 @@ def event_list(
     battle_id: str,
     *,
     event_type: str | None = None,
+    since_created_at: float | datetime | None = None,
     limit: int = 500,
 ) -> list[BattleEvent]:
+    stmt = select(BattleEvent).where(BattleEvent.battle_id == battle_id)
+    if event_type is not None:
+        stmt = stmt.where(BattleEvent.event_type == event_type)
+    if since_created_at is not None:
+        if isinstance(since_created_at, (int, float)):
+            since_created_at = datetime.fromtimestamp(since_created_at, tz=timezone.utc)
+        stmt = stmt.where(BattleEvent.created_at >= since_created_at)
+    stmt = stmt.order_by(BattleEvent.created_at, BattleEvent.sequence).limit(limit)
+    return list(session.scalars(stmt))
+
+
+def event_count(
+    session: Session,
+    battle_id: str,
+    *,
+    event_type: str | None = None,
+    since_created_at: float | datetime | None = None,
+) -> int:
+    """Count events matching criteria."""
     stmt = (
-        select(BattleEvent)
+        select(func.count())
+        .select_from(BattleEvent)
         .where(BattleEvent.battle_id == battle_id)
-        .order_by(BattleEvent.created_at, BattleEvent.sequence)
-        .limit(limit)
     )
     if event_type is not None:
         stmt = stmt.where(BattleEvent.event_type == event_type)
-    return list(session.scalars(stmt))
+    if since_created_at is not None:
+        if isinstance(since_created_at, (int, float)):
+            since_created_at = datetime.fromtimestamp(since_created_at, tz=timezone.utc)
+        stmt = stmt.where(BattleEvent.created_at >= since_created_at)
+    return session.scalar(stmt) or 0
+

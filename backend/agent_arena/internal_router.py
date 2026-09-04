@@ -6,6 +6,7 @@ import hmac
 import json
 import re
 import time
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 from threading import Lock
@@ -61,10 +62,10 @@ def require_internal_key(x_internal_key: str | None = Header(default=None)) -> b
 
 
 def _rate_limit(battle_id: str) -> None:
-    """Durable per-battle rate limit backed by Appwrite.
+    """Durable per-battle rate limit backed by PostgreSQL / Appwrite.
 
     The in-process dict was unreliable across Modal replicas and reset on cold
-    start. We persist a per-battle call counter document so the limit holds
+    start. We persist an internal_call audit event so the limit holds
     regardless of which replica serves the request. Falls back to the local
     in-memory window if the datastore is unavailable (best-effort).
     """
@@ -75,17 +76,22 @@ def _rate_limit(battle_id: str) -> None:
         _rate_counts[battle_id] = window
         if len(window) >= _RATE_LIMIT:
             raise HTTPException(status_code=429, detail="internal rate limit exceeded")
-    # Durable cross-replica window via a counter document.
+    # Durable cross-replica window via persistent event store.
     try:
         from .persistence import service
 
         if service.using_postgres():
-            internal_calls = sum(
-                1 for e in service.events_load(battle_id)
-                if e.get("type") == "internal_call"
+            count = service.event_count(
+                battle_id, event_type="internal_call", since_seconds=60
             )
-            if internal_calls >= _RATE_LIMIT:
+            if count >= _RATE_LIMIT:
                 raise HTTPException(status_code=429, detail="internal rate limit exceeded")
+            service.events_append(
+                battle_id,
+                "internal_call",
+                {"ts": now},
+                event_id=f"rate_{uuid.uuid4().hex}",
+            )
         else:
             databases = db.get_databases()
             database_id = db.get_database_id()
@@ -103,6 +109,12 @@ def _rate_limit(battle_id: str) -> None:
             # token expiry already bounds total call volume. Keep it conservative.
             if len(res.documents) >= _RATE_LIMIT:
                 raise HTTPException(status_code=429, detail="internal rate limit exceeded")
+            service.events_append(
+                battle_id,
+                "internal_call",
+                {"ts": now},
+                event_id=f"rate_{uuid.uuid4().hex}",
+            )
     except HTTPException:
         raise
     except Exception:

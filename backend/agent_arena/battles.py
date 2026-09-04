@@ -163,39 +163,60 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
         from .battle_public import public_sse_payload
 
         seen_ids: set[str] = set()
-        # Durable snapshot first (survives scale-to-zero / other replicas)
-        for ev in service.events_load(battle_id):
-            eid = ev.get("event_id")
-            if eid and eid in seen_ids:
-                continue
-            if eid:
-                seen_ids.add(eid)
-            yield {
-                "event": ev["type"],
-                "data": json.dumps(public_sse_payload(ev)),
-            }
-        while True:
-            events = event_bus.subscribe(battle_id)
-            # sort by created_at then event_id for stable multi-writer merge
-            ordered = sorted(
-                events,
+        watermark: float | None = None
+
+        def _drain_events(raw_events):
+            nonlocal watermark
+            new_events = []
+            for ev in raw_events:
+                # Internal telemetry must never reach public SSE streams
+                if ev.get("type") == "internal_call":
+                    continue
+                eid = ev.get("event_id") or ""
+                dedupe_key = (
+                    eid
+                    if eid
+                    else f"{ev.get('type')}:{ev.get('created_at')}:{hash(json.dumps(ev.get('data', {}), sort_keys=True))}"
+                )
+                if dedupe_key in seen_ids:
+                    continue
+                seen_ids.add(dedupe_key)
+                created = float(ev.get("created_at") or ev.get("ts") or 0.0)
+                if watermark is None or created > watermark:
+                    watermark = created
+                new_events.append(ev)
+
+            # Sort by created_at then event_id for stable multi-writer merge
+            new_events.sort(
                 key=lambda e: (
                     e.get("created_at", e.get("ts", 0)),
                     e.get("event_id", ""),
                 ),
             )
-            for ev in ordered:
-                eid = ev.get("event_id")
-                if eid and eid in seen_ids:
-                    continue
-                if eid:
-                    seen_ids.add(eid)
+            for ev in new_events:
                 yield {
                     "event": ev["type"],
                     "data": json.dumps(public_sse_payload(ev)),
                 }
+
+        # 1. Durable snapshot first (survives scale-to-zero / other replicas)
+        yield from _drain_events(service.events_load(battle_id))
+
+        while True:
+            # 2. Poll durable storage with watermark to pick up other replicas' writes
+            durable_events = service.events_load(battle_id, since_created_at=watermark)
+            # 3. Local in-memory event bus
+            local_events = event_bus.subscribe(battle_id)
+
+            yield from _drain_events(durable_events + local_events)
+
             battle = service.battle_get(user_id, battle_id) or {}
             if battle.get("status") in ("completed", "failed", "cancelled"):
+                # Final drain to guarantee no completion events were missed
+                yield from _drain_events(
+                    service.events_load(battle_id, since_created_at=watermark)
+                    + event_bus.subscribe(battle_id)
+                )
                 yield {
                     "event": "done",
                     "data": json.dumps(
