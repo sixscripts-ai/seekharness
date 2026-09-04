@@ -1,13 +1,13 @@
 """Persistence service: the single decision point for backend selection.
 
 All durable reads/writes for the application domain flow through this module.
-When PERSISTENCE_BACKEND=postgres, PostgreSQL is the primary store; optional
-APPWRITE_DUAL_WRITE mirrors writes to Appwrite best-effort (never blocking),
-and APPWRITE_READ_FALLBACK serves legacy records that are not in Postgres yet.
+PERSISTENCE_BACKEND=postgres makes Neon the system of record for battles, Elo,
+events, and stats. Appwrite Auth (signup / session / JWT) is untouched.
 
-Fallback happens ONLY for legitimate record absence (404 / no rows), never for
-arbitrary database errors. Appwrite Auth and the repository-backed Target
-Library are untouched.
+APPWRITE_DUAL_WRITE and APPWRITE_READ_FALLBACK default off. Dual-write is
+best-effort and non-blocking, so leaving it on lets Postgres and Appwrite
+diverge. Read-fallback serves Appwrite-only rows that are not Postgres truth.
+Do not re-enable them to "keep the UI working."
 """
 
 from __future__ import annotations
@@ -41,21 +41,21 @@ log = logging.getLogger("agent_arena.persistence.service")
 def using_postgres() -> bool:
     from agent_arena.config import settings
 
-    return settings().get("PERSISTENCE_BACKEND", "appwrite") == "postgres"
+    return (settings().get("PERSISTENCE_BACKEND") or "postgres").strip().lower() == "postgres"
 
 
 def appwrite_read_fallback() -> bool:
     from agent_arena.config import settings
 
-    value = settings().get("APPWRITE_READ_FALLBACK", "true")
-    return value is True or str(value).lower() in ("true", "1")
+    value = settings().get("APPWRITE_READ_FALLBACK", "false")
+    return value is True or str(value).strip().lower() in ("true", "1", "yes", "on")
 
 
 def appwrite_dual_write() -> bool:
     from agent_arena.config import settings
 
-    value = settings().get("APPWRITE_DUAL_WRITE", "true")
-    return value is True or str(value).lower() in ("true", "1")
+    value = settings().get("APPWRITE_DUAL_WRITE", "false")
+    return value is True or str(value).strip().lower() in ("true", "1", "yes", "on")
 
 
 def _aw():

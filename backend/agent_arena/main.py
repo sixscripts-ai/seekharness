@@ -54,11 +54,27 @@ app.include_router(stats.router)
 
 @app.get("/health")
 def health():
+    s = settings()
+    dual = str(s.get("APPWRITE_DUAL_WRITE", "false")).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
+    fallback = str(s.get("APPWRITE_READ_FALLBACK", "false")).strip().lower() in (
+        "true",
+        "1",
+        "yes",
+        "on",
+    )
     return {
         "status": "ok",
-        "project": settings()["APPWRITE_PROJECT_ID"],
+        "project": s["APPWRITE_PROJECT_ID"],
         # Set at deploy time: modal deploy modal_entry.py --env ARENA_BUILD_SHA=$(git rev-parse HEAD)
         "build_sha": os.environ.get("ARENA_BUILD_SHA") or "unknown",
         "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,
         "scoring_version": SCORING_VERSION,
+        "persistence_backend": s.get("PERSISTENCE_BACKEND") or "postgres",
+        "appwrite_dual_write": dual,
+        "appwrite_read_fallback": fallback,
     }

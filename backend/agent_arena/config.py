@@ -10,29 +10,29 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if should_load_dotenv():
     load_dotenv(_REPO_ROOT / ".env")
 
-_REQUIRED = [
-    "APPWRITE_ENDPOINT",
-    "APPWRITE_PROJECT_ID",
-    "APPWRITE_API_KEY",
-    "APPWRITE_DATABASE_ID",
-]
+_TRUTHY = ("true", "1", "yes", "on")
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    raw = os.environ.get(name, default)
+    if raw is None or not str(raw).strip():
+        raw = default
+    return str(raw).strip().lower() in _TRUTHY
+
+
+def persistence_backend() -> str:
+    raw = (os.environ.get("PERSISTENCE_BACKEND") or "postgres").strip().lower()
+    return raw or "postgres"
 
 
 @lru_cache
 def settings() -> dict:
-    persistence = os.environ.get("PERSISTENCE_BACKEND", "postgres").lower()
-    read_fallback = os.environ.get("APPWRITE_READ_FALLBACK", "true").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
-    dual_write = os.environ.get("APPWRITE_DUAL_WRITE", "true").lower() in (
-        "true",
-        "1",
-        "yes",
-    )
+    persistence = persistence_backend()
+    read_fallback = _env_flag("APPWRITE_READ_FALLBACK", "false")
+    dual_write = _env_flag("APPWRITE_DUAL_WRITE", "false")
 
     if persistence == "postgres" and not (read_fallback or dual_write):
+        # Appwrite is identity-only: JWT Account.get() needs project + endpoint.
         required = ["APPWRITE_ENDPOINT", "APPWRITE_PROJECT_ID"]
     else:
         required = [
@@ -67,8 +67,9 @@ def settings() -> dict:
         "JUDGE_MODAL_BASE": os.environ.get("JUDGE_MODAL_BASE", ""),
         "JUDGE_MODAL_MODEL": os.environ.get("JUDGE_MODAL_MODEL", ""),
         "HOST_OPENCODE_GO_KEY": os.environ.get("HOST_OPENCODE_GO_KEY", ""),
-        # Persistence backend selection (Neon PostgreSQL primary).
-        "PERSISTENCE_BACKEND": os.environ.get("PERSISTENCE_BACKEND", "postgres"),
-        "APPWRITE_READ_FALLBACK": os.environ.get("APPWRITE_READ_FALLBACK", "true"),
-        "APPWRITE_DUAL_WRITE": os.environ.get("APPWRITE_DUAL_WRITE", "true"),
+        # Neon is the battle system of record. Appwrite dual-write / read-fallback
+        # stay off unless an operator explicitly re-enables them.
+        "PERSISTENCE_BACKEND": persistence,
+        "APPWRITE_READ_FALLBACK": "true" if read_fallback else "false",
+        "APPWRITE_DUAL_WRITE": "true" if dual_write else "false",
     }

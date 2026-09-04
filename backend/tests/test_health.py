@@ -10,3 +10,7 @@ def test_health():
     body = resp.json()
     assert body["status"] == "ok"
     assert body["project"]
+    # Hermetic pytest forces Appwrite-primary so tests never open Neon.
+    assert body["persistence_backend"] == "appwrite"
+    assert body["appwrite_dual_write"] is False
+    assert body["appwrite_read_fallback"] is False

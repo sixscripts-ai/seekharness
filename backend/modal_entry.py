@@ -54,6 +54,15 @@ evaluator_volume = modal.Volume.from_name(
 
 app = modal.App("agent-arena-backend", image=image)
 
+# Neon is the battle system of record. Pin these on the function so a stale
+# dotenv secret cannot silently re-enable Appwrite dual-write / read-fallback.
+# Appwrite remains identity-only (endpoint + project on the secret).
+_PERSISTENCE_ENV = {
+    "PERSISTENCE_BACKEND": "postgres",
+    "APPWRITE_DUAL_WRITE": "false",
+    "APPWRITE_READ_FALLBACK": "false",
+}
+
 
 _CURRENT_SHA = os.environ.get("ARENA_BUILD_SHA") or "unknown"
 if _CURRENT_SHA == "unknown":
@@ -80,6 +89,7 @@ if _CURRENT_SHA == "unknown":
         "ARENA_TARGETS_DIR": "/opt/arena-targets",
         "ARENA_EVALUATOR_DIR": EVALUATOR_MOUNT_PATH,
         "ARENA_BUILD_SHA": _CURRENT_SHA,
+        **_PERSISTENCE_ENV,
         **canonical_skill_runtime_env(),
     },
 )
@@ -94,6 +104,7 @@ def fastapi_app():
 @app.function(
     secrets=[modal.Secret.from_name("agent-arena-dotenv")],
     schedule=modal.Period(minutes=1),
+    env={**_PERSISTENCE_ENV},
 )
 def reap_stale_battles():
     from agent_arena.reaper import reap_stale_battles as _reap

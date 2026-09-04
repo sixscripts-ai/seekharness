@@ -113,7 +113,7 @@ def main() -> int:
         )).scalar()
 
         # split brain: PERSISTENCE_BACKEND in env
-        pb = os.environ.get("PERSISTENCE_BACKEND") or "unset (defaults to appwrite)"
+        pb = os.environ.get("PERSISTENCE_BACKEND") or "unset (defaults to postgres)"
         db_url = os.environ.get("DATABASE_URL") or "unset"
 
         report = {

@@ -42,7 +42,7 @@ def _iter_battles(databases, database_id, cap: int = 2000):
 
 
 def appwrite_snapshot() -> dict:
-    """Legacy Appwrite-backed snapshot (kept for the Appwrite persistence branch)."""
+    """Legacy Documents/TablesDB snapshot. Production stats use Postgres."""
     databases = db.get_databases()
     database_id = db.get_database_id()
 
