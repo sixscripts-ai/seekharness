@@ -89,6 +89,7 @@ def test_idempotent_repeated_finalize_single_mutation(monkeypatch):
             "passed": True,
             "steps": 3,
             "artifact_checks": {"present": ["solution.py"], "missing": []},
+            "_trusted": True,
         },
         {
             "model_id": "model-beta",
@@ -98,6 +99,7 @@ def test_idempotent_repeated_finalize_single_mutation(monkeypatch):
             "passed": False,
             "steps": 5,
             "artifact_checks": {"present": ["solution.py"], "missing": []},
+            "_trusted": True,
         },
     ]
 
@@ -161,6 +163,7 @@ def test_builder_breaker_authoritative_lifecycle(monkeypatch):
             "passed": True,
             "steps": 4,
             "artifact_checks": {"present": ["challenge.py"], "missing": []},
+            "_trusted": True,
         },
         {
             "model_id": "breaker-mod",
@@ -170,6 +173,7 @@ def test_builder_breaker_authoritative_lifecycle(monkeypatch):
             "passed": True,
             "steps": 2,
             "artifact_checks": {"present": ["exploit.py"], "missing": []},
+            "_trusted": True,
         },
     ]
 
@@ -207,6 +211,7 @@ def test_same_model_persists_two_identity_rows(monkeypatch):
             "passed": True,
             "steps": 4,
             "artifact_checks": {"present": ["challenge.py"], "missing": []},
+            "_trusted": True,
         },
         {
             "model_id": "shared-model",
@@ -216,6 +221,7 @@ def test_same_model_persists_two_identity_rows(monkeypatch):
             "passed": False,
             "steps": 2,
             "artifact_checks": {"present": ["exploit.py"], "missing": []},
+            "_trusted": True,
         },
     ]
     res = finalize_battle(battle_id, caller_status="completed", override_results=results)

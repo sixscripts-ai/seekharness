@@ -93,7 +93,8 @@ def battle_get(session: Session, battle_id: str) -> Battle | None:
 _BATTLE_UPDATE_FIELDS = {
     "status", "timeout_seconds", "round_visibility", "saved",
     "sandbox_id", "judge_provider_id", "preview_urls",
-    "failure_reason", "started_at", "completed_at", "difficulty",
+    "failure_reason", "started_at", "completed_at", "finalized_at",
+    "difficulty",
     "draft_id", "battle_config", "spec_hash", "custom_title",
     "ranked", "target_id", "target_version", "target_manifest_hash",
     "arena_size", "user_id", "format_id",
@@ -176,3 +177,15 @@ def battle_model_ids(session: Session, battle_id: str) -> list[str]:
         .order_by(BattleParticipant.position)
     )
     return list(session.scalars(stmt))
+
+
+def battle_participant_slots(
+    session: Session, battle_id: str
+) -> list[tuple[str, str | None]]:
+    """Ordered (model_id, role) slots. role may be None."""
+    stmt = (
+        select(BattleParticipant.model_id, BattleParticipant.role)
+        .where(BattleParticipant.battle_id == battle_id)
+        .order_by(BattleParticipant.position)
+    )
+    return [(str(mid), role) for mid, role in session.execute(stmt).all()]

@@ -397,6 +397,7 @@ def test_finalize_unranked_frozen_config_does_not_apply_elo(
                 "passed": False,
                 "steps": 1,
                 "artifact_checks": {"present": [], "missing": []},
+                "_trusted": True,
             }
         ],
     )

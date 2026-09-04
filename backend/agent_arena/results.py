@@ -50,6 +50,8 @@ INFRA_OUTCOMES = frozenset(
         "EXECUTOR_CRASH",
         "INFRASTRUCTURE_FAILURE",
         "SANDBOX_BOOT_FAILURE",
+        "INCOMPLETE_EVIDENCE",
+        "NO_FIRST_TOKEN",
         "INVALID",
     }
 )
@@ -181,6 +183,8 @@ def is_infra_outcome(outcome: str | None) -> bool:
             "VERIFY_ERROR",
             "VERIFICATION_ERROR",
             "EXECUTOR_CRASH",
+            "NO_FIRST_TOKEN",
+            "INCOMPLETE_EVIDENCE",
         )
     ):
         return True

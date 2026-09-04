@@ -137,13 +137,12 @@ def test_reap_pg_fails_only_stale_active(monkeypatch):
         lambda _session, **_k: [stale, fresh],
     )
 
-    def fail_if_active(_session, battle_id, *, reason, completed_at):
+    def fail_closed(battle_id, *, reason):
         failed.append(battle_id)
-        return SimpleNamespace(id=battle_id, status="failed")
+        return {"ok": True, "status": "failed", "already_finalized": False}
 
     monkeypatch.setattr(
-        "agent_arena.persistence.repositories.battles.battle_fail_if_active",
-        fail_if_active,
+        "agent_arena.finalization.fail_closed_incomplete", fail_closed
     )
     monkeypatch.setattr(
         "agent_arena.reaper._stop_sandbox", lambda sid: stopped.append(sid)
@@ -156,7 +155,7 @@ def test_reap_pg_fails_only_stale_active(monkeypatch):
     reaped = _reap_pg(NOW, GRACE)
     assert reaped == ["stale-1"]
     assert failed == ["stale-1"]
-    assert published == ["stale-1"]
+    assert published == []
     assert stopped == []
 
 
@@ -182,8 +181,12 @@ def test_reap_pg_skips_when_row_already_terminal(monkeypatch):
         lambda _session, **_k: [stale],
     )
     monkeypatch.setattr(
-        "agent_arena.persistence.repositories.battles.battle_fail_if_active",
-        lambda *_a, **_k: None,
+        "agent_arena.finalization.fail_closed_incomplete",
+        lambda *_a, **_k: {
+            "ok": True,
+            "status": "failed",
+            "already_finalized": True,
+        },
     )
     monkeypatch.setattr("agent_arena.reaper._stop_sandbox", lambda _sid: None)
     monkeypatch.setattr("agent_arena.reaper._publish_failed", lambda *_a: None)
@@ -267,14 +270,13 @@ def test_reap_pg_fails_silent_running(monkeypatch):
         "agent_arena.reaper._battle_has_first_token", lambda _bid: False
     )
 
-    def fail_if_active(_session, battle_id, *, reason, completed_at):
+    def fail_closed(battle_id, *, reason):
         assert FAILURE_REASON in reason
         failed.append(battle_id)
-        return SimpleNamespace(id=battle_id, status="failed")
+        return {"ok": True, "status": "failed", "already_finalized": False}
 
     monkeypatch.setattr(
-        "agent_arena.persistence.repositories.battles.battle_fail_if_active",
-        fail_if_active,
+        "agent_arena.finalization.fail_closed_incomplete", fail_closed
     )
     monkeypatch.setattr(
         "agent_arena.reaper._stop_sandbox", lambda sid: stopped.append(sid)
@@ -287,5 +289,5 @@ def test_reap_pg_fails_silent_running(monkeypatch):
     reaped = _reap_pg(NOW, GRACE)
     assert reaped == ["silent-1"]
     assert failed == ["silent-1"]
-    assert published == ["silent-1"]
+    assert published == []
     assert stopped == ["sbx-silent"]

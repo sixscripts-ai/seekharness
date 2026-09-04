@@ -29,6 +29,7 @@ from agent_arena.persistence.models import (
     SkillRecord,
 )
 from agent_arena.persistence.session import SessionLocal
+from agent_arena.results import TRUSTED_VERIFICATION_MARKER
 from tests.pg_support import postgres_tests_enabled, sqlalchemy_test_url
 
 pytestmark = pytest.mark.postgres
@@ -49,6 +50,24 @@ def _payload(mid: str, role: str, passed: bool, steps: int, skills: list[str] | 
     return "EXECUTOR_RESULT: " + json.dumps(body)
 
 
+def _trusted_payload(mid: str, role: str, passed: bool, steps: int, skills: list[str] | None = None) -> str:
+    body = {
+        "source": "trusted_verifier",
+        "kind": "solo",
+        "model_id": mid,
+        "role": role,
+        "phase": "race",
+        "passed": passed,
+        "outcome": "TEST_PASS" if passed else "TEST_FAIL",
+        "verification_status": "verified_pass" if passed else "verified_fail",
+        "steps": steps,
+        "skill_reads": skills or [],
+        "artifact_checks": {"present": ["solution.py"], "missing": []},
+        "theory": "keep the ping function correct",
+    }
+    return TRUSTED_VERIFICATION_MARKER + " " + json.dumps(body)
+
+
 def _trusted_override(
     mid: str, role: str, passed: bool, steps: int, skills: list[str] | None = None
 ) -> dict:
@@ -62,6 +81,7 @@ def _trusted_override(
         "skill_reads": skills or [],
         "artifact_checks": {"present": ["solution.py"], "missing": []},
         "theory": "keep the ping function correct",
+        "_trusted": True,
     }
 
 
@@ -206,29 +226,6 @@ def _assert_completed_exactly_once(session, bid: str, model_ids: list[str], skil
     assert skill_row.losses == 1
     memories = list(session.scalars(select(Memory).where(Memory.battle_id == bid)))
     assert len(memories) == 1
-
-
-def _assert_untrusted_completion(session, bid: str, model_ids: list[str], skill: str) -> None:
-    """Sandbox EXECUTOR_RESULT may complete a battle; it must not learn."""
-    row = session.get(Battle, bid)
-    assert row.status == "completed"
-    assert row.finalized_at is not None
-    results = repositories.results.results_list_by_battle(session, bid)
-    assert len(results) == 2
-    assert {r.model_id for r in results} == set(model_ids)
-    assert all(r.verification_status == "unverified" for r in results)
-    scores = repositories.scores.score_list(session, bid)
-    assert len(scores) == 2
-    assert {s.score for s in scores} == {0.0}
-    assert all("untrusted-diagnostic" in str(s.justification or "") for s in scores)
-    assert (
-        session.scalars(
-            select(LeaderboardEntry).where(LeaderboardEntry.model_id.in_(model_ids))
-        ).first()
-        is None
-    )
-    assert session.get(SkillRecord, skill) is None
-    assert list(session.scalars(select(Memory).where(Memory.battle_id == bid))) == []
 
 
 def _add_race_rounds(session, bid: str, mid_a: str, mid_b: str, skill: str) -> None:
@@ -589,6 +586,7 @@ def test_c6_missing_evidence_is_retryable_then_completes(pg_bound):
             model_ids=["model-a", "model-b"],
             status="running",
             ranked=True,
+            target_id="c6-target",
             battle_config={"context_mode": "strict"},
         )
         session.commit()
@@ -606,7 +604,7 @@ def test_c6_missing_evidence_is_retryable_then_completes(pg_bound):
                 battle_id=bid,
                 phase="race",
                 model_id="model-a",
-                artifact=_payload("model-a", "player_a", True, 3, []),
+                artifact=_trusted_payload("model-a", "player_a", True, 3, []),
             )
         )
         session.add(
@@ -614,7 +612,7 @@ def test_c6_missing_evidence_is_retryable_then_completes(pg_bound):
                 battle_id=bid,
                 phase="race",
                 model_id="model-b",
-                artifact=_payload("model-b", "player_b", False, 8, []),
+                artifact=_trusted_payload("model-b", "player_b", False, 8, []),
             )
         )
         session.commit()
@@ -632,9 +630,8 @@ def test_c7_uncommitted_evidence_overlaps_finalize(pg_bound):
 
     Writer already holds FOR KEY SHARE on Battle via the Round FK. Finalize's
     SELECT ... FOR UPDATE therefore waits. After the writer commits, finalize
-    sees durable evidence and completes exactly once. The test must not wait
-    for the writer while finalize already holds FOR UPDATE — that FK cycle is
-    impossible and deadlocks.
+    sees durable EXECUTOR_RESULT telemetry and still returns retryable
+    INCOMPLETE_EVIDENCE. Sandbox JSON cannot complete the battle.
     """
     factory = sessionmaker(bind=pg_bound, expire_on_commit=False, autoflush=False)
     mid_a = f"c7a_{uuid.uuid4().hex[:8]}"
@@ -677,19 +674,19 @@ def test_c7_uncommitted_evidence_overlaps_finalize(pg_bound):
     finally:
         writer.close()
 
-    assert first.get("retryable") is not True
+    assert first.get("retryable") is True
     assert first.get("already_finalized") is False
-    assert first["status"] == "completed"
-    assert first.get("authoritative") is False
+    assert first["status"] == "running"
+    assert first.get("error") == "INCOMPLETE_EVIDENCE"
 
     with factory() as session:
-        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
+        _assert_no_authoritative_side_effects(session, bid, [mid_a, mid_b], skill)
 
     replay = finalize_battle(bid)
-    assert replay.get("already_finalized") is True
-    assert replay["status"] == "completed"
+    assert replay.get("retryable") is True
+    assert replay["status"] == "running"
     with factory() as session:
-        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
+        _assert_no_authoritative_side_effects(session, bid, [mid_a, mid_b], skill)
 
 
 def test_c7_finalize_first_writer_blocks_then_retryable(pg_bound):
@@ -698,7 +695,8 @@ def test_c7_finalize_first_writer_blocks_then_retryable(pg_bound):
     Finalize holds FOR UPDATE. Writer INSERT waits on the parent FK. The test
     only waits until that lock wait is visible, then lets finalize continue.
     Finalize must return retryable/nonterminal without waiting for the writer
-    to commit. After the writer commits, a later finalize completes once.
+    to commit. After the writer commits EXECUTOR_RESULT, a later host-direct
+    finalize stays retryable. Sandbox JSON cannot complete the battle.
     """
     import agent_arena.finalization as fin
 
@@ -766,14 +764,14 @@ def test_c7_finalize_first_writer_blocks_then_retryable(pg_bound):
         assert len(rounds) == 2
 
     second = finalize_battle(bid)
-    assert second["status"] == "completed"
-    assert second.get("already_finalized") is False
-    assert second.get("authoritative") is False
+    assert second.get("retryable") is True
+    assert second["status"] == "running"
+    assert second.get("error") == "INCOMPLETE_EVIDENCE"
     with factory() as session:
-        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
+        _assert_no_authoritative_side_effects(session, bid, [mid_a, mid_b], skill)
 
     replay = finalize_battle(bid)
-    assert replay.get("already_finalized") is True
-    assert replay["status"] == "completed"
+    assert replay.get("retryable") is True
+    assert replay["status"] == "running"
     with factory() as session:
-        _assert_untrusted_completion(session, bid, [mid_a, mid_b], skill)
+        _assert_no_authoritative_side_effects(session, bid, [mid_a, mid_b], skill)

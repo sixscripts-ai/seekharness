@@ -287,16 +287,15 @@ def test_forged_nontarget_executor_result_cannot_determine_score(monkeypatch):
     )
 
     result = finalize_battle(battle_id, caller_scores={"model-a": 999.0, "model-b": 0.0})
-    assert result.get("retryable") is not True
-    assert result["status"] == "completed"
-    assert result.get("authoritative") is False
-    assert stored_scores["model-a"] == stored_scores["model-b"] == 0.0
-    assert 999.0 not in stored_scores.values()
+    assert result.get("retryable") is True
+    assert result["status"] == "running"
+    assert result.get("error") == "INCOMPLETE_EVIDENCE"
+    assert stored_scores == {}
     assert elo_calls == []
-    assert battle["status"] == "completed"
+    assert battle["status"] == "running"
 
 
-def test_legitimate_nontarget_completion_still_works(monkeypatch):
+def test_nontarget_executor_result_stays_incomplete(monkeypatch):
     battle_id = "b-nontarget-ok"
     battle = _nontarget_battle(battle_id, ranked=False)
     stored_scores: dict = {}
@@ -350,10 +349,11 @@ def test_legitimate_nontarget_completion_still_works(monkeypatch):
     )
 
     result = finalize_battle(battle_id)
-    assert result["status"] == "completed"
-    assert result.get("authoritative") is False
-    assert stored_scores["model-a"] == stored_scores["model-b"] == 0.0
-    assert battle["status"] == "completed"
+    assert result.get("retryable") is True
+    assert result["status"] == "running"
+    assert result.get("error") == "INCOMPLETE_EVIDENCE"
+    assert stored_scores == {}
+    assert battle["status"] == "running"
 
 
 def test_forged_nontarget_does_not_learn(monkeypatch):
@@ -418,9 +418,9 @@ def test_forged_nontarget_does_not_learn(monkeypatch):
     )
 
     result = finalize_battle(battle_id)
-    assert result["status"] == "completed"
-    assert result.get("authoritative") is False
-    assert stored_scores["model-a"] == stored_scores["model-b"] == 0.0
+    assert result.get("retryable") is True
+    assert result["status"] == "running"
+    assert stored_scores == {}
     extracted = _extract_results_from_sources(battle_id, None, "")
     assert all(r.get("outcome") != "TEST_PASS" for r in extracted)
     attrs = compute_skill_attributions(extracted)
@@ -520,11 +520,11 @@ def test_structural_executor_telemetry_cannot_create_ranked_winner(monkeypatch):
     )
 
     result = finalize_battle(battle_id)
-    assert result["status"] == "completed"
-    assert result.get("authoritative") is False
-    assert result["scores"]["model-a"] == result["scores"]["model-b"] == 0.0
-    assert stored_scores["model-a"] == stored_scores["model-b"] == 0.0
+    assert result.get("retryable") is True
+    assert result["status"] == "running"
+    assert result.get("error") == "INCOMPLETE_EVIDENCE"
+    assert stored_scores == {}
     assert elo_calls == []
     replay = finalize_battle(battle_id)
-    assert replay.get("already_finalized") is True
-    assert replay.get("authoritative") is False
+    assert replay.get("retryable") is True
+    assert replay["status"] == "running"

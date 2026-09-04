@@ -7,6 +7,8 @@ import {
   Cpu,
   Database,
   Eye,
+  FileCode2,
+  Files,
   Flame,
   LockKeyhole,
   Play,
@@ -20,19 +22,13 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { api, type TargetSummaryOut } from "@/lib/api";
-
-const DIFFICULTY_ORDER = ["novice", "general", "advanced", "expert"];
+import { api, type TargetDetailOut, type TargetSummaryOut } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 
 function titleCase(value: string) {
   return value
     .replace(/[_-]/g, " ")
     .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function difficultyRank(value: string) {
-  const index = DIFFICULTY_ORDER.indexOf(value.toLowerCase());
-  return index === -1 ? DIFFICULTY_ORDER.length : index;
 }
 
 function compactHash(hash: string) {
@@ -75,21 +71,6 @@ function categoryIcon(category: string) {
   }
 }
 
-function difficultyBadgeStyle(difficulty: string) {
-  switch (difficulty.toLowerCase()) {
-    case "novice":
-      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-400";
-    case "general":
-      return "border-cyan-500/30 bg-cyan-500/10 text-cyan-400";
-    case "advanced":
-      return "border-pink-500/40 bg-pink-500/10 text-pink-400 shadow-[0_0_10px_rgba(255,0,160,0.15)]";
-    case "expert":
-      return "border-amber-500/40 bg-amber-500/10 text-amber-300 shadow-[0_0_10px_rgba(245,158,11,0.15)]";
-    default:
-      return "border-zinc-700 bg-zinc-800 text-zinc-300";
-  }
-}
-
 export default function Targets() {
   const [params, setParams] = useSearchParams();
   const [targets, setTargets] = useState<TargetSummaryOut[]>([]);
@@ -126,21 +107,19 @@ export default function Targets() {
     };
   }, []);
 
+  const [previewTarget, setPreviewTarget] = useState<TargetSummaryOut | null>(null);
+
   const facets = useMemo(() => {
     const categories = Array.from(new Set(targets.map((target) => target.category))).sort();
     const formats = Array.from(new Set(targets.map((target) => target.format))).sort();
-    const difficulties = Array.from(new Set(targets.map((target) => target.difficulty))).sort(
-      (a, b) => difficultyRank(a) - difficultyRank(b),
-    );
     const allTags = Array.from(new Set(targets.flatMap((target) => target.tags))).sort();
-    return { categories, formats, difficulties, allTags };
+    return { categories, formats, allTags };
   }, [targets]);
 
   const visible = useMemo(() => {
     const term = search.trim().toLowerCase();
     return targets.filter((target) => {
       if (category !== "all" && target.category.toLowerCase() !== category.toLowerCase()) return false;
-      if (difficulty !== "all" && target.difficulty.toLowerCase() !== difficulty.toLowerCase()) return false;
       if (format !== "all" && target.format.toLowerCase() !== format.toLowerCase()) return false;
       if (activeTag && !target.tags.some((t) => t.toLowerCase() === activeTag.toLowerCase())) return false;
       if (!term) return true;
@@ -148,18 +127,15 @@ export default function Targets() {
         target.name,
         target.description,
         target.category,
-        target.difficulty,
         target.format,
         target.runtime,
         target.id,
         ...target.tags,
       ].some((value) => value.toLowerCase().includes(term));
     });
-  }, [targets, search, category, difficulty, format, activeTag]);
+  }, [targets, search, category, format, activeTag]);
 
-  const advancedCount = targets.filter((target) =>
-    ["advanced", "expert"].includes(target.difficulty.toLowerCase()),
-  ).length;
+  const sealedCount = targets.filter((target) => !target.network).length;
   const builderBreakerCount = targets.filter((target) => target.format === "builder_breaker").length;
   const soloCount = targets.length - builderBreakerCount;
 
@@ -175,10 +151,10 @@ export default function Targets() {
     setParams({}, { replace: true });
   }
 
-  const hasFilters = Boolean(search || category !== "all" || difficulty !== "all" || format !== "all" || activeTag);
+  const hasFilters = Boolean(search || category !== "all" || format !== "all" || activeTag);
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-transparent text-foreground relative z-10">
+    <div className="min-h-[calc(100vh-64px)] bg-transparent text-foreground relative z-10">
       {/* Hero Container */}
       <section className="relative overflow-hidden border-b border-white/[0.08] bg-[#0C0E15]/85 backdrop-blur-xl px-4 py-8 sm:px-6 lg:py-12">
         {/* Ambient Radiant Glows */}
@@ -222,8 +198,8 @@ export default function Targets() {
                 <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-400">Solo / CTF</div>
               </div>
               <div className="rounded-xl border border-white/[0.08] bg-[#11141E]/90 backdrop-blur-md p-4 text-center shadow-lg">
-                <div className="text-2xl font-extrabold text-amber-400">{advancedCount}</div>
-                <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-400">Advanced+</div>
+                <div className="text-2xl font-extrabold text-amber-400">{sealedCount}</div>
+                <div className="mono mt-1 text-[9.5px] uppercase tracking-wider text-zinc-400">MicroVM Sealed</div>
               </div>
             </div>
           </div>
@@ -231,7 +207,7 @@ export default function Targets() {
       </section>
 
       {/* Filter & Search Bar */}
-      <section className="sticky top-14 z-20 border-b border-white/[0.08] bg-[#08090D]/85 backdrop-blur-xl">
+      <section className="sticky top-16 z-20 border-b border-white/[0.08] bg-[#08090D]/85 backdrop-blur-xl">
         <div className="mx-auto max-w-[1560px] space-y-3 px-4 py-4 sm:px-6">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             {/* Search Input */}
@@ -257,20 +233,6 @@ export default function Targets() {
                 {facets.categories.map((c) => (
                   <option key={c} value={c}>
                     {titleCase(c)}
-                  </option>
-                ))}
-              </select>
-
-              <select
-                aria-label="Filter by Difficulty"
-                value={difficulty}
-                onChange={(e) => updateParam("difficulty", e.target.value)}
-                className="mono h-10 rounded-full border border-white/10 bg-[#0F121A] px-4 text-xs text-white outline-none focus:border-cyan-400"
-              >
-                <option value="all">All Difficulties</option>
-                {facets.difficulties.map((d) => (
-                  <option key={d} value={d}>
-                    {titleCase(d)}
                   </option>
                 ))}
               </select>
@@ -408,11 +370,20 @@ export default function Targets() {
                 target={target}
                 activeTag={activeTag}
                 onSelectTag={(tag) => setActiveTag(activeTag === tag ? null : tag)}
+                onPreview={setPreviewTarget}
               />
             ))}
           </div>
         )}
       </main>
+
+      {/* Centered Preview Modal */}
+      {previewTarget && (
+        <TargetPreviewModal
+          target={previewTarget}
+          onClose={() => setPreviewTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -421,26 +392,21 @@ function TargetCard({
   target,
   activeTag,
   onSelectTag,
+  onPreview,
 }: {
   target: TargetSummaryOut;
   activeTag: string | null;
   onSelectTag: (tag: string) => void;
+  onPreview: (target: TargetSummaryOut) => void;
 }) {
   const isBuilderBreaker = target.format === "builder_breaker";
 
   return (
-    <article className="group relative flex flex-col justify-between rounded-2xl border border-white/[0.08] bg-[#11141E]/85 backdrop-blur-md p-6 shadow-xl transition-all duration-300 hover:border-cyan-400/50 hover:shadow-[0_0_30px_rgba(0,210,255,0.2)] hover:-translate-y-1">
+    <article className="group relative flex h-full flex-col justify-between rounded-2xl border border-white/[0.08] bg-[#11141E]/85 backdrop-blur-md p-6 shadow-xl transition-all duration-300 hover:border-cyan-400/50 hover:shadow-[0_0_30px_rgba(0,210,255,0.2)] hover:-translate-y-1">
       <div>
-        {/* Card Header: Badges */}
+        {/* Card Header: Category & Version */}
         <div className="flex items-center justify-between gap-2 border-b border-white/[0.08] pb-4">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span
-              className={`mono inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${difficultyBadgeStyle(
-                target.difficulty,
-              )}`}
-            >
-              {target.difficulty}
-            </span>
             <span className="mono inline-flex items-center gap-1 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-[10px] font-semibold text-zinc-300">
               {categoryIcon(target.category)}
               <span>{titleCase(target.category)}</span>
@@ -521,13 +487,14 @@ function TargetCard({
         </span>
 
         <div className="flex items-center gap-2">
-          <Link
-            to={`/targets/${encodeURIComponent(target.id)}`}
+          <button
+            type="button"
+            onClick={() => onPreview(target)}
             className="mono flex h-8 items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.04] px-3.5 text-[11px] font-bold text-zinc-200 hover:border-cyan-400/50 hover:text-white transition-colors"
           >
             <Eye className="h-3 w-3" />
-            <span>Briefing</span>
-          </Link>
+            <span>Preview</span>
+          </button>
 
           <Link
             to={`/battles/new?target=${encodeURIComponent(target.id)}`}
@@ -539,5 +506,303 @@ function TargetCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function TargetPreviewModal({
+  target,
+  onClose,
+}: {
+  target: TargetSummaryOut;
+  onClose: () => void;
+}) {
+  const { jwt } = useAuth();
+  const [detail, setDetail] = useState<TargetDetailOut | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"overview" | "files" | "tests">("overview");
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    api
+      .target(target.id, jwt)
+      .then((data) => {
+        if (!cancelled) setDetail(data);
+      })
+      .catch(() => {
+        // Fallback gracefully to summary if detailed call fails
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [target.id, jwt]);
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const files = detail?.starter_files || [];
+  const tests = detail?.visible_tests || [];
+  const objectives = detail?.objectives || [];
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-in fade-in duration-200"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-white/15 bg-[#0C0E17] shadow-2xl shadow-cyan-500/10 text-left overflow-hidden">
+        {/* Top Header */}
+        <div className="border-b border-white/[0.08] p-6 pb-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="mono inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-[10px] font-semibold text-zinc-300">
+                  {categoryIcon(target.category)}
+                  <span>{titleCase(target.category)}</span>
+                </span>
+                <span className="mono rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-0.5 text-[10px] font-semibold text-cyan-300">
+                  {target.runtime}
+                </span>
+                <span className="mono rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-0.5 text-[10px] font-semibold text-zinc-400">
+                  {formatTypeLabel(target.format)}
+                </span>
+              </div>
+              <h2 className="text-xl font-extrabold tracking-tight text-white sm:text-2xl">
+                {target.name}
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 text-zinc-400 hover:border-white/20 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {/* Navigation Tabs */}
+          <div className="mt-4 flex items-center gap-2 border-t border-white/[0.06] pt-3">
+            <button
+              type="button"
+              onClick={() => setActiveTab("overview")}
+              className={`mono rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
+                activeTab === "overview"
+                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-[0_0_12px_rgba(0,210,255,0.2)]"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              Overview
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("files")}
+              className={`mono flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
+                activeTab === "files"
+                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-[0_0_12px_rgba(0,210,255,0.2)]"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              <Files className="h-3.5 w-3.5" />
+              <span>Starter Files</span>
+              {files.length > 0 && (
+                <span className="rounded-full bg-white/10 px-1.5 py-0.2 text-[9px]">
+                  {files.length}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("tests")}
+              className={`mono flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold transition-all ${
+                activeTab === "tests"
+                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 shadow-[0_0_12px_rgba(0,210,255,0.2)]"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              <FileCode2 className="h-3.5 w-3.5" />
+              <span>Verification Tests</span>
+              <span className="rounded-full bg-white/10 px-1.5 py-0.2 text-[9px]">
+                {target.visible_test_count}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Tab Content Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs leading-relaxed text-zinc-300">
+          {activeTab === "overview" && (
+            <div className="space-y-4">
+              <div>
+                <h4 className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-1">
+                  Description
+                </h4>
+                <p className="text-zinc-300">{target.description}</p>
+              </div>
+
+              {objectives.length > 0 && (
+                <div>
+                  <h4 className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400 mb-2">
+                    Key Objectives
+                  </h4>
+                  <div className="space-y-1.5">
+                    {objectives.map((obj, i) => (
+                      <div
+                        key={i}
+                        className="flex items-start gap-2.5 rounded-lg border border-white/[0.06] bg-white/[0.02] p-2.5"
+                      >
+                        <span className="mono text-[10px] font-bold text-cyan-400">
+                          {String(i + 1).padStart(2, "0")}
+                        </span>
+                        <span className="text-zinc-300">{obj}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Specs Grid */}
+              <div className="grid grid-cols-2 gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] p-3.5 mono text-[11px]">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] uppercase tracking-wider">
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+                    <span>Test Harness</span>
+                  </div>
+                  <div className="font-semibold text-white">
+                    {target.visible_test_count} visible · {target.hidden_test_count} hidden
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-zinc-400 text-[10px] uppercase tracking-wider">
+                    {target.network ? (
+                      <Zap className="h-3.5 w-3.5 text-amber-400" />
+                    ) : (
+                      <LockKeyhole className="h-3.5 w-3.5 text-zinc-400" />
+                    )}
+                    <span>Sandbox Policy</span>
+                  </div>
+                  <div className="font-semibold text-white">
+                    {target.network ? "Network Allowed" : "MicroVM Sealed"}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "files" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Starter Workspace Files
+                </h4>
+                <span className="mono text-[10px] text-zinc-500">Mounted at container init</span>
+              </div>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="h-5 w-5 animate-spin text-cyan-400" />
+                </div>
+              ) : files.length > 0 ? (
+                <div className="space-y-1 rounded-xl border border-white/[0.08] bg-white/[0.02] p-2 mono text-[11px]">
+                  {files.map((file, idx) => (
+                    <div
+                      key={file}
+                      className="flex items-center gap-2 rounded px-2.5 py-1.5 text-zinc-300 hover:bg-white/[0.04]"
+                    >
+                      <span className="text-[10px] text-zinc-500 w-5 select-none">
+                        {String(idx + 1).padStart(2, "0")}
+                      </span>
+                      <span className="font-medium text-cyan-300 break-all">{file}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-6 text-center text-zinc-500 mono text-xs">
+                  Starter files will be generated upon microVM allocation.
+                </div>
+              )}
+            </div>
+          )}
+
+          {activeTab === "tests" && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="mono text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                  Visible Verification Suite
+                </h4>
+                <span className="mono text-[10px] text-zinc-500">
+                  {target.visible_test_count} visible test suites
+                </span>
+              </div>
+              {loading ? (
+                <div className="flex items-center justify-center py-8">
+                  <RefreshCw className="h-5 w-5 animate-spin text-cyan-400" />
+                </div>
+              ) : tests.length > 0 ? (
+                <div className="space-y-1 rounded-xl border border-white/[0.08] bg-white/[0.02] p-2 mono text-[11px]">
+                  {tests.map((test, idx) => (
+                    <div
+                      key={test}
+                      className="flex items-center gap-2 rounded px-2.5 py-1.5 text-zinc-300 hover:bg-white/[0.04]"
+                    >
+                      <span className="text-[10px] text-zinc-500 w-5 select-none">
+                        {String(idx + 1).padStart(2, "0")}
+                      </span>
+                      <span className="font-medium text-emerald-400 break-all">{test}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4 text-xs text-zinc-400">
+                  Public tests are run in-sandbox via the verifier command. Hidden evaluator tests are scored authoritatively server-side.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Modal Footer Actions */}
+        <div className="flex items-center justify-between border-t border-white/[0.08] bg-white/[0.02] px-6 py-4">
+          <Link
+            to={`/targets/${encodeURIComponent(target.id)}`}
+            className="mono text-xs font-semibold text-zinc-400 hover:text-cyan-300 transition-colors"
+          >
+            Open Full Briefing →
+          </Link>
+
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="mono rounded-full border border-white/10 bg-white/[0.03] px-4 py-2 text-xs font-bold text-zinc-300 hover:border-white/20 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <Link
+              to={`/battles/new?target=${encodeURIComponent(target.id)}`}
+              className="mono flex items-center gap-1.5 rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 px-5 py-2 text-xs font-bold text-white shadow-[0_0_16px_rgba(0,210,255,0.35)] hover:shadow-[0_0_24px_rgba(0,210,255,0.5)] transition-all"
+            >
+              <span>Launch Battle</span>
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

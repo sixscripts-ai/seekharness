@@ -1,7 +1,7 @@
 ---
 name: lead-engineer
 description: Use proactively for backend architecture, security boundaries, Postgres transactions, battle finalization, sandbox isolation, migrations, concurrency, and complex multi-file changes.
-model: grok-4.6[effort=high]
+model: cursor-grok-4.6-xhigh-fast
 readonly: false
 ---
 

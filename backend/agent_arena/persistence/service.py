@@ -816,9 +816,10 @@ def battle_update(battle_id: str, fields: dict) -> None:
 def _aw_battle_update(battle_id: str, fields: dict) -> None:
     databases, database_id = _aw()
     payload = dict(fields)
-    # completed_at is a Postgres-only column; Appwrite derives duration from
-    # updatedAt, so drop it before writing to the Appwrite schema.
+    # completed_at / finalized_at are Postgres-only; Appwrite derives duration
+    # from updatedAt and has no finalized_at attribute.
     payload.pop("completed_at", None)
+    payload.pop("finalized_at", None)
     for key in ("preview_urls",):
         if isinstance(payload.get(key), dict):
             payload[key] = json.dumps(payload[key])

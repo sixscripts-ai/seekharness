@@ -24,6 +24,7 @@ frontend/.env.local
 .opencode-imports/
 .playwright-mcp/
 .superpowers/
+.gitnexus/
 .vite/
 data/
 

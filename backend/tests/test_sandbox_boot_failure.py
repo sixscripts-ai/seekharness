@@ -40,6 +40,7 @@ def _wire_finalize(monkeypatch, battle: dict, *, updates: list, elo_calls: list,
     monkeypatch.setattr(service, "battle_get", lambda uid, bid: battle)
     monkeypatch.setattr(service, "format_get", lambda fid: None)
     monkeypatch.setattr(service, "score_upsert", lambda *a, **k: None)
+    monkeypatch.setattr(service, "battle_result_upsert", lambda *a, **k: None)
     monkeypatch.setattr(
         service,
         "leaderboard_apply_result",
@@ -97,6 +98,7 @@ def test_dead_sandbox_never_stays_running(monkeypatch):
     assert battle["status"] == "failed"
     assert battle.get("failure_reason") == "SANDBOX_BOOT_FAILURE"
     assert all(item.get("status") != "running" for item in updates)
+    assert all(item.get("status") != "completed" for item in updates)
     assert elo_calls == []
     assert verify_calls == []
     dumped = json.dumps(events)
@@ -124,6 +126,7 @@ def test_spawn_exception_is_coarse_public_boot_failure(monkeypatch):
 
     assert battle["status"] == "failed"
     assert battle.get("failure_reason") == "SANDBOX_BOOT_FAILURE"
+    assert all(item.get("status") != "completed" for item in updates)
     dumped = json.dumps(events)
     assert "SANDBOX_BOOT_FAILURE" in dumped
     assert "ModuleNotFoundError" not in dumped

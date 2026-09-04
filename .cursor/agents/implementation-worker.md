@@ -1,7 +1,7 @@
 ---
 name: implementation-worker
 description: Use for straightforward implementation, wiring existing abstractions, UI/backend glue, routine refactors, repetitive edits, type fixes, documentation, and implementation of already-approved plans.
-model: grok-4.6[effort=high]
+model: cursor-grok-4.6-xhigh-fast
 readonly: false
 ---
 

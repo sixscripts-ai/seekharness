@@ -282,15 +282,15 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
 
 
 def _finalize_scores(databases, database_id, battle_id, battle, scores) -> None:
-    """Local/in-process completion goes through centralized finalize_battle.
+    """Local/in-process completion goes through sandbox-end finalization.
 
     Loop/judge scores are untrusted hints only. They cannot write Elo or
-    authoritative BattleResult rows.
+    authoritative BattleResult rows. Missing trusted evidence fail-closes.
     """
     del databases, database_id, battle
-    from .finalization import finalize_battle
+    from .finalization import sandbox_end_finalize
 
-    finalize_battle(
+    sandbox_end_finalize(
         battle_id,
         caller_scores=scores if scores else None,
     )
@@ -481,55 +481,12 @@ def fail_sandbox_boot(battle_id: str, *, sandbox_id: str | None = None) -> None:
     """Mark a boot failure immediately. No verify, no Elo, no fighter-visible details."""
     if sandbox_id:
         stop_sandbox(sandbox_id)
-    from .finalization import finalize_battle
-    from .persistence import service
+    from .finalization import fail_closed_incomplete
 
-    battle: dict = {}
     try:
-        battle = service.battle_get("", battle_id) or {}
-    except Exception:
-        battle = {}
-    model_ids = [str(mid) for mid in (battle.get("model_ids") or []) if str(mid)]
-    if not model_ids:
-        model_ids = ["unknown"]
-    overrides = [
-        {
-            "model_id": mid,
-            "role": "fighter",
-            "phase": "main",
-            "outcome": PUBLIC_SANDBOX_BOOT_FAILURE,
-            "executor_outcome": PUBLIC_SANDBOX_BOOT_FAILURE,
-            "passed": False,
-            "verification_status": "infra_failure",
-            "_trusted": True,
-            "steps": 0,
-            "turns": 0,
-            "artifact_checks": {"present": [], "missing": []},
-        }
-        for mid in model_ids
-    ]
-    try:
-        finalize_battle(battle_id, override_results=overrides)
+        fail_closed_incomplete(battle_id, reason=PUBLIC_SANDBOX_BOOT_FAILURE)
     except Exception:
         pass
-    try:
-        service.battle_update(
-            battle_id,
-            {"status": "failed", "failure_reason": PUBLIC_SANDBOX_BOOT_FAILURE},
-        )
-    except Exception:
-        pass
-    event_bus.publish(
-        battle_id,
-        {"type": "error", "data": {"message": PUBLIC_SANDBOX_BOOT_FAILURE}},
-    )
-    event_bus.publish(
-        battle_id,
-        {
-            "type": "battle_status",
-            "data": {"status": "failed", "reason": PUBLIC_SANDBOX_BOOT_FAILURE, "authoritative": True},
-        },
-    )
 
 
 def _fail_with_reason(battle_id: str, reason: str) -> None:

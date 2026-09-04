@@ -35,5 +35,8 @@ Arena and fighters have different jobs. Do not blur them.
 ## Delegation
 
 - Prefer project Agent Arena agents and skills over overlapping unrelated global agents, plugins, design, animation, 3D, Notion, or deployment skills unless the task requires them.
-- All project subagents use Grok 4.6 High (`grok-4.6[effort=high]`): `implementation-worker` (routine), `lead-engineer` (architecture/security), `test-debugger` (readonly tests/debug).
-- Do not default subagents to Composer, Luna, XHigh, Sol, or Opus.
+- All project subagents use Grok 4.6 Extra High Fast (`cursor-grok-4.6-xhigh-fast`): `implementation-worker` (routine), `lead-engineer` (architecture/security), `test-debugger` (readonly tests/debug).
+- Do not default subagents to Composer, Luna, Sol, or Opus.
+- First-token watchdog: `battle-trace-audit` → `battle-runtime-observability` → `lead-engineer` → `regression-gate`.
+- Live/export status truth: `finalization-audit` → `realtime-execution-streaming` → `implementation-worker` (or `lead-engineer` if stored status writes change) → `regression-gate`.
+- Target leakage: `target-integrity-audit` (`/target-leakage` or `/audit-target`). Read-only unless the user asks for a fix.

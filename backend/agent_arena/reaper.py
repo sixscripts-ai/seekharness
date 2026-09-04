@@ -139,8 +139,9 @@ def _reap_pg(now: float, grace: float) -> list[str]:
             }
             for b in rows
         ]
+    from .finalization import fail_closed_incomplete
+
     reaped: list[str] = []
-    completed_at = datetime.fromtimestamp(now, tz=timezone.utc)
     for battle in battles:
         try:
             reason = _reap_reason(battle, now, grace)
@@ -149,21 +150,14 @@ def _reap_pg(now: float, grace: float) -> list[str]:
         if not reason:
             continue
         try:
-            with session_scope() as session:
-                updated = repositories.battles.battle_fail_if_active(
-                    session,
-                    battle["id"],
-                    reason=reason,
-                    completed_at=completed_at,
-                )
+            out = fail_closed_incomplete(battle["id"], reason=reason)
         except Exception:
             continue
-        if updated is None:
+        if out.get("status") == "not_found" or out.get("already_finalized"):
             continue
         sandbox_id = battle.get("sandbox_id")
         if sandbox_id:
             _stop_sandbox(sandbox_id)
-        _publish_failed(battle["id"], reason)
         reaped.append(battle["id"])
     return reaped
 

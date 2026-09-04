@@ -17,6 +17,9 @@ def test_infra_outcomes_are_not_learnable():
         "EXECUTOR_CRASH",
         "INFRASTRUCTURE_FAILURE",
         "SANDBOX_BOOT_FAILURE",
+        "INCOMPLETE_EVIDENCE",
+        "NO_FIRST_TOKEN",
+        "no_first_token after 200s (budget 120s)",
         "TIMEOUT",
         "CANCELLED",
     ):
@@ -128,6 +131,7 @@ def test_infra_skips_elo_side_effects(monkeypatch):
                 "passed": False,
                 "steps": 1,
                 "artifact_checks": {"present": [], "missing": []},
+                "_trusted": True,
             },
             {
                 "model_id": "model-b",
@@ -137,6 +141,7 @@ def test_infra_skips_elo_side_effects(monkeypatch):
                 "passed": True,
                 "steps": 2,
                 "artifact_checks": {"present": ["solution.py"], "missing": []},
+                "_trusted": True,
             },
         ],
     )

@@ -66,6 +66,7 @@ def test_probe_a_duplicate_finalize(monkeypatch):
             "steps": 4,
             "chosen_skills": ["python-kata-fixer"],
             "artifact_checks": {"present": ["solution.py"], "missing": []},
+            "_trusted": True,
         },
         {
             "model_id": "model-beta",
@@ -76,6 +77,7 @@ def test_probe_a_duplicate_finalize(monkeypatch):
             "steps": 5,
             "chosen_skills": ["shell-basics"],
             "artifact_checks": {"present": ["solution.py"], "missing": []},
+            "_trusted": True,
         },
     ]
 
@@ -233,39 +235,44 @@ def test_probe_e_event_ordering(monkeypatch):
         "arena_size": 2,
         "model_ids": ["m-alpha", "m-beta"],
         "ranked": False,
+        "target_id": "probe-e-target",
         "context_mode": "strict",
         "battle_config": {},
     }
 
-    # Simulate synchronous rounds populated, but background events delayed / empty
+    # Synchronous trusted rounds; background events delayed / empty.
+    from agent_arena.results import TRUSTED_VERIFICATION_MARKER
+
     synchronous_rounds = [
         {
             "phase": "race",
             "model_id": "m-alpha",
-            "artifact": 'EXECUTOR_RESULT: {"model_id": "m-alpha", "role": "player_a", "phase": "race", "outcome": "TEST_PASS", "passed": true, "steps": 2}',
+            "artifact": TRUSTED_VERIFICATION_MARKER
+            + ' {"source": "trusted_verifier", "kind": "solo", "model_id": "m-alpha", "role": "player_a", "phase": "race", "passed": true, "outcome": "TEST_PASS", "verification_status": "verified_pass"}',
         },
         {
             "phase": "race",
             "model_id": "m-beta",
-            "artifact": 'EXECUTOR_RESULT: {"model_id": "m-beta", "role": "player_b", "phase": "race", "outcome": "TEST_FAIL", "passed": false, "steps": 5}',
+            "artifact": TRUSTED_VERIFICATION_MARKER
+            + ' {"source": "trusted_verifier", "kind": "solo", "model_id": "m-beta", "role": "player_b", "phase": "race", "passed": false, "outcome": "TEST_FAIL", "verification_status": "verified_fail"}',
         },
     ]
 
     monkeypatch.setattr(service, "battle_get", lambda uid, bid: battle_record if bid == battle_id else None)
     monkeypatch.setattr(service, "rounds_list", lambda bid: synchronous_rounds)
     monkeypatch.setattr(service, "events_load", lambda bid: [])  # Delayed async events queue is empty!
+    monkeypatch.setattr(service, "format_get", lambda fid: None)
     monkeypatch.setattr(service, "scores_exist", lambda bid: False)
     stored_scores = {}
     monkeypatch.setattr(service, "score_upsert", lambda bid, mid, s, **kw: stored_scores.update({mid: s}))
     monkeypatch.setattr(service, "battle_update", lambda bid, payload: battle_record.update(payload))
 
-    # Finalization executes without missing the results because it reads synchronous rounds!
     res = finalize_battle(battle_id, caller_status="completed")
     assert res["ok"] is True
     assert res["status"] == "completed"
-    assert res.get("authoritative") is False
+    assert res.get("authoritative") is True
     assert "m-alpha" in stored_scores
-    assert stored_scores["m-alpha"] == stored_scores["m-beta"] == 0.0
+    assert stored_scores["m-alpha"] > stored_scores["m-beta"]
 
 
 def test_probe_f_target_scope():

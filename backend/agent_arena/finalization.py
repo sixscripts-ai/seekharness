@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 TERMINAL_BATTLE_STATUSES = frozenset({"completed", "failed", "cancelled"})
 ACTIVE_FINALIZE_STATUSES = frozenset({"queued", "running"})
 INCOMPLETE_EVIDENCE = "INCOMPLETE_EVIDENCE"
+INFRA_SCORE_JUSTIFICATION = "Finalized via infra_failure"
 
 
 def is_terminal_battle_status(status: str | None) -> bool:
@@ -74,13 +75,7 @@ def derive_trusted_scores(
         return None, "", INCOMPLETE_EVIDENCE, None, None
     trusted_rows = [r for r in results if r.get("_trusted")]
     if not trusted_rows:
-        ids = expected or [
-            str(r.get("model_id") or "") for r in results if str(r.get("model_id") or "")
-        ]
-        diagnostic = {mid: 0.0 for mid in ids if mid}
-        if not diagnostic:
-            return None, "", INCOMPLETE_EVIDENCE, None, None
-        return diagnostic, "untrusted-diagnostic", None, None, None
+        return None, "", INCOMPLETE_EVIDENCE, None, None
     summary = build_battle_evidence(
         battle_id,
         trusted_rows,
@@ -151,6 +146,283 @@ def _retryable_incomplete_payload(status: str, error: str | None = None) -> dict
         "scores": {},
         "results": [],
     }
+
+
+def canonical_infra_termination_reason(reason: str | None) -> str:
+    """Map a human failure string to a stored infra termination_reason."""
+    from .first_token import FAILURE_REASON
+
+    raw = str(reason or "").strip()
+    if not raw:
+        return INCOMPLETE_EVIDENCE
+    upper = raw.upper()
+    if "SANDBOX_BOOT_FAILURE" in upper:
+        return "SANDBOX_BOOT_FAILURE"
+    if FAILURE_REASON.upper() in upper:
+        return FAILURE_REASON
+    if "STUCK IN" in upper or upper == "TIMEOUT" or upper.startswith("TIMEOUT"):
+        return "TIMEOUT"
+    if INCOMPLETE_EVIDENCE in upper:
+        return INCOMPLETE_EVIDENCE
+    return INCOMPLETE_EVIDENCE
+
+
+def _result_row_dict(row: Any) -> dict[str, Any]:
+    finalized = getattr(row, "finalized_at", None)
+    return {
+        "id": getattr(row, "id", None),
+        "battle_id": row.battle_id,
+        "phase": row.phase,
+        "role": row.role,
+        "model_id": row.model_id,
+        "status": row.status,
+        "passed": row.passed,
+        "score": row.score,
+        "verification_status": row.verification_status,
+        "termination_reason": row.termination_reason,
+        "artifact_refs": row.artifact_refs,
+        "metrics": row.metrics,
+        "finalized_at": finalized.isoformat() if finalized is not None else None,
+    }
+
+
+def _pg_result_dicts(session: Session, battle_id: str) -> list[dict[str, Any]]:
+    return [
+        _result_row_dict(row)
+        for row in repositories.results.results_list_by_battle(session, battle_id)
+    ]
+
+
+def _fail_closed_slots(
+    *,
+    model_ids: list[str],
+    participant_slots: list[tuple[str, str | None]] | None = None,
+) -> list[tuple[str, str, str]]:
+    """Canonical (phase, role, model_id) identities for host-authored infra rows."""
+    slots: list[tuple[str, str, str]] = []
+    if participant_slots:
+        for mid, role in participant_slots:
+            model_id = str(mid or "").strip()
+            if not model_id:
+                continue
+            _bid, phase, norm_role, norm_mid = normalize_participant_identity(
+                "",
+                phase="main",
+                role=str(role or "fighter"),
+                model_id=model_id,
+            )
+            del _bid
+            slots.append((phase, norm_role, norm_mid))
+    if not slots:
+        for mid in model_ids:
+            model_id = str(mid or "").strip()
+            if not model_id:
+                continue
+            _bid, phase, norm_role, norm_mid = normalize_participant_identity(
+                "",
+                phase="main",
+                role="fighter",
+                model_id=model_id,
+            )
+            del _bid
+            slots.append((phase, norm_role, norm_mid))
+    if not slots:
+        slots.append(("main", "fighter", "unknown"))
+    return slots
+
+
+def _publish_infra_failure(battle_id: str, reason: str) -> None:
+    from .battle_public import battle_status_payload
+
+    event_bus.publish(battle_id, {"type": "error", "data": {"message": reason}})
+    event_bus.publish(
+        battle_id,
+        {
+            "type": "battle_status",
+            "data": battle_status_payload("failed", reason=reason, authoritative=True),
+        },
+    )
+
+
+def _fail_closed_success_payload(
+    *,
+    results: list[dict[str, Any]],
+    reason: str,
+) -> dict[str, Any]:
+    scores = {
+        str(item.get("model_id") or ""): 0.0
+        for item in results
+        if str(item.get("model_id") or "")
+    }
+    return {
+        "ok": True,
+        "status": "failed",
+        "already_finalized": False,
+        "authoritative": True,
+        "retryable": False,
+        "error": reason,
+        "scores": scores,
+        "results": results,
+    }
+
+
+def fail_closed_incomplete(
+    battle_id: str,
+    *,
+    reason: str = INCOMPLETE_EVIDENCE,
+) -> dict[str, Any]:
+    """Host-authored failed results when a fight dies without trusted verification.
+
+    Sandbox JSON is not copied into score, winner, or pass/fail. Elo, skill
+    attribution, and learnable memory are skipped. Early host-direct
+    finalize_battle() stays retryable; only sandbox-end / reaper / boot call this.
+    """
+    failure_reason = str(reason or INCOMPLETE_EVIDENCE)
+    term = canonical_infra_termination_reason(failure_reason)
+    now_utc = datetime.now(timezone.utc)
+    part_status = participant_status_from_outcome(term, passed=False)
+
+    if using_postgres():
+        with session_scope() as session:
+            battle_row = session.scalars(
+                select(Battle).where(Battle.id == battle_id).with_for_update()
+            ).first()
+            if battle_row is None:
+                return {"ok": False, "status": "not_found", "error": "Battle not found"}
+            if (
+                battle_row.finalized_at is not None
+                or is_terminal_battle_status(battle_row.status)
+                or battle_row.status not in ACTIVE_FINALIZE_STATUSES
+            ):
+                score_rows = repositories.scores.score_list(session, battle_id)
+                return _already_finalized_payload(
+                    status=battle_row.status,
+                    results=_pg_result_dicts(session, battle_id),
+                    scores={s.model_id: s.score for s in score_rows},
+                    score_rows=score_rows,
+                )
+            slots = _fail_closed_slots(
+                model_ids=repositories.battles.battle_model_ids(session, battle_id),
+                participant_slots=repositories.battles.battle_participant_slots(
+                    session, battle_id
+                ),
+            )
+            written: list[dict[str, Any]] = []
+            seen: set[tuple[str, str, str]] = set()
+            for phase, role, mid in slots:
+                ident = (phase, role, mid)
+                if ident in seen:
+                    continue
+                seen.add(ident)
+                row = repositories.results.result_upsert(
+                    session,
+                    battle_id=battle_id,
+                    phase=phase,
+                    role=role,
+                    model_id=mid,
+                    status=part_status,
+                    passed=False,
+                    score=0.0,
+                    verification_status="infra_failure",
+                    termination_reason=term,
+                    artifact_refs=[],
+                    metrics={},
+                    result_version=1,
+                    finalized_at=now_utc,
+                )
+                written.append(_result_row_dict(row))
+                repositories.scores.score_insert(
+                    session,
+                    battle_id=battle_id,
+                    model_id=mid,
+                    score=0.0,
+                    judge_model="arena-infra",
+                    justification=INFRA_SCORE_JUSTIFICATION,
+                )
+            battle_row.status = "failed"
+            battle_row.failure_reason = failure_reason
+            battle_row.completed_at = now_utc
+            battle_row.finalized_at = now_utc
+            session.flush()
+        _publish_infra_failure(battle_id, failure_reason)
+        return _fail_closed_success_payload(results=written, reason=failure_reason)
+
+    battle_dict = service.battle_get("", battle_id)
+    if battle_dict is None:
+        return {"ok": False, "status": "not_found", "error": "Battle not found"}
+    current_status = str(battle_dict.get("status") or "")
+    if (
+        battle_dict.get("finalized_at") is not None
+        or is_terminal_battle_status(current_status)
+        or current_status not in ACTIVE_FINALIZE_STATUSES
+    ):
+        return _already_finalized_payload(status=current_status)
+    slots = _fail_closed_slots(model_ids=list(battle_dict.get("model_ids") or []))
+    written = []
+    seen = set()
+    for phase, role, mid in slots:
+        ident = (phase, role, mid)
+        if ident in seen:
+            continue
+        seen.add(ident)
+        written.append(
+            service.battle_result_upsert(
+                battle_id,
+                mid,
+                phase=phase,
+                role=role,
+                status=part_status,
+                passed=False,
+                score=0.0,
+                verification_status="infra_failure",
+                termination_reason=term,
+                artifact_refs=[],
+                metrics={},
+                result_version=1,
+            )
+        )
+        service.score_upsert(
+            battle_id,
+            mid,
+            0.0,
+            judge_model="arena-infra",
+            justification=INFRA_SCORE_JUSTIFICATION,
+        )
+    service.battle_update(
+        battle_id,
+        {
+            "status": "failed",
+            "failure_reason": failure_reason,
+            "completed_at": now_utc,
+            "finalized_at": now_utc,
+        },
+    )
+    _publish_infra_failure(battle_id, failure_reason)
+    return _fail_closed_success_payload(results=written, reason=failure_reason)
+
+
+def sandbox_end_finalize(
+    battle_id: str,
+    *,
+    caller_status: str | None = None,
+    caller_scores: dict[str, float] | None = None,
+    judge_model: str | None = None,
+) -> dict[str, Any]:
+    """Sandbox or in-process end: fail-closed if still incomplete after a re-read.
+
+    Host-direct finalize_battle() stays retryable. Do not call this from C6/C7.
+    """
+    kwargs = {
+        "caller_status": caller_status,
+        "caller_scores": caller_scores,
+        "judge_model": judge_model,
+    }
+    result = finalize_battle(battle_id, **kwargs)
+    if result.get("retryable") is True and result.get("error") == INCOMPLETE_EVIDENCE:
+        result = finalize_battle(battle_id, **kwargs)
+        if result.get("retryable") is True and result.get("error") == INCOMPLETE_EVIDENCE:
+            result = fail_closed_incomplete(battle_id, reason=INCOMPLETE_EVIDENCE)
+    return result
 
 
 def _parse_marked_json(artifact: str, marker: str) -> dict | None:
@@ -472,28 +744,10 @@ def finalize_battle(
                 battle_row.finalized_at is not None
                 or is_terminal_battle_status(battle_row.status)
             ):
-                res_rows = repositories.results.results_list_by_battle(session, battle_id)
                 score_rows = repositories.scores.score_list(session, battle_id)
                 return _already_finalized_payload(
                     status=battle_row.status,
-                    results=[
-                        {
-                            "id": r.id,
-                            "battle_id": r.battle_id,
-                            "phase": r.phase,
-                            "role": r.role,
-                            "model_id": r.model_id,
-                            "status": r.status,
-                            "passed": r.passed,
-                            "score": r.score,
-                            "verification_status": r.verification_status,
-                            "termination_reason": r.termination_reason,
-                            "artifact_refs": r.artifact_refs,
-                            "metrics": r.metrics,
-                            "finalized_at": r.finalized_at.isoformat() if r.finalized_at else None,
-                        }
-                        for r in res_rows
-                    ],
+                    results=_pg_result_dicts(session, battle_id),
                     scores={s.model_id: s.score for s in score_rows},
                     score_rows=score_rows,
                 )

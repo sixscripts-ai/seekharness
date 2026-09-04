@@ -5,7 +5,9 @@ description: Read-only target-integrity audit for the requested target id or lib
 
 # /audit-target
 
-Read-only. Invoke the `target-integrity-audit` skill for the target named in the prompt (or the library loader if no id is given).
+Read-only target leakage audit. `/target-leakage` is the same command under the product name.
+
+Invoke the `target-integrity-audit` skill for the target named in the prompt (or the library loader if no id is given).
 
 Do not modify targets, manifests, or application source.
 

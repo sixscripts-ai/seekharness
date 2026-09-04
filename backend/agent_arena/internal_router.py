@@ -499,9 +499,9 @@ def internal_finalize(
     _require_battle_token(body.battle_id, x_sandbox_token, x_internal_key)
     _rate_limit(body.battle_id)
 
-    from .finalization import finalize_battle
+    from .finalization import sandbox_end_finalize
 
-    result = finalize_battle(
+    result = sandbox_end_finalize(
         body.battle_id,
         caller_status=body.status,
         caller_scores=body.scores,

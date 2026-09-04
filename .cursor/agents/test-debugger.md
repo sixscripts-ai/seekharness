@@ -1,7 +1,7 @@
 ---
 name: test-debugger
 description: Use proactively to reproduce bugs, inspect tracebacks, create regression tests, verify fixes, audit test claims, and identify minimal root causes without broad implementation changes.
-model: grok-4.6[effort=high]
+model: cursor-grok-4.6-xhigh-fast
 readonly: true
 ---
 
