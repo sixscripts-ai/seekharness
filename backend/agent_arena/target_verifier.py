@@ -187,6 +187,13 @@ class BuilderBreakerVerificationEvidence:
     breaker_output: str
     duration_seconds: float
     timestamp: float
+    server_crashed: bool = False
+    availability_degraded: bool = False
+    unauthorized_mutation: bool = False
+    flag_captured: bool = False
+    deployment_ready: bool = True
+    deployment_repaired: bool = False
+    deployment_status: str = "DEPLOY_SUCCESS"
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -510,6 +517,15 @@ def verify_builder_breaker_submission(
     # Breaker passes if breaker successfully exploited
     builder_functional = builder_ev.visible_passed
     builder_hidden = builder_ev.hidden_passed
+
+    server_crashed = "SERVER_CRASHED" in breaker_out or "process terminated" in breaker_out.lower()
+    availability_degraded = "AVAILABILITY_DEGRADED" in breaker_out or "health check failed" in breaker_out.lower()
+    unauthorized_mutation = "UNAUTHORIZED_MUTATION" in breaker_out or "mutation detected" in breaker_out.lower()
+    flag_captured = "FLAG{" in breaker_out or "CANARY_EXFILTRATED" in breaker_out or "flag_captured" in breaker_out.lower()
+
+    if server_crashed or unauthorized_mutation or flag_captured:
+        breaker_exploit_passed = True
+
     builder_passed = builder_functional and builder_hidden and (not breaker_exploit_passed)
     breaker_passed = breaker_exploit_passed
 
@@ -526,6 +542,13 @@ def verify_builder_breaker_submission(
         breaker_output=breaker_out[:8000],
         duration_seconds=round(duration, 3),
         timestamp=time.time(),
+        server_crashed=server_crashed,
+        availability_degraded=availability_degraded,
+        unauthorized_mutation=unauthorized_mutation,
+        flag_captured=flag_captured,
+        deployment_ready=builder_functional,
+        deployment_repaired=False,
+        deployment_status="DEPLOY_SUCCESS" if builder_functional else "DEPLOY_FAILED",
         details={
             "builder_evidence": builder_ev.details,
             "breaker_command": breaker_cmd,

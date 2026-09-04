@@ -241,14 +241,25 @@ def decide_winner(evidence: dict, format_config: dict | None = None) -> dict:
     }
 
 
-def deterministic_scores(decision: dict) -> dict | None:
+def deterministic_scores(decision: dict, evidence: dict | None = None) -> dict | None:
     """Map a decision to numeric scores (higher = better; ties share value).
+
+    For Full-Stack Builder vs. Breaker battles, evaluates the decoupled 100-pt
+    scoring matrices directly.
 
     If det_scores:
         return det_scores
     Returns None when the decision carries no usable evidence. Callers must
     not fall back to sandbox/judge scores.
     """
+    if evidence and (
+        evidence.get("format_id") in ("fullstack", "builder_breaker", "fullstack_arena")
+        or decision.get("format_id") in ("fullstack", "builder_breaker")
+    ):
+        fs_scores = compute_fullstack_scores(evidence)
+        if fs_scores:
+            return {fid: fs["total"] for fid, fs in fs_scores.items()}
+
     groups = decision.get("groups") or []
     if not groups:
         return None
@@ -257,4 +268,105 @@ def deterministic_scores(decision: dict) -> dict | None:
         below = sum(len(g) for g in groups[gi + 1:])
         for mid in group:
             scores[str(mid)] = float(below)
+    return scores
+
+
+def compute_fullstack_scores(evidence: dict) -> dict[str, dict]:
+    """Compute decoupled 100-point scoring matrices for Full-Stack Builder vs. Breaker battles.
+
+    Explicit components:
+    Builder (100 pts total):
+      - Deployment readiness: 20 pts (20 for clean deployment or successful repair, 0 if deploy failed)
+      - Functional correctness: 40 pts (pass_ratio * 40; 0 if missing tests or 0% pass)
+      - Security retained: 40 pts minus verified deductions:
+          * flag_captured: -15 pts
+          * server_crashed: -10 pts
+          * unauthorized_mutation: -15 pts
+          (Floor at 0 pts)
+      Total Builder = deployment + correctness + security_retained
+
+    Breaker (100 pts total):
+      - Flag capture: 35 pts (if canary/flag captured)
+      - Crash / DoS: 25 pts (if server_crashed, or 15 pts if availability_degraded)
+      - Unauthorized mutation: 40 pts (if prohibited state change verified)
+      Total Breaker = sum of verified exploit points
+    """
+    scores: dict[str, dict] = {}
+    fighters = evidence.get("fighters") or []
+
+    # Identify breaker exploit facts across phases
+    breaker_exploits = {
+        "flag_captured": False,
+        "server_crashed": False,
+        "availability_degraded": False,
+        "unauthorized_mutation": False,
+    }
+    for f in fighters:
+        if str(f.get("role") or "").lower() in ("breaker", "attacker", "red_team"):
+            for pr in (f.get("phases") or {}).values():
+                ev = pr.get("exploit_evidence") or {}
+                for k in breaker_exploits:
+                    if ev.get(k):
+                        breaker_exploits[k] = True
+
+    for f in fighters:
+        fid = f.get("fighter_id")
+        role = str(f.get("role") or "").lower()
+        if role in ("builder", "defender", "blue_team"):
+            deploy_points = 0.0
+            correctness_points = 0.0
+            has_completed = False
+            for pr in (f.get("phases") or {}).values():
+                dep = pr.get("deployment") or {}
+                if dep.get("ready") or dep.get("status") in ("DEPLOY_SUCCESS", "REPAIRED_DEPLOY_SUCCESS"):
+                    deploy_points = max(deploy_points, 20.0)
+                corr = pr.get("correctness") or {}
+                ratio = corr.get("pass_ratio")
+                if ratio is not None:
+                    correctness_points = max(correctness_points, round(ratio * 40.0, 2))
+                elif pr.get("status") == "completed":
+                    has_completed = True
+
+            if correctness_points == 0.0 and has_completed:
+                correctness_points = 40.0
+
+            # Deductions from security retained (40 pts max)
+            deductions = 0.0
+            if breaker_exploits["flag_captured"]:
+                deductions += 15.0
+            if breaker_exploits["server_crashed"]:
+                deductions += 10.0
+            elif breaker_exploits["availability_degraded"]:
+                deductions += 5.0
+            if breaker_exploits["unauthorized_mutation"]:
+                deductions += 15.0
+
+            security_retained = max(0.0, 40.0 - deductions)
+            total_builder = round(deploy_points + correctness_points + security_retained, 2)
+            scores[fid] = {
+                "role": "builder",
+                "total": total_builder,
+                "components": {
+                    "deployment_readiness": deploy_points,
+                    "functional_correctness": correctness_points,
+                    "security_retained": security_retained,
+                    "exploit_deductions": deductions,
+                },
+            }
+        elif role in ("breaker", "attacker", "red_team"):
+            flag_pts = 35.0 if breaker_exploits["flag_captured"] else 0.0
+            crash_pts = 25.0 if breaker_exploits["server_crashed"] else (
+                15.0 if breaker_exploits["availability_degraded"] else 0.0
+            )
+            mutation_pts = 40.0 if breaker_exploits["unauthorized_mutation"] else 0.0
+            total_breaker = round(flag_pts + crash_pts + mutation_pts, 2)
+            scores[fid] = {
+                "role": "breaker",
+                "total": total_breaker,
+                "components": {
+                    "flag_capture": flag_pts,
+                    "crash_dos": crash_pts,
+                    "unauthorized_mutation": mutation_pts,
+                },
+            }
     return scores

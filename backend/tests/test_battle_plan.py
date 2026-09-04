@@ -333,3 +333,92 @@ def test_missing_auth_handoff_skips_break(monkeypatch):
         )
         for r in transport.rounds
     )
+
+
+def test_fullstack_services_spec_parsing():
+    """Verify target-driven service specification parsing."""
+    from agent_arena.sandbox.executors.battle_plan import parse_services_spec
+
+    # Default fallback when target.yaml has no custom services
+    defaults = parse_services_spec({})
+    assert defaults["frontend"].port == 5173
+    assert defaults["frontend"].readiness_path == "/"
+    assert defaults["backend"].port == 8000
+    assert defaults["backend"].readiness_path == "/health"
+
+    # Custom target.yaml specification
+    custom = parse_services_spec(
+        {
+            "services": {
+                "web_frontend": {"port": 3000, "readiness_path": "/ready"},
+                "api_server": {"port": 9000, "readiness_path": "/api/health"},
+            }
+        }
+    )
+    assert custom["web_frontend"].port == 3000
+    assert custom["web_frontend"].readiness_path == "/ready"
+    assert custom["api_server"].port == 9000
+    assert custom["api_server"].readiness_path == "/api/health"
+
+
+def test_fullstack_3_tier_filesystem_isolation(tmp_path):
+    """Verify 3-tier filesystem snapshot and builder-private wipe.
+
+    1. Builder writes code in /arena/builder-private
+    2. Snapshot approved deployment to /arena/deployment (excluding secrets/.git)
+    3. Wipe /arena/builder-private
+    4. Breaker has zero access to builder source code.
+    """
+    from agent_arena.sandbox.executors.battle_plan import (
+        snapshot_to_deployment,
+        wipe_builder_private,
+    )
+
+    builder_private = tmp_path / "builder-private"
+    builder_private.mkdir()
+    deployment = tmp_path / "deployment"
+
+    # Write builder files
+    (builder_private / "backend").mkdir()
+    (builder_private / "backend" / "main.py").write_text("print('fastapi')", encoding="utf-8")
+    (builder_private / "frontend").mkdir()
+    (builder_private / "frontend" / "App.tsx").write_text("console.log('react')", encoding="utf-8")
+    (builder_private / ".env").write_text("SUPER_SECRET=leak", encoding="utf-8")
+    (builder_private / ".arena_secret").write_text("FLAG{secret}", encoding="utf-8")
+
+    # Snapshot to deployment
+    copied = snapshot_to_deployment(builder_private, deployment)
+    assert "backend/main.py" in copied
+    assert "frontend/App.tsx" in copied
+    assert (deployment / "backend" / "main.py").exists()
+    assert (deployment / "frontend" / "App.tsx").exists()
+    # Secrets must not be copied to deployment
+    assert not (deployment / ".env").exists()
+    assert not (deployment / ".arena_secret").exists()
+
+    # Builder phase ends -> wipe builder-private
+    wiped = wipe_builder_private(builder_private)
+    assert wiped is True
+    assert not builder_private.exists()
+
+    # Breaker workspace now initialized fresh
+    breaker_private = tmp_path / "breaker-private"
+    breaker_private.mkdir()
+    assert not (breaker_private / "backend").exists()
+    assert not (breaker_private / "frontend").exists()
+
+
+def test_classify_deployment_failure():
+    """Verify distinction between BUILDER_OWNED error and ARENA_INFRA_FAILURE."""
+    from agent_arena.sandbox.executors.battle_plan import classify_deployment_failure
+
+    # Builder owned
+    assert classify_deployment_failure("SyntaxError: invalid syntax in main.py") == "BUILDER_OWNED"
+    assert classify_deployment_failure("ModuleNotFoundError: No module named 'fastapi'") == "BUILDER_OWNED"
+    assert classify_deployment_failure("pnpm build failed with exit code 1") == "BUILDER_OWNED"
+
+    # Arena infra failure
+    assert classify_deployment_failure("Error: address already in use 0.0.0.0:5173") == "ARENA_INFRA_FAILURE"
+    assert classify_deployment_failure("Permission denied: cannot bind socket") == "ARENA_INFRA_FAILURE"
+    assert classify_deployment_failure("Neon API unavailable: 503 Service Unavailable") == "ARENA_INFRA_FAILURE"
+

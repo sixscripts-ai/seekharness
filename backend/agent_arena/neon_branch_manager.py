@@ -35,6 +35,14 @@ def _extract_project_id_from_url(database_url: str) -> Optional[str]:
     return None
 
 
+class NeonProvisioningError(RuntimeError):
+    """Raised when isolated Neon branch creation fails.
+
+    Under the Arena security contract, battle provisioning MUST fail closed;
+    it must never fall back to the control-plane database URL.
+    """
+
+
 @dataclass
 class BranchResult:
     branch_id: str
@@ -54,11 +62,17 @@ class NeonBranchManager:
         project_id: Optional[str] = None,
         base_url: Optional[str] = None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("NEON_API_KEY", "")
+        # Separate battle Neon credentials from SeekHarness control-plane
+        self.api_key = (
+            api_key
+            or os.environ.get("BATTLE_NEON_API_KEY")
+            or os.environ.get("NEON_API_KEY", "")
+        )
         self.project_id = (
             project_id
+            or os.environ.get("BATTLE_NEON_PROJECT_ID")
             or os.environ.get("NEON_PROJECT_ID")
-            or _extract_project_id_from_url(os.environ.get("DATABASE_URL", ""))
+            or _extract_project_id_from_url(os.environ.get("BATTLE_DATABASE_URL", ""))
             or "ep-silent-fog-a60c8fb5"
         )
         self.base_url = base_url or os.environ.get("NEON_API_BASE", NEON_API_BASE)
@@ -114,14 +128,25 @@ class NeonBranchManager:
             with httpx.Client(timeout=30.0) as client:
                 res = client.post(url, headers=self._headers(), json=payload)
                 if res.status_code not in (200, 201):
-                    logger.warning("Neon API branch creation failed (%s): %s", res.status_code, res.text)
-                    return self._fallback_result(branch_name, parent_branch_id)
+                    logger.error(
+                        "Neon API branch creation failed (%s): %s",
+                        res.status_code,
+                        res.text,
+                    )
+                    # FAIL CLOSED: Never fall back to control-plane DATABASE_URL
+                    raise NeonProvisioningError(
+                        f"ARENA_INFRA_FAILURE: Neon branch creation failed ({res.status_code}): {res.text}"
+                    )
 
                 data = res.json()
                 branch_info = data.get("branch", {})
                 branch_id = branch_info.get("id", f"br-{branch_name}")
                 endpoints = data.get("endpoints", [])
-                host = endpoints[0].get("host") if endpoints else f"{branch_name}.aws.neon.tech"
+                host = (
+                    endpoints[0].get("host")
+                    if endpoints
+                    else f"{branch_name}.aws.neon.tech"
+                )
 
                 rw_url = f"postgresql://neondb_owner@{host}/neondb?sslmode=require"
                 ro_url = f"postgresql://neondb_owner@{host}/neondb?sslmode=require&options=-cdefault_transaction_read_only%3Don"
@@ -134,9 +159,65 @@ class NeonBranchManager:
                     parent_id=parent_branch_id,
                     is_mock=False,
                 )
+        except NeonProvisioningError:
+            raise
         except Exception as exc:
             logger.error("Exception creating Neon ephemeral branch: %s", exc)
-            return self._fallback_result(branch_name, parent_branch_id)
+            # FAIL CLOSED: Never fall back to control-plane DATABASE_URL
+            raise NeonProvisioningError(
+                f"ARENA_INFRA_FAILURE: Exception communicating with Neon API: {exc}"
+            ) from exc
+
+    def create_builder_baseline_snapshot(
+        self,
+        battle_id: str,
+        source_branch_id: str,
+    ) -> Dict[str, Any]:
+        """Capture the exact state of the database immediately after Builder completes.
+
+        Used as the authoritative baseline: unauthorized mutation = breaker_final_state vs builder_baseline_snapshot.
+        """
+        clean_id = battle_id.removeprefix("battle-")
+        snapshot_name = f"builder-baseline-{clean_id[:16]}"
+        if self.use_mock or not httpx:
+            return {
+                "snapshot_id": f"br-{snapshot_name}",
+                "name": snapshot_name,
+                "status": "frozen",
+                "source_branch_id": source_branch_id,
+                "is_mock": True,
+            }
+
+        url = f"{self.base_url}/projects/{self.project_id}/branches"
+        payload = {
+            "branch": {
+                "name": snapshot_name,
+                "parent_id": source_branch_id,
+            }
+        }
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                res = client.post(url, headers=self._headers(), json=payload)
+                if res.status_code in (200, 201):
+                    data = res.json().get("branch", {})
+                    return {
+                        "snapshot_id": data.get("id", f"br-{snapshot_name}"),
+                        "name": snapshot_name,
+                        "status": "frozen",
+                        "source_branch_id": source_branch_id,
+                        "is_mock": False,
+                    }
+                logger.warning("Failed to create builder baseline snapshot in Neon: %s", res.text)
+        except Exception as exc:
+            logger.error("Exception creating Neon builder baseline snapshot: %s", exc)
+
+        return {
+            "snapshot_id": f"br-{snapshot_name}",
+            "name": snapshot_name,
+            "status": "simulated",
+            "source_branch_id": source_branch_id,
+            "is_mock": False,
+        }
 
     def create_exploit_snapshot(
         self,
@@ -200,13 +281,4 @@ class NeonBranchManager:
             logger.warning("Error deleting branch %s: %s", branch_id, exc)
             return False
 
-    def _fallback_result(self, branch_name: str, parent_branch_id: str) -> BranchResult:
-        base_url = os.environ.get("DATABASE_URL", "postgresql://user:pass@localhost:5432/neondb")
-        return BranchResult(
-            branch_id=f"br-{branch_name}",
-            name=branch_name,
-            database_url=base_url,
-            read_only_database_url=f"{base_url}&options=-cdefault_transaction_read_only%3Don",
-            parent_id=parent_branch_id,
-            is_mock=True,
-        )
+

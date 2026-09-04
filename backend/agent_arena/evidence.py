@@ -120,11 +120,35 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
         # absence is "clean", not "unknown".
         pstatus = POLICY_CLEAN
 
+    exploit_ev = result.get("exploit_evidence") or {}
+    if not isinstance(exploit_ev, dict):
+        exploit_ev = {}
+
+    server_crashed = bool(exploit_ev.get("server_crashed", result.get("server_crashed", False)))
+    availability_degraded = bool(exploit_ev.get("availability_degraded", result.get("availability_degraded", False)))
+    unauthorized_mutation = bool(exploit_ev.get("unauthorized_mutation", result.get("unauthorized_mutation", False)))
+    flag_captured = bool(exploit_ev.get("flag_captured", result.get("flag_captured", False)))
+
+    deploy_ready = result.get("deployment_ready")
+    if deploy_ready is None:
+        deploy_ready = True if outcome in ("TEST_PASS", "COMPLETED") else False
+
     return {
         "phase_id": str(result.get("phase") or _DEFAULT_PHASE),
         "phase_type": str(result.get("phase_type") or "race"),
         "actor": result.get("role"),
         "status": status,
+        "deployment": {
+            "status": str(result.get("deployment_status") or ("DEPLOY_SUCCESS" if deploy_ready else "DEPLOY_FAILED")),
+            "ready": bool(deploy_ready),
+            "repaired": bool(result.get("deployment_repaired", False)),
+        },
+        "exploit_evidence": {
+            "server_crashed": server_crashed,
+            "availability_degraded": availability_degraded,
+            "unauthorized_mutation": unauthorized_mutation,
+            "flag_captured": flag_captured,
+        },
         "correctness": {
             "passed": passed,
             "failed": failed,

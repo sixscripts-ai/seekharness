@@ -434,6 +434,14 @@ REGISTERED_FLAT_FIXTURES = {
     "logs": {"name": "server"},
     "use_skill": {"name": "auth-flow-debugger"},
     "skills": {"search": "authentication"},
+    "playwright_navigate": {"url": "http://127.0.0.1:5173"},
+    "playwright_click": {"selector": "#submit-btn"},
+    "playwright_fill": {"selector": "#username", "text": "admin"},
+    "playwright_screenshot": {"path": "shot.png"},
+    "playwright_read": {"selector": "body"},
+    "playwright_wait": {"selector": "#app", "timeout_ms": 3000},
+    "http_request": {"method": "GET", "url": "http://127.0.0.1:8000/api/users"},
+    "sql_query": {"query": "SELECT * FROM users"},
     "done": {},
 }
 
@@ -551,3 +559,38 @@ def test_fighter_bootstrap_does_not_imply_filesystem_skill_load():
         assert ".agents/skills" not in text
         assert "use_skill" in text
         assert "skills(" in text or "TOOL skills" in text
+
+
+def test_breaker_tools_exec_through_tool_session(tmp_path, monkeypatch):
+    """Verify Breaker tools dispatch correctly through ToolSession and uphold security invariants."""
+    from agent_arena.sandbox.executors.advanced_executor import ToolSession
+
+    monkeypatch.setenv("ARENA_HERMETIC", "1")
+    session = ToolSession(workdir=tmp_path)
+    try:
+        page = session._ensure_page()
+        if page:
+            page.set_content("<div id='vault-balance'>$100,000</div><div id='status-banner'>ACTIVE</div>")
+
+        # 1. playwright_read
+        res_read = session.exec_tool({"tool": "playwright_read", "selector": "#vault-balance"}, count_step=False)
+        assert res_read.success is True
+        assert "$100,000" in res_read.output or "DOM TEXT" in res_read.output
+
+        # 2. playwright_wait
+        res_wait = session.exec_tool({"tool": "playwright_wait", "selector": "#status-banner", "timeout_ms": 1000}, count_step=False)
+        assert res_wait.success is True
+        assert "WAIT_SUCCESS" in res_wait.output
+
+        # 3. sql_query (mock / hermetic)
+        res_sql = session.exec_tool({"tool": "sql_query", "query": "SELECT * FROM public_profiles;"}, count_step=False)
+        assert res_sql.success is True
+        assert "Rows returned" in res_sql.output
+
+        # 4. sql_query (reject arena_trusted schema access)
+        res_sec = session.exec_tool({"tool": "sql_query", "query": "SELECT flag FROM arena_trusted.evaluator_secrets;"}, count_step=False)
+        assert res_sec.success is False
+        assert "arena_trusted" in res_sec.output or "Access denied" in res_sec.output
+    finally:
+        session.close()
+

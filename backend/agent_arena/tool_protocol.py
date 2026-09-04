@@ -434,6 +434,168 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "playwright_navigate",
+            "description": "Navigate the headless browser to a local web application URL.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Target URL to navigate (e.g. http://127.0.0.1:5173)",
+                    }
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "playwright_click",
+            "description": "Click an interactive DOM element using a CSS or text selector in the browser.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector or text selector to click",
+                    }
+                },
+                "required": ["selector"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "playwright_fill",
+            "description": "Fill or type text into a form input element in the browser.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector of the input element",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Text content or payload to type into input",
+                    },
+                },
+                "required": ["selector", "text"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "playwright_screenshot",
+            "description": "Capture the browser viewport screenshot for visual exploit proof.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Optional relative path to save screenshot PNG",
+                    }
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "playwright_read",
+            "description": "Read text content or inner HTML of a DOM element using a selector in the browser.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector to read text from (defaults to 'body')",
+                    }
+                },
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "playwright_wait",
+            "description": "Wait for an asynchronous element or selector to appear in the browser DOM.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "selector": {
+                        "type": "string",
+                        "description": "CSS selector to wait for in DOM",
+                    },
+                    "timeout_ms": {
+                        "type": "integer",
+                        "description": "Max milliseconds to wait (default 5000)",
+                    },
+                },
+                "required": ["selector"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": "Send an HTTP request to probe or fuzz the target web application.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "description": "HTTP method (GET, POST, PUT, DELETE, PATCH)",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "Target URL to request (e.g. http://127.0.0.1:8000/api/users)",
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "Optional HTTP headers dictionary",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Optional request payload string (e.g. JSON)",
+                    },
+                },
+                "required": ["method", "url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sql_query",
+            "description": "Execute a read-only SQL query against the battle PostgreSQL database using the restricted auditor connection.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "SQL statement to execute (enforced read-only)",
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "done",
             "description": "Signal that task implementation is complete and ready for final verification.",
             "parameters": {
@@ -499,6 +661,46 @@ TOOL_METADATA: dict[str, dict[str, Any]] = {
         "handler": "skills",
         "default_step_cost": 1,
     },
+    "playwright_navigate": {
+        "classification": "browser",
+        "handler": "playwright_navigate",
+        "default_step_cost": 1,
+    },
+    "playwright_click": {
+        "classification": "browser",
+        "handler": "playwright_click",
+        "default_step_cost": 1,
+    },
+    "playwright_fill": {
+        "classification": "browser",
+        "handler": "playwright_fill",
+        "default_step_cost": 1,
+    },
+    "playwright_screenshot": {
+        "classification": "browser",
+        "handler": "playwright_screenshot",
+        "default_step_cost": 1,
+    },
+    "playwright_read": {
+        "classification": "browser",
+        "handler": "playwright_read",
+        "default_step_cost": 1,
+    },
+    "playwright_wait": {
+        "classification": "browser",
+        "handler": "playwright_wait",
+        "default_step_cost": 1,
+    },
+    "http_request": {
+        "classification": "network",
+        "handler": "http_request",
+        "default_step_cost": 1,
+    },
+    "sql_query": {
+        "classification": "data",
+        "handler": "sql_query",
+        "default_step_cost": 1,
+    },
     "done": {
         "classification": "control",
         "handler": "done",
@@ -532,6 +734,8 @@ def _normalize_args(tool_name: str, raw_args: dict[str, Any]) -> dict[str, Any]:
         if lk in ("tool", "call_id", "command_id"):
             continue
         if tool == "search" and lk in ("q", "query"):
+            args["query"] = v
+        elif tool == "sql_query" and lk in ("q", "query", "sql", "statement"):
             args["query"] = v
         elif tool == "grep" and lk in ("q", "query", "pattern"):
             args["pattern"] = v

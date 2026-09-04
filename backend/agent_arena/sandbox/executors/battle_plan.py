@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,118 @@ class PlanPhase:
     starter_files: dict[str, str] = field(default_factory=dict)
     test_code: str = ""
     workspace_policy: str = "fresh"
+
+
+@dataclass(frozen=True)
+class ServiceSpec:
+    name: str
+    port: int
+    readiness_path: str = "/"
+    command: str = ""
+
+
+@dataclass
+class DeploymentGateResult:
+    ready: bool
+    status: str  # DEPLOY_SUCCESS, REPAIRED_DEPLOY_SUCCESS, DEPLOY_FAILED
+    failure_type: str | None = None  # BUILDER_OWNED, ARENA_INFRA_FAILURE
+    error_message: str = ""
+    repaired: bool = False
+    services_checked: list[str] = field(default_factory=list)
+
+
+def parse_services_spec(target_yaml_dict: dict | None) -> dict[str, ServiceSpec]:
+    """Parse declarative services definition from target.yaml."""
+    cfg = target_yaml_dict or {}
+    raw_services = cfg.get("services")
+    if not isinstance(raw_services, dict):
+        return {
+            "frontend": ServiceSpec(name="frontend", port=5173, readiness_path="/"),
+            "backend": ServiceSpec(name="backend", port=8000, readiness_path="/health"),
+        }
+    services: dict[str, ServiceSpec] = {}
+    for s_name, s_info in raw_services.items():
+        if isinstance(s_info, dict):
+            port = int(s_info.get("port") or (5173 if "front" in s_name else 8000))
+            path = str(s_info.get("readiness_path") or ("/" if "front" in s_name else "/health"))
+            cmd = str(s_info.get("command") or "")
+            services[s_name] = ServiceSpec(name=s_name, port=port, readiness_path=path, command=cmd)
+    return services
+
+
+def snapshot_to_deployment(
+    builder_private: Path,
+    deployment_dir: Path,
+    exclude_patterns: tuple[str, ...] = (
+        ".git",
+        "__pycache__",
+        ".env",
+        ".arena_secret",
+        "node_modules/.cache",
+    ),
+) -> list[str]:
+    """Snapshot approved builder artifact into the /arena/deployment sandbox.
+
+    Copies frontend, backend, package files, configs, etc., while excluding secrets and dev caches.
+    """
+    deployment_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for item in builder_private.rglob("*"):
+        if item.is_file():
+            try:
+                rel = item.relative_to(builder_private)
+            except ValueError:
+                continue
+            rel_str = str(rel).replace("\\", "/")
+            if any(
+                rel_str.startswith(pat)
+                or rel_str.endswith(pat)
+                or f"/{pat}/" in f"/{rel_str}/"
+                for pat in exclude_patterns
+            ):
+                continue
+            if is_forbidden_handoff(rel_str):
+                continue
+            dest = deployment_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, dest)
+            copied.append(rel_str)
+    return copied
+
+
+def wipe_builder_private(builder_private: Path) -> bool:
+    """Permanently delete /arena/builder-private before Breaker phase begins.
+
+    Guarantees Breaker cannot access builder source code via filesystem traversal or proc inspection.
+    """
+    try:
+        if builder_private.exists():
+            shutil.rmtree(builder_private, ignore_errors=True)
+        return not builder_private.exists()
+    except Exception:
+        return False
+
+
+def classify_deployment_failure(error_log: str) -> str:
+    """Distinguish BUILDER_OWNED failure from ARENA_INFRA_FAILURE.
+
+    BUILDER_OWNED: SyntaxError, ModuleNotFoundError, build failed, pnpm/npm error in app code.
+    ARENA_INFRA_FAILURE: Port already in use, kernel bind failure, permission denied by OS, Modal runtime down.
+    """
+    err = (error_log or "").lower()
+    infra_markers = [
+        "address already in use",
+        "port already in use",
+        "permission denied: cannot bind",
+        "modal runtime error",
+        "eaddrinuse",
+        "systemerror",
+        "neon api unavailable",
+        "arena_infra_failure",
+    ]
+    if any(m in err for m in infra_markers):
+        return "ARENA_INFRA_FAILURE"
+    return "BUILDER_OWNED"
 
 
 @dataclass(frozen=True)

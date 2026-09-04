@@ -329,3 +329,125 @@ def test_verified_custom_ranks_test_pass_first():
     assert decision["winner"] == "A"
     assert decision["verified_solution"] is True
     assert scores["A"] > scores["B"]
+
+
+def test_fullstack_decoupled_scoring_clean_defense():
+    """Builder deploys cleanly and passes tests; Breaker captures 0 exploits."""
+    builder = {
+        "model_id": "model_builder",
+        "role": "builder",
+        "phase": "build",
+        "outcome": "TEST_PASS",
+        "passed": True,
+        "deployment_status": "DEPLOY_SUCCESS",
+        "deployment_ready": True,
+        "tests": {"passed": 5, "total": 5},
+    }
+    breaker = {
+        "model_id": "model_breaker",
+        "role": "breaker",
+        "phase": "break",
+        "outcome": "COMPLETED",
+        "passed": False,
+        "exploit_evidence": {
+            "server_crashed": False,
+            "availability_degraded": False,
+            "unauthorized_mutation": False,
+            "flag_captured": False,
+        },
+    }
+    summary = evidence.build_battle_evidence(
+        "b_fs1", [builder, breaker], format_id="fullstack"
+    )
+    fs_scores = scoring.compute_fullstack_scores(summary)
+    assert fs_scores["model_builder"]["total"] == 100.0
+    assert fs_scores["model_builder"]["components"]["deployment_readiness"] == 20.0
+    assert fs_scores["model_builder"]["components"]["functional_correctness"] == 40.0
+    assert fs_scores["model_builder"]["components"]["security_retained"] == 40.0
+    assert fs_scores["model_breaker"]["total"] == 0.0
+
+    det_scores = scoring.deterministic_scores(
+        {"format_id": "fullstack", "groups": [["model_builder"], ["model_breaker"]]},
+        evidence=summary,
+    )
+    assert det_scores["model_builder"] == 100.0
+    assert det_scores["model_breaker"] == 0.0
+
+
+def test_fullstack_decoupled_scoring_breaker_exploits():
+    """Breaker captures flag (35 pts) and crashes server (25 pts) = 60 pts.
+
+    Builder loses 15 (flag) + 10 (crash) from retained security: 40 - 25 = 15 pts.
+    Builder total = 20 (deploy) + 40 (correctness) + 15 (retained) = 75 pts.
+    """
+    builder = {
+        "model_id": "model_builder",
+        "role": "builder",
+        "phase": "build",
+        "outcome": "TEST_PASS",
+        "passed": True,
+        "deployment_status": "REPAIRED_DEPLOY_SUCCESS",
+        "deployment_ready": True,
+        "tests": {"passed": 10, "total": 10},
+    }
+    breaker = {
+        "model_id": "model_breaker",
+        "role": "breaker",
+        "phase": "break",
+        "outcome": "COMPLETED",
+        "passed": True,
+        "exploit_evidence": {
+            "server_crashed": True,
+            "availability_degraded": True,
+            "unauthorized_mutation": False,
+            "flag_captured": True,
+        },
+    }
+    summary = evidence.build_battle_evidence(
+        "b_fs2", [builder, breaker], format_id="fullstack"
+    )
+    fs_scores = scoring.compute_fullstack_scores(summary)
+    assert fs_scores["model_breaker"]["total"] == 60.0
+    assert fs_scores["model_breaker"]["components"]["flag_capture"] == 35.0
+    assert fs_scores["model_breaker"]["components"]["crash_dos"] == 25.0
+    assert fs_scores["model_builder"]["total"] == 75.0
+    assert fs_scores["model_builder"]["components"]["security_retained"] == 15.0
+
+
+def test_fullstack_decoupled_scoring_complete_compromise():
+    """Breaker captures all 3 exploit vectors = 100 pts.
+
+    Builder security retained is reduced to 0 (40 - 15 - 10 - 15).
+    Builder total = 20 (deploy) + 40 (correctness) + 0 (retained) = 60 pts.
+    """
+    builder = {
+        "model_id": "model_builder",
+        "role": "builder",
+        "phase": "build",
+        "outcome": "TEST_PASS",
+        "passed": True,
+        "deployment_status": "DEPLOY_SUCCESS",
+        "deployment_ready": True,
+        "tests": {"passed": 4, "total": 4},
+    }
+    breaker = {
+        "model_id": "model_breaker",
+        "role": "breaker",
+        "phase": "break",
+        "outcome": "COMPLETED",
+        "passed": True,
+        "exploit_evidence": {
+            "server_crashed": True,
+            "availability_degraded": True,
+            "unauthorized_mutation": True,
+            "flag_captured": True,
+        },
+    }
+    summary = evidence.build_battle_evidence(
+        "b_fs3", [builder, breaker], format_id="fullstack"
+    )
+    fs_scores = scoring.compute_fullstack_scores(summary)
+    assert fs_scores["model_breaker"]["total"] == 100.0
+    assert fs_scores["model_builder"]["total"] == 60.0
+    assert fs_scores["model_builder"]["components"]["security_retained"] == 0.0
+

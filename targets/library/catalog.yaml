@@ -1,6 +1,23 @@
 schema_version: 1
-count: 10
+count: 11
 targets:
+- id: fullstack-bank-vault
+  name: Full-Stack Bank Vault
+  category: cybersecurity
+  difficulty: expert
+  format: builder_breaker
+  runtime: fullstack-vite-fastapi
+  description: Builder implements an interactive full-stack banking portal (React 18 + FastAPI + Neon PostgreSQL); Breaker launches blackbox penetration testing against the deployed product.
+  tags:
+  - python
+  - fastapi
+  - react
+  - vite
+  - postgresql
+  - neon
+  - playwright
+  - builder-breaker
+  - fullstack
 - id: broken-package-recovery
   name: Broken Package Recovery
   category: software-engineering

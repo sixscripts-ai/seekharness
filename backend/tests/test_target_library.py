@@ -27,6 +27,7 @@ LIBRARY_ROOT = Path(__file__).resolve().parents[2] / "targets" / "library"
 EXPECTED_TARGET_IDS = [
     "authentication-gate",
     "broken-package-recovery",
+    "fullstack-bank-vault",
     "makefile-from-hell",
     "migration-disaster",
     "poisoned-instructions",

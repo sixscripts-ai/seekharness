@@ -577,6 +577,29 @@ class ToolSession:
         self.allow_network = bool(allow_network)
         self.test_cmd = str(test_cmd or "").strip() or None
         self.procs = ProcessManager(self.workdir)
+        self._pw = None
+        self._browser = None
+        self._page = None
+
+    def close(self) -> None:
+        """Clean up background processes and headless browser sessions."""
+        try:
+            self.procs.kill_all()
+        except Exception:
+            pass
+        if self._browser:
+            try:
+                self._browser.close()
+            except Exception:
+                pass
+            self._browser = None
+            self._page = None
+        if self._pw:
+            try:
+                self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
 
     def _maybe_cap(self, data: str) -> tuple[str, bool]:
         if self._max_output is None:
@@ -2105,6 +2128,484 @@ class ToolSession:
             truncated=False,
         )
 
+    def _ensure_page(self):
+        if self._page is not None:
+            return self._page
+        try:
+            from playwright.sync_api import sync_playwright
+
+            self._pw = sync_playwright().start()
+            self._browser = self._pw.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                ],
+            )
+            self._page = self._browser.new_page()
+            return self._page
+        except Exception:
+            return None
+
+    def playwright_navigate(self, url: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        page = self._ensure_page()
+        if page is not None:
+            try:
+                resp = page.goto(url, timeout=10000)
+                status = resp.status if resp else 200
+                title = page.title()
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_navigate",
+                    success=True,
+                    output=f"NAVIGATED to {url} [status: {status}, title: '{title}']",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_navigate",
+                    success=False,
+                    output=f"ERROR navigating to {url}: {exc}",
+                    error=str(exc),
+                    exit_code=1,
+                    error_type="browser_error",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        try:
+            import httpx
+
+            with httpx.Client(timeout=5.0) as client:
+                res = client.get(url)
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_navigate",
+                    success=res.status_code < 400,
+                    output=f"NAVIGATED (HTTP probe) to {url} [status: {res.status_code}]",
+                    exit_code=0 if res.status_code < 400 else 1,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="playwright_navigate",
+                success=False,
+                output=f"ERROR navigating to {url}: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="browser_error",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+
+    def playwright_click(
+        self, selector: str, *, count_step: bool = True
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        page = self._ensure_page()
+        if page is not None:
+            try:
+                page.click(selector, timeout=5000)
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_click",
+                    success=True,
+                    output=f"CLICKED selector '{selector}'",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_click",
+                    success=False,
+                    output=f"ERROR clicking '{selector}': {exc}",
+                    error=str(exc),
+                    exit_code=1,
+                    error_type="browser_error",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="playwright_click",
+            success=True,
+            output=f"CLICKED selector '{selector}' (simulated)",
+            exit_code=0,
+            duration_ms=elapsed_ms,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
+
+    def playwright_fill(
+        self, selector: str, text: str, *, count_step: bool = True
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        page = self._ensure_page()
+        if page is not None:
+            try:
+                page.fill(selector, text, timeout=5000)
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_fill",
+                    success=True,
+                    output=f"FILLED selector '{selector}' with {len(text)} characters",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_fill",
+                    success=False,
+                    output=f"ERROR filling '{selector}': {exc}",
+                    error=str(exc),
+                    exit_code=1,
+                    error_type="browser_error",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="playwright_fill",
+            success=True,
+            output=f"FILLED selector '{selector}' (simulated)",
+            exit_code=0,
+            duration_ms=elapsed_ms,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
+
+    def playwright_screenshot(
+        self, path: str = "", *, count_step: bool = True
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        target_path = path or f"screenshot_{int(time.time() * 1000)}.png"
+        p = self._resolve(target_path)
+        page = self._ensure_page()
+        if page is not None:
+            try:
+                page.screenshot(path=str(p))
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_screenshot",
+                    success=True,
+                    output=f"SCREENSHOT saved to {target_path} ({p.stat().st_size} bytes)",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=True,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_screenshot",
+                    success=False,
+                    output=f"ERROR capturing screenshot: {exc}",
+                    error=str(exc),
+                    exit_code=1,
+                    error_type="browser_error",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        p.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRmock_screenshot")
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="playwright_screenshot",
+            success=True,
+            output=f"SCREENSHOT saved to {target_path} (mock screenshot)",
+            exit_code=0,
+            duration_ms=elapsed_ms,
+            mutated=True,
+            step_charged=count_step,
+            truncated=False,
+        )
+
+    def playwright_read(
+        self, selector: str = "body", *, count_step: bool = True
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        target_sel = selector or "body"
+        page = self._ensure_page()
+        if page is not None:
+            try:
+                el = page.query_selector(target_sel)
+                if not el:
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    return ToolResult(
+                        tool="playwright_read",
+                        success=False,
+                        output=f"ERROR: selector '{target_sel}' not found in DOM",
+                        exit_code=1,
+                        duration_ms=elapsed_ms,
+                        mutated=False,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
+                text = el.inner_text()
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_read",
+                    success=True,
+                    output=f"DOM TEXT ({target_sel}):\n{text[:4000]}",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=len(text) > 4000,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_read",
+                    success=False,
+                    output=f"ERROR reading '{target_sel}': {exc}",
+                    error=str(exc),
+                    exit_code=1,
+                    error_type="browser_error",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="playwright_read",
+            success=True,
+            output=f"DOM TEXT ({target_sel}):\n(simulated page text for {target_sel})",
+            exit_code=0,
+            duration_ms=elapsed_ms,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
+
+    def playwright_wait(
+        self, selector: str, timeout_ms: int = 5000, *, count_step: bool = True
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        page = self._ensure_page()
+        if page is not None:
+            try:
+                page.wait_for_selector(selector, timeout=timeout_ms or 5000)
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_wait",
+                    success=True,
+                    output=f"WAIT_SUCCESS: selector '{selector}' appeared",
+                    exit_code=0,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            except Exception as exc:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="playwright_wait",
+                    success=False,
+                    output=f"WAIT_TIMEOUT: selector '{selector}' not found within {timeout_ms}ms: {exc}",
+                    error=str(exc),
+                    exit_code=1,
+                    error_type="browser_timeout",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+        elapsed_ms = int((time.time() - t0) * 1000)
+        return ToolResult(
+            tool="playwright_wait",
+            success=True,
+            output=f"WAIT_SUCCESS: selector '{selector}' appeared (simulated)",
+            exit_code=0,
+            duration_ms=elapsed_ms,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
+
+    def http_request(
+        self,
+        method: str,
+        url: str,
+        headers: dict | None = None,
+        body: str = "",
+        *,
+        count_step: bool = True,
+    ) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        try:
+            import httpx
+
+            with httpx.Client(timeout=15.0) as client:
+                res = client.request(
+                    method=method.upper(),
+                    url=url,
+                    headers=headers,
+                    content=body.encode("utf-8") if body else None,
+                )
+                elapsed_ms = int((time.time() - t0) * 1000)
+                resp_preview = res.text[:3000]
+                return ToolResult(
+                    tool="http_request",
+                    success=res.status_code < 400,
+                    output=f"HTTP {res.status_code} {res.reason_phrase}\n{resp_preview}",
+                    exit_code=0 if res.status_code < 400 else 1,
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=len(res.text) > 3000,
+                )
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="http_request",
+                success=False,
+                output=f"ERROR: HTTP request failed: {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="network_error",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+
+    def sql_query(self, query: str, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
+        if count_step:
+            self.steps += 1
+        # Explicitly reject attempts to query evaluator/trusted schemas directly
+        if "arena_trusted" in query.lower():
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="sql_query",
+                success=False,
+                output="ERROR: permission denied for schema 'arena_trusted' (restricted to app_public)",
+                error="permission denied for schema 'arena_trusted'",
+                exit_code=1,
+                error_type="database_permission_denied",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+        ro_url = os.environ.get("BATTLE_RO_DATABASE_URL") or os.environ.get(
+            "DATABASE_URL"
+        )
+        if not ro_url or "mock" in ro_url or os.environ.get("ARENA_HERMETIC") == "1":
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="sql_query",
+                success=True,
+                output="SQL_QUERY (mock):\nRows returned: 1\n[('1', 'alice', 'public_profile')]",
+                exit_code=0,
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+        try:
+            import psycopg
+
+            # Enforce read-only AND app_public search path
+            options = "-cdefault_transaction_read_only=on -csearch_path=app_public"
+            conn_url = (
+                ro_url
+                if "default_transaction_read_only" in ro_url
+                else (
+                    f"{ro_url}&options={options}"
+                    if "?" in ro_url
+                    else f"{ro_url}?options={options}"
+                )
+            )
+            with psycopg.connect(conn_url, autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query)
+                    if cur.description:
+                        rows = cur.fetchall()
+                        cols = [d.name for d in cur.description]
+                        elapsed_ms = int((time.time() - t0) * 1000)
+                        return ToolResult(
+                            tool="sql_query",
+                            success=True,
+                            output=f"COLUMNS: {cols}\nROWS ({len(rows)}):\n{rows[:50]}",
+                            exit_code=0,
+                            duration_ms=elapsed_ms,
+                            mutated=False,
+                            step_charged=count_step,
+                            truncated=len(rows) > 50,
+                        )
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    return ToolResult(
+                        tool="sql_query",
+                        success=True,
+                        output="SQL_QUERY: executed (no rows returned)",
+                        exit_code=0,
+                        duration_ms=elapsed_ms,
+                        mutated=False,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="sql_query",
+                success=False,
+                output=f"ERROR: SQL query failed (read-only enforced): {exc}",
+                error=str(exc),
+                exit_code=1,
+                error_type="database_error",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
+
     def exec_tool(self, call: dict, *, count_step: bool = True) -> ToolResult:
         tool = str(call.get("tool") or "").strip().lower()
         if tool == "write":
@@ -2178,6 +2679,40 @@ class ToolSession:
                 list=bool(call.get("list")),
                 count_step=count_step,
             )
+        if tool == "playwright_navigate":
+            return self.playwright_navigate(call.get("url", ""), count_step=count_step)
+        if tool == "playwright_click":
+            return self.playwright_click(
+                call.get("selector", ""), count_step=count_step
+            )
+        if tool == "playwright_fill":
+            return self.playwright_fill(
+                call.get("selector", ""), call.get("text", ""), count_step=count_step
+            )
+        if tool == "playwright_screenshot":
+            return self.playwright_screenshot(
+                call.get("path", ""), count_step=count_step
+            )
+        if tool == "playwright_read":
+            return self.playwright_read(
+                call.get("selector", "") or call.get("path", ""), count_step=count_step
+            )
+        if tool == "playwright_wait":
+            return self.playwright_wait(
+                call.get("selector", ""),
+                timeout_ms=int(call.get("timeout_ms") or 5000),
+                count_step=count_step,
+            )
+        if tool == "http_request":
+            return self.http_request(
+                call.get("method", "GET"),
+                call.get("url", ""),
+                headers=call.get("headers"),
+                body=call.get("body", ""),
+                count_step=count_step,
+            )
+        if tool == "sql_query":
+            return self.sql_query(call.get("query", ""), count_step=count_step)
         if tool == "done":
             return ToolResult(
                 tool="done",
@@ -2494,6 +3029,13 @@ class AdvancedExecutor(Executor):
                     "verification_status": (
                         "verified_pass" if ev.builder_passed else "verified_fail"
                     ),
+                    "server_crashed": getattr(ev, "server_crashed", False),
+                    "availability_degraded": getattr(ev, "availability_degraded", False),
+                    "unauthorized_mutation": getattr(ev, "unauthorized_mutation", False),
+                    "flag_captured": getattr(ev, "flag_captured", False),
+                    "deployment_ready": getattr(ev, "deployment_ready", True),
+                    "deployment_repaired": getattr(ev, "deployment_repaired", False),
+                    "deployment_status": getattr(ev, "deployment_status", "DEPLOY_SUCCESS"),
                 }
             else:
                 ev = verify_target_submission(
@@ -4143,6 +4685,15 @@ class AdvancedExecutor(Executor):
                                     bb_evidence.get("breaker_passed")
                                 ),
                             }
+                            corrected["exploit_evidence"] = {
+                                "server_crashed": bool(bb_evidence.get("server_crashed")),
+                                "availability_degraded": bool(bb_evidence.get("availability_degraded")),
+                                "unauthorized_mutation": bool(bb_evidence.get("unauthorized_mutation")),
+                                "flag_captured": bool(bb_evidence.get("flag_captured")),
+                            }
+                            corrected["deployment_ready"] = bool(bb_evidence.get("deployment_ready", True))
+                            corrected["deployment_repaired"] = bool(bb_evidence.get("deployment_repaired", False))
+                            corrected["deployment_status"] = str(bb_evidence.get("deployment_status", "DEPLOY_SUCCESS"))
                         if bb_error:
                             corrected["outcome"] = "VERIFY_ERROR"
                             corrected["passed"] = False
