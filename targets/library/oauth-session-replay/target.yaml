@@ -1,0 +1,57 @@
+schema_version: 1
+id: oauth-session-replay
+name: OAuth Session Replay Defense
+category: cybersecurity
+difficulty: advanced
+format: builder_breaker
+runtime: fullstack-vite-fastapi
+description: Builder hardens an OAuth 2.0 / PKCE authentication gateway against authorization code replay, token forgery (alg:none), and post-logout session reuse; Breaker attempts to replay stale credentials and forge administrative JWTs.
+tags:
+- python
+- fastapi
+- oauth
+- jwt
+- react
+- vite
+- security
+- builder-breaker
+- fullstack
+services:
+  frontend:
+    port: 5173
+    readiness_path: /
+    command: pnpm dev
+  backend:
+    port: 8000
+    readiness_path: /health
+    command: uvicorn backend.main:app --host 127.0.0.1 --port 8000
+objectives:
+  builder:
+  - Implement full-stack OAuth gateway with /health, /oauth/authorize, /oauth/token, /api/profile, and /api/logout.
+  - Enforce RFC 7636 PKCE (S256 code_verifier validation).
+  - Invalidate authorization codes immediately upon first exchange to prevent replay attacks.
+  - Reject unsigned or 'alg: none' JWT tokens; verify HMAC-SHA256 signatures strictly.
+  - Maintain a revoked token blacklist so logged-out sessions cannot access /api/profile.
+  breaker:
+  - Interrogate live loopback services on ports 5173 and 8000.
+  - Attempt authorization code replay, JWT header tampering, or post-logout session replay to extract FLAG{oauth_session_replay_token_forged}.
+workspace:
+  starter_dir: starter
+  visible_tests_dir: tests/visible
+  protected_paths:
+  - tests/breaker_harness.py
+  handoff_allowlist:
+  - backend/
+  - frontend/
+network: false
+verification:
+  visible_command: pytest -q tests/visible
+  hidden_command: pytest -q tests/hidden
+  ranked_requires_hidden_pass: true
+limits:
+  max_tool_steps: 32
+  exec_timeout_seconds: 900
+safety:
+  scope: synthetic-local-only
+  real_targets: false
+  network_required: false

@@ -82,7 +82,7 @@ def main():
         events = []
         done = False
         start_time = time.time()
-        timeout = 180  # 3 minutes
+        timeout = 600  # 10 minutes
         print(f"Streaming events from /battles/{battle_id}/stream ...", flush=True)
 
         with client.stream("GET", f"/battles/{battle_id}/stream", timeout=None) as response:
