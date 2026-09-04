@@ -26,6 +26,7 @@ def memory_create(
     authoritative_status: str | None = None,
     context_mode: str | None = None,
     source_result_id: str | None = None,
+    embedding: list[float] | None = None,
 ) -> Memory:
     memory = Memory(
         user_id=user_id,
@@ -43,6 +44,7 @@ def memory_create(
         authoritative_status=authoritative_status,
         context_mode=context_mode,
         source_result_id=source_result_id,
+        embedding=embedding,
     )
     session.add(memory)
     session.flush()

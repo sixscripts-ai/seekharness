@@ -2981,8 +2981,10 @@ class AdvancedExecutor(Executor):
             seed_solution_roles = seed_solution_roles | set(
                 fighter_roles(format_config)
             )
-        max_turns = int(_budget("max_tool_turns", 6, ["max_turns"]))
-        max_steps = int(_budget("max_tool_steps", 14, ["max_steps", "max_tool_steps"]))
+        max_turns = min(20, max(1, int(_budget("max_tool_turns", 6, ["max_turns"]))))
+        max_steps = min(
+            50, max(1, int(_budget("max_tool_steps", 14, ["max_steps", "max_tool_steps"])))
+        )
         raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
         tool_timeout = int(raw_timeout) if raw_timeout else None
         race_tokens = int(
@@ -3032,6 +3034,8 @@ class AdvancedExecutor(Executor):
             phase_id="",
             role="",
             workspace="",
+            malformed_tool_call: bool = False,
+            repair_kind: str = "",
         ):
             action_phase = phase_id or phase_name
             with io_lock:
@@ -3060,6 +3064,10 @@ class AdvancedExecutor(Executor):
                     payload["reason"] = reason
                 if response_hash:
                     payload["response_hash"] = response_hash
+                if malformed_tool_call:
+                    payload["malformed_tool_call"] = True
+                if repair_kind:
+                    payload["repair_kind"] = repair_kind
                 client.round(
                     battle_id,
                     action_phase,
@@ -3405,6 +3413,9 @@ class AdvancedExecutor(Executor):
                 )
 
             last_test: str | None = None
+            has_tested_solution: bool = False
+            done_warning_issued: bool = False
+            consecutive_val_errors: int = 0
             if preview_url:
                 emit_action(
                     model_id,
@@ -3568,6 +3579,13 @@ class AdvancedExecutor(Executor):
                     # Reset consecutive parse failures on successful parse
                     consecutive_parse_failures = 0
 
+                    is_repaired = norm.parse_status == "repaired"
+                    if is_repaired:
+                        metrics["parse_errors"] += 1
+                        metrics["repaired_tool_calls"] = (
+                            metrics.get("repaired_tool_calls", 0) + 1
+                        )
+
                     emit_action(
                         model_id,
                         "tool_parse_success",
@@ -3577,6 +3595,8 @@ class AdvancedExecutor(Executor):
                         tool_call_id="",
                         exec_id=None,
                         result=f"parsed {len(calls)} calls (dialect: {norm.dialect}, status: {norm.parse_status})",
+                        malformed_tool_call=is_repaired,
+                        repair_kind=norm.repair_kind or "",
                     )
 
                     turn_tool_outputs: list[str] = []
@@ -3604,6 +3624,7 @@ class AdvancedExecutor(Executor):
                             )
                             if val_errors:
                                 metrics["tool_errors"] += 1
+                                consecutive_val_errors += 1
                                 sess.steps += 1
                                 err_msg = (
                                     f"ERROR: validation failed: {'; '.join(val_errors)}"
@@ -3623,6 +3644,20 @@ class AdvancedExecutor(Executor):
                                 turn_tool_outputs.append(
                                     f"[{tool_name}]: {val_result.output}"
                                 )
+                                if consecutive_val_errors >= 2:
+                                    schema_spec = REGISTRY.get(tool_name)
+                                    if schema_spec:
+                                        params = (
+                                            schema_spec.get("function", {}).get("parameters", {})
+                                            if isinstance(schema_spec, dict)
+                                            else {}
+                                        )
+                                        schema_prompt = (
+                                            f"[SCHEMA GUIDANCE for '{tool_name}']:\n"
+                                            f"Expected parameters schema:\n{json.dumps(params, indent=2)}\n"
+                                            f"Please ensure your tool call matches this JSON schema."
+                                        )
+                                        turn_tool_outputs.append(schema_prompt)
                                 emit_action(
                                     model_id,
                                     tool_name,
@@ -3649,6 +3684,7 @@ class AdvancedExecutor(Executor):
                                     )
                                     break
                                 continue
+                            consecutive_val_errors = 0
                             call = {"tool": tool_name, **norm_args}
 
                         if tool_name == "skills":
@@ -3701,6 +3737,29 @@ class AdvancedExecutor(Executor):
                             continue
 
                         if tool_name == "done":
+                            if (
+                                not has_tested_solution
+                                and not done_warning_issued
+                                and (turn + 1 < max_turns)
+                                and (sess.steps < max_steps)
+                            ):
+                                done_warning_issued = True
+                                turn_tool_outputs.append(
+                                    "[ADVISORY]: Notice: You have not executed TOOL test to verify your solution against the target harness. "
+                                    "If you are confident your changes are complete and correct, emit DONE again to confirm final submission."
+                                )
+                                emit_action(
+                                    model_id,
+                                    "done",
+                                    target="",
+                                    state="advisory",
+                                    turn_id=turn + 1,
+                                    tool_step=sess.steps,
+                                    result="Self-correction advisory: verification test not executed before DONE.",
+                                    role=role,
+                                    workspace=work.name,
+                                )
+                                continue
                             finalize(retest=True, terminal_reason="fighter_done")
                             break
 
@@ -3858,6 +3917,11 @@ class AdvancedExecutor(Executor):
                             tool_name == "run"
                             and run_path in {"tests/test_target.py", "test_target.py"}
                         )
+                        if tool_name == "test" or harness_like or (
+                            tool_name == "shell"
+                            and any(kw in str(call.get("cmd") or "") for kw in ("pytest", "python -m unittest", "npm test"))
+                        ):
+                            has_tested_solution = True
                         if harness_like:
                             last_test = exec_res_sanitized
                             if self._harness_passed(exec_res_sanitized):

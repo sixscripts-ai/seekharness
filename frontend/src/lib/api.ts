@@ -317,6 +317,7 @@ export type LeaderboardRow = {
   elo: number;
   games_played: number;
   rank?: number;
+  top_skills?: string[];
 };
 export type StreamEvent = { event: string; data: any };
 export type StatsOut = {
@@ -332,32 +333,97 @@ export async function streamBattle(
   onEvent: (ev: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/battles/${battleId}/stream`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "text/event-stream" },
-    signal,
-  });
-  if (!res.ok || !res.body) throw new ApiError(res.status, await res.text());
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let eventName = "message";
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split("\n");
-    buffer = parts.pop() || "";
-    for (const line of parts) {
-      if (line.startsWith("event:")) eventName = line.slice(6).trim();
-      else if (line.startsWith("data:")) {
-        const raw = line.slice(5).trim();
-        let data: any = raw;
-        try {
-          data = JSON.parse(raw);
-        } catch {}
-        onEvent({ event: eventName, data });
-        eventName = "message";
-      } else if (line === "") eventName = "message";
+  const seenEventIds = new Set<string>();
+  let attempt = 0;
+  const maxAttempts = 8;
+  let isDone = false;
+
+  while (!isDone && !signal?.aborted && attempt < maxAttempts) {
+    try {
+      const headers: Record<string, string> = {
+        Authorization: `Bearer ${token}`,
+        Accept: "text/event-stream",
+      };
+
+      const res = await fetch(`${BASE}/battles/${battleId}/stream`, {
+        headers,
+        signal,
+      });
+
+      if (res.status === 404 || res.status === 401 || res.status === 403) {
+        throw new ApiError(res.status, await res.text());
+      }
+
+      if (!res.ok || !res.body) {
+        throw new ApiError(res.status, await res.text());
+      }
+
+      // Reset backoff on successful HTTP stream open
+      attempt = 0;
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let eventName = "message";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const parts = buffer.split("\n");
+        buffer = parts.pop() || "";
+        for (const line of parts) {
+          if (line.startsWith("event:")) {
+            eventName = line.slice(6).trim();
+          } else if (line.startsWith("data:")) {
+            const raw = line.slice(5).trim();
+            let data: any = raw;
+            try {
+              data = JSON.parse(raw);
+            } catch {}
+
+            // Deduplicate events to prevent replaying upon reconnect
+            const eid =
+              data?.event_id ||
+              data?.data?.event_id ||
+              (data && typeof data === "object"
+                ? `${eventName}_${data.created_at || data.ts || data.step || ""}_${data.action || data.tool_name || ""}`
+                : null);
+
+            if (eid) {
+              if (seenEventIds.has(eid)) continue;
+              seenEventIds.add(eid);
+            }
+
+            onEvent({ event: eventName, data });
+
+            if (eventName === "done") {
+              isDone = true;
+              return;
+            }
+            eventName = "message";
+          } else if (line === "") {
+            eventName = "message";
+          }
+        }
+      }
+    } catch (err: any) {
+      if (signal?.aborted) return;
+      if (
+        err instanceof ApiError &&
+        (err.status === 401 || err.status === 403 || err.status === 404)
+      ) {
+        throw err;
+      }
+
+      attempt++;
+      if (attempt >= maxAttempts) {
+        throw err;
+      }
+
+      // Exponential backoff: 800ms, 1500ms, 2700ms, max 5000ms
+      const delay = Math.min(5000, 800 * Math.pow(1.8, attempt - 1)) + Math.random() * 200;
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }

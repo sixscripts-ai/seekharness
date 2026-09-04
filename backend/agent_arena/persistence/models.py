@@ -34,6 +34,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:
+    Vector = None
+
 
 def _new_id() -> str:
     return uuid.uuid4().hex
@@ -393,6 +398,11 @@ class Memory(Base):
     authoritative_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     context_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
     source_result_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    embedding: Mapped[Any | None] = (
+        mapped_column(Vector(1536), nullable=True)
+        if Vector is not None
+        else mapped_column(Text, nullable=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

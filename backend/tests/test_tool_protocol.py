@@ -6,6 +6,7 @@ import pytest
 from agent_arena.tool_protocol import (
     CanonicalToolCall,
     ModelResponse,
+    REGISTRY,
     TOOL_SCHEMAS,
     normalize_response,
     parse_kimi_token_xml,
@@ -13,7 +14,12 @@ from agent_arena.tool_protocol import (
     parse_arena_json,
     parse_arena_legacy,
 )
-from agent_arena.sandbox.executors.advanced_executor import rank_skills_for_context, select_skills
+from agent_arena.sandbox.executors.advanced_executor import (
+    ToolSession,
+    parse_tool_calls,
+    rank_skills_for_context,
+    select_skills,
+)
 from agent_arena.internal_router import _apply_self_learning
 
 
@@ -153,7 +159,7 @@ def test_skill_ranking_token_relevance():
         {"name": "python-kata-fixer", "slug": "python-kata-fixer", "description": "Solve Python algorithms and unit tests", "tags": ["python", "kata"], "category": "python"},
         {"name": "secure-code-execution", "slug": "secure-code-execution", "description": "Sandbox isolation and security", "tags": ["security"], "category": "security"},
     ]
-    
+
     # Node target config
     node_cfg = {
         "name": "broken-package-recovery",
@@ -164,7 +170,7 @@ def test_skill_ranking_token_relevance():
     }
     ranked = rank_skills_for_context(mock_pool, node_cfg, limit=3)
     assert ranked[0]["name"] == "node-package-debugging"
-    
+
     # Python target config
     py_cfg = {
         "name": "algo-reverse",
@@ -217,3 +223,331 @@ def test_serialization_repair_never_invents_tool_intent():
     assert norm_alias.calls[0].arguments == {"cmd": "npm test --silent"}
     assert norm_alias.calls[1].name == "write"
     assert norm_alias.calls[1].arguments == {"path": "fix.js", "content": 'console.log("hello");'}
+
+
+def _fighter_calls(text: str):
+    """Mirror the executor: parse → CanonicalToolCall → {tool, **arguments} → validate."""
+    norm = normalize_response(text)
+    calls = [{"tool": c.name, **c.arguments} for c in norm.calls]
+    validated = [
+        (call, *REGISTRY.validate_call(call["tool"], call)) for call in calls
+    ]
+    return norm, validated
+
+
+def _assert_valid_flat(text: str, name: str, arguments: dict):
+    calls = parse_arena_json(text)
+    assert len(calls) == 1
+    assert calls[0].name == name
+    assert calls[0].arguments == arguments
+    assert calls[0].dialect == "arena_json"
+    norm, validated = _fighter_calls(text)
+    assert norm.dialect == "arena_json"
+    assert norm.parse_status == "parsed"
+    call, canonical, errors = validated[0]
+    assert errors == []
+    assert "Missing required parameter" not in " ".join(errors)
+    assert canonical == arguments
+    assert call["tool"] == name
+    for key, value in arguments.items():
+        assert call[key] == value
+
+
+def test_flat_arena_json_read_retains_path():
+    _assert_valid_flat(
+        '{"tool":"read","path":"TARGET.md"}',
+        "read",
+        {"path": "TARGET.md"},
+    )
+
+
+def test_flat_arena_json_read_file_alias():
+    _assert_valid_flat(
+        '{"tool":"read","file":"TARGET.md"}',
+        "read",
+        {"path": "TARGET.md"},
+    )
+
+
+def test_flat_arena_json_write_retains_path_and_content():
+    _assert_valid_flat(
+        '{"tool":"write","path":"src/test.txt","content":"hello"}',
+        "write",
+        {"path": "src/test.txt", "content": "hello"},
+    )
+
+
+def test_nested_arena_json_write_still_works():
+    _assert_valid_flat(
+        '{"tool":"write","arguments":{"path":"src/test.txt","content":"hello"}}',
+        "write",
+        {"path": "src/test.txt", "content": "hello"},
+    )
+
+
+def test_flat_arena_json_write_aliases():
+    _assert_valid_flat(
+        '{"tool":"write","file":"solution.py","code":"print(\'ok\')"}',
+        "write",
+        {"path": "solution.py", "content": "print('ok')"},
+    )
+
+
+def test_flat_arena_json_shell_cmd_and_command_alias():
+    _assert_valid_flat('{"tool":"shell","cmd":"pytest -q"}', "shell", {"cmd": "pytest -q"})
+    _assert_valid_flat(
+        '{"tool":"shell","command":"ls"}',
+        "shell",
+        {"cmd": "ls"},
+    )
+
+
+def test_flat_arena_json_skill_graph_selectors():
+    _assert_valid_flat(
+        '{"tool":"skills","search":"session replay token"}',
+        "skills",
+        {"search": "session replay token"},
+    )
+    _assert_valid_flat(
+        '{"tool":"skills","index":"security"}',
+        "skills",
+        {"index": "security"},
+    )
+    _assert_valid_flat(
+        '{"tool":"skills","skill":"auth-flow-debugger"}',
+        "skills",
+        {"skill": "auth-flow-debugger"},
+    )
+    _assert_valid_flat(
+        '{"tool":"use_skill","name":"auth-flow-debugger"}',
+        "use_skill",
+        {"name": "auth-flow-debugger"},
+    )
+
+
+def test_nested_arena_json_read_still_works():
+    _assert_valid_flat(
+        '{"tool":"read","arguments":{"path":"TARGET.md"}}',
+        "read",
+        {"path": "TARGET.md"},
+    )
+
+
+def test_bare_and_fenced_flat_arena_json_arrays():
+    payload = [
+        {"tool": "read", "path": "TARGET.md"},
+        {"tool": "skills", "search": "auth"},
+        {"tool": "use_skill", "name": "auth-flow-debugger"},
+        {"tool": "write", "path": "solution.py", "content": "print('ok')"},
+    ]
+    bare = json.dumps(payload)
+    fenced = "```json\n" + bare + "\n```"
+    expected = [
+        ("read", {"path": "TARGET.md"}),
+        ("skills", {"search": "auth"}),
+        ("use_skill", {"name": "auth-flow-debugger"}),
+        ("write", {"path": "solution.py", "content": "print('ok')"}),
+    ]
+    for text in (bare, fenced):
+        calls = parse_arena_json(text)
+        assert [(c.name, c.arguments) for c in calls] == expected
+        norm, validated = _fighter_calls(text)
+        assert norm.parse_status == "parsed"
+        assert all(errors == [] for _, _, errors in validated)
+
+
+def test_openai_shaped_name_plus_arguments_still_works():
+    _assert_valid_flat(
+        '{"name":"read","arguments":{"path":"TARGET.md"}}',
+        "read",
+        {"path": "TARGET.md"},
+    )
+
+
+def test_nested_arguments_are_authoritative_over_flat_fields():
+    calls = parse_arena_json(
+        '{"tool":"read","arguments":{"path":"a.md"},"path":"b.md","file":"c.md"}'
+    )
+    assert calls[0].arguments == {"path": "a.md"}
+
+
+def test_empty_nested_arguments_are_filled_from_flat_fields():
+    calls = parse_arena_json(
+        '{"tool":"write","arguments":{},"path":"src/test.txt","content":"hello"}'
+    )
+    assert calls[0].arguments == {"path": "src/test.txt", "content": "hello"}
+
+
+def test_top_level_id_is_call_id_not_a_skill_argument():
+    calls = parse_arena_json(
+        '{"tool":"use_skill","name":"auth-flow-debugger","id":"call_abc123"}'
+    )
+    assert calls[0].name == "use_skill"
+    assert calls[0].arguments == {"name": "auth-flow-debugger"}
+    assert calls[0].call_id == "call_abc123"
+
+    missing = parse_arena_json('{"tool":"use_skill","id":"call_abc123"}')
+    assert missing[0].name == "use_skill"
+    assert missing[0].arguments == {}
+    assert missing[0].call_id == "call_abc123"
+    _, errors = REGISTRY.validate_call(missing[0].name, missing[0].arguments)
+    assert any("Missing required parameter 'name'" in err for err in errors)
+
+
+def test_unknown_flat_properties_still_fail_canonical_validation():
+    calls = parse_arena_json('{"tool":"read","path":"TARGET.md","nope":"x"}')
+    assert calls[0].arguments["path"] == "TARGET.md"
+    _, errors = REGISTRY.validate_call(calls[0].name, calls[0].arguments)
+    assert any("Unexpected parameter 'nope'" in err for err in errors)
+
+
+def test_missing_required_flat_parameters_still_fail_validation():
+    read_calls = parse_arena_json('{"tool":"read"}')
+    _, read_errors = REGISTRY.validate_call("read", read_calls[0].arguments)
+    assert any("Missing required parameter 'path'" in err for err in read_errors)
+
+    write_calls = parse_arena_json('{"tool":"write"}')
+    _, write_errors = REGISTRY.validate_call("write", write_calls[0].arguments)
+    assert any("Missing required parameter 'path'" in err for err in write_errors)
+    assert any("Missing required parameter 'content'" in err for err in write_errors)
+
+
+REGISTERED_FLAT_FIXTURES = {
+    "read": {"path": "TARGET.md"},
+    "write": {"path": "solution.py", "content": "print('ok')"},
+    "shell": {"cmd": "pytest -q"},
+    "test": {},
+    "ls": {"path": "."},
+    "clean": {"path": "tmp.txt"},
+    "run": {"path": "main.py"},
+    "install": {"cmd": "pip install pytest"},
+    "grep": {"pattern": "TODO", "path": "src"},
+    "tree": {"path": "."},
+    "cp": {"src": "a.txt", "dst": "b.txt"},
+    "mv": {"src": "a.txt", "dst": "b.txt"},
+    "rm": {"path": "gone.txt"},
+    "fetch": {"url": "https://example.com"},
+    "search": {"query": "docs"},
+    "bg": {"name": "server", "content": "python -m http.server"},
+    "ps": {},
+    "kill": {"name": "server"},
+    "logs": {"name": "server"},
+    "use_skill": {"name": "auth-flow-debugger"},
+    "skills": {"search": "authentication"},
+    "done": {},
+}
+
+
+def test_flat_arena_json_retains_args_for_every_registered_tool():
+    assert set(REGISTERED_FLAT_FIXTURES) == REGISTRY.all_names()
+    for tool, payload in REGISTERED_FLAT_FIXTURES.items():
+        text = json.dumps({"tool": tool, **payload})
+        calls = parse_arena_json(text)
+        assert len(calls) == 1, tool
+        assert calls[0].name == tool
+        for key, value in payload.items():
+            assert calls[0].arguments.get(key) == value, (tool, key, calls[0].arguments)
+        _, errors = REGISTRY.validate_call(tool, {"tool": tool, **calls[0].arguments})
+        assert errors == [], (tool, errors, calls[0].arguments)
+        joined = "; ".join(errors)
+        assert "Missing required parameter" not in joined
+
+
+def test_flat_write_fighter_path_does_not_drop_required_fields():
+    text = '{"tool":"write","path":"solution.py","content":"hello"}'
+    parsed = parse_tool_calls(text)
+    assert parsed == [{"tool": "write", "path": "solution.py", "content": "hello"}]
+    args, errors = REGISTRY.validate_call(parsed[0]["tool"], parsed[0])
+    assert errors == []
+    assert args == {"path": "solution.py", "content": "hello"}
+    assert "Missing required parameter" not in " ".join(errors)
+
+
+def test_flat_read_write_round_trip_through_tool_session(tmp_path):
+    session = ToolSession(tmp_path, allow_network=False)
+    write_text = '{"tool":"write","path":"arena_parser_test.txt","content":"parser works"}'
+    read_text = '{"tool":"read","path":"arena_parser_test.txt"}'
+
+    write_calls = parse_tool_calls(write_text)
+    write_args, write_errors = REGISTRY.validate_call(
+        write_calls[0]["tool"], write_calls[0]
+    )
+    assert write_errors == []
+    assert write_args == {"path": "arena_parser_test.txt", "content": "parser works"}
+    written = session.exec_tool(write_calls[0])
+    assert written.success is True
+
+    read_calls = parse_tool_calls(read_text)
+    read_args, read_errors = REGISTRY.validate_call(read_calls[0]["tool"], read_calls[0])
+    assert read_errors == []
+    assert read_args == {"path": "arena_parser_test.txt"}
+    read_back = session.exec_tool(read_calls[0])
+    assert read_back.success is True
+    assert read_back.output == "parser works"
+
+
+def test_flat_skill_graph_json_reaches_tool_session(tmp_path):
+    skill_dir = tmp_path / ".agents" / "skills" / "auth-flow-debugger"
+    skill_dir.mkdir(parents=True)
+    body = "---\nname: auth-flow-debugger\ndescription: test\n---\nUNIQUE_SKILL_BODY\n"
+    (skill_dir / "SKILL.md").write_text(body, encoding="utf-8")
+    session = ToolSession(tmp_path, allow_network=False)
+    before_network = session.allow_network
+
+    search_calls = parse_tool_calls('{"tool":"skills","search":"authentication"}')
+    _, search_errors = REGISTRY.validate_call(search_calls[0]["tool"], search_calls[0])
+    assert search_errors == []
+    assert search_calls[0]["search"] == "authentication"
+    search_result = session.exec_tool(search_calls[0], count_step=False)
+    assert search_result.success is True
+    assert "auth-flow-debugger" in search_result.output
+    assert "UNIQUE_SKILL_BODY" not in search_result.output
+    assert "SKILL.md" not in search_result.output
+
+    card_calls = parse_tool_calls('{"tool":"skills","skill":"auth-flow-debugger"}')
+    _, card_errors = REGISTRY.validate_call(card_calls[0]["tool"], card_calls[0])
+    assert card_errors == []
+    card_result = session.exec_tool(card_calls[0], count_step=False)
+    assert card_result.success is True
+    assert "SKILL CARD: auth-flow-debugger" in card_result.output
+    assert "UNIQUE_SKILL_BODY" not in card_result.output
+    assert 'use_skill("auth-flow-debugger")' in card_result.output
+    assert session.skill_reads == set()
+
+    load_calls = parse_tool_calls('{"tool":"use_skill","name":"auth-flow-debugger"}')
+    _, load_errors = REGISTRY.validate_call(load_calls[0]["tool"], load_calls[0])
+    assert load_errors == []
+    assert load_calls[0]["name"] == "auth-flow-debugger"
+    loaded = session.exec_tool(load_calls[0], count_step=False)
+    assert loaded.success is True
+    assert loaded.output == body
+    assert session.skill_reads == {"auth-flow-debugger"}
+    assert session.allow_network is before_network is False
+    assert not hasattr(session, "capabilities")
+
+    bypass = parse_tool_calls(
+        '{"tool":"read","path":".agents/skills/auth-flow-debugger/SKILL.md"}'
+    )
+    _, bypass_errors = REGISTRY.validate_call(bypass[0]["tool"], bypass[0])
+    assert bypass_errors == []
+    denied = session.exec_tool(bypass[0], count_step=False)
+    assert denied.success is False
+    assert denied.policy_rejected is True
+    assert "UNIQUE_SKILL_BODY" not in denied.output
+    assert "use_skill" in denied.output
+
+
+def test_fighter_bootstrap_does_not_imply_filesystem_skill_load():
+    from agent_arena.fighter_context import build_fighter_system_prompt, fighter_tool_grammar
+
+    prompt = build_fighter_system_prompt(
+        role="builder",
+        format_name="Target battle",
+        max_steps=14,
+        max_turns=6,
+    )
+    for text in (prompt, fighter_tool_grammar()):
+        assert "SKILL.md" not in text
+        assert ".agents/skills" not in text
+        assert "use_skill" in text
+        assert "skills(" in text or "TOOL skills" in text

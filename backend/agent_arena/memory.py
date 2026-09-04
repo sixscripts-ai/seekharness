@@ -251,10 +251,29 @@ def retrieve_pg(
     target_id: str = "",
     skills: list[str] | None = None,
 ) -> list[dict]:
-    """Postgres retrieve using the same Change Set B provenance gates."""
+    """Postgres retrieve using Mem0 pgvector semantic search with provenance gates."""
     mode = str(context_mode or "strict").lower().strip()
     if mode not in ("adaptive", "assisted"):
         return []
+    try:
+        from .mem0_pgvector import NeonPgVectorMem0Store
+
+        store = NeonPgVectorMem0Store(session)
+        vec_results = store.search(
+            query,
+            user_id=user_id,
+            model_id=model_id,
+            role=role,
+            target_id=target_id,
+            limit=limit,
+            context_mode=context_mode,
+            skills=skills or [],
+        )
+        if vec_results:
+            return vec_results
+    except Exception:
+        pass
+
     from agent_arena.persistence.repositories import memories as mem_repo
 
     docs = [mem_repo.memory_to_dict(r) for r in mem_repo.memory_list_all(session, limit=200)]

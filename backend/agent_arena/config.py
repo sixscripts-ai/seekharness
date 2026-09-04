@@ -20,13 +20,13 @@ _REQUIRED = [
 
 @lru_cache
 def settings() -> dict:
-    persistence = os.environ.get("PERSISTENCE_BACKEND", "appwrite").lower()
-    read_fallback = os.environ.get("APPWRITE_READ_FALLBACK", "false").lower() in (
+    persistence = os.environ.get("PERSISTENCE_BACKEND", "postgres").lower()
+    read_fallback = os.environ.get("APPWRITE_READ_FALLBACK", "true").lower() in (
         "true",
         "1",
         "yes",
     )
-    dual_write = os.environ.get("APPWRITE_DUAL_WRITE", "false").lower() in (
+    dual_write = os.environ.get("APPWRITE_DUAL_WRITE", "true").lower() in (
         "true",
         "1",
         "yes",
@@ -67,9 +67,8 @@ def settings() -> dict:
         "JUDGE_MODAL_BASE": os.environ.get("JUDGE_MODAL_BASE", ""),
         "JUDGE_MODAL_MODEL": os.environ.get("JUDGE_MODAL_MODEL", ""),
         "HOST_OPENCODE_GO_KEY": os.environ.get("HOST_OPENCODE_GO_KEY", ""),
-        # Persistence backend selection (Phase 2 cutover). Defaults keep the
-        # legacy Appwrite behavior until explicitly switched.
-        "PERSISTENCE_BACKEND": os.environ.get("PERSISTENCE_BACKEND", "appwrite"),
-        "APPWRITE_READ_FALLBACK": os.environ.get("APPWRITE_READ_FALLBACK", "false"),
-        "APPWRITE_DUAL_WRITE": os.environ.get("APPWRITE_DUAL_WRITE", "false"),
+        # Persistence backend selection (Neon PostgreSQL primary).
+        "PERSISTENCE_BACKEND": os.environ.get("PERSISTENCE_BACKEND", "postgres"),
+        "APPWRITE_READ_FALLBACK": os.environ.get("APPWRITE_READ_FALLBACK", "true"),
+        "APPWRITE_DUAL_WRITE": os.environ.get("APPWRITE_DUAL_WRITE", "true"),
     }

@@ -61,26 +61,29 @@ def _bootstrap(**overrides) -> str:
         "role": "attacker",
         "format_name": "TinyShop",
         "mission": "fix the shop",
-        "skill_list_text": "1. python-kata-fixer (elo 1200): fix small katas",
-        "opponent_info": "The opponent works the same target independently.",
+        "network_allowed": False,
         "max_steps": 14,
         "max_turns": 6,
-        "prior": "(none)",
-        "isolated_target": False,
         "judge_only": False,
         "custom": False,
     }
     kwargs.update(overrides)
+    kwargs.pop("skill_list_text", None)
+    kwargs.pop("opponent_info", None)
+    kwargs.pop("prior", None)
+    isolated = kwargs.pop("isolated_target", False)
+    if isolated:
+        kwargs["custom"] = True
     return build_fighter_system_prompt(**kwargs)
 
 
 def test_fighter_prompt_contains_skills_guidance():
     prompt = _bootstrap()
-    assert fighter_skill_graph_guidance() in prompt
     assert "skills()" in prompt
     assert 'skills(index="security")' in prompt
     assert 'skills(search="session replay token")' in prompt
     assert 'skills(skill="auth-flow-debugger")' in prompt
+    assert "optional advisory expertise" in prompt
 
 
 def test_fighter_prompt_contains_use_skill():
@@ -94,7 +97,7 @@ def test_skills_are_described_as_optional_advisory():
     guidance = fighter_skill_graph_guidance().lower()
     assert "optional expertise" in guidance
     assert "advisory" in guidance
-    assert "optional" in prompt
+    assert "optional advisory expertise" in prompt
     for phrase in FORBIDDEN_MANDATORY:
         assert phrase not in prompt
         assert phrase not in guidance
@@ -114,17 +117,18 @@ def test_prompt_does_not_contain_mandatory_skill_pool_or_turn1_pick():
 
 def test_prompt_does_not_require_initial_use_skill():
     prompt = _bootstrap().lower()
-    assert "start solving immediately without loading any skill" in prompt
+    assert "no skill is automatically required" in prompt
+    assert "zero, one, or multiple skills" in prompt
     assert "always load" not in prompt
     assert "must use_skill" not in prompt
 
 
 def test_shortlist_is_advisory_and_not_exclusive():
     prompt = _bootstrap()
-    assert "OPTIONAL STARTING SUGGESTIONS" in prompt
-    assert "full public Skill Graph stays available" in prompt
-    assert "Unlisted skills are still available" in prompt
+    assert "OPTIONAL STARTING SUGGESTIONS" not in prompt
     assert "SKILLS POOL" not in prompt
+    assert "skills()" in prompt
+    assert "zero, one, or multiple skills" in prompt
 
 
 def test_prompt_size_regression_guard():
@@ -210,7 +214,7 @@ def test_full_graph_remains_discoverable_beyond_shortlist(tmp_path: Path):
     prompt = _bootstrap()
     browsed = session.skills(count_step=False)
 
-    assert "python-kata-fixer" in prompt
+    assert "python-kata-fixer" not in prompt
     assert "SKILL GRAPH ROOT INDEXES" in browsed.output
     assert "13 roots" in browsed.output
     assert "63 skills" in browsed.output
@@ -230,7 +234,7 @@ def test_capability_affinity_still_grants_nothing(tmp_path: Path):
     loaded = session.use_skill("technical-web-researcher", count_step=False)
     denied = session.shell("curl https://example.com", count_step=False)
 
-    assert "never grants" in prompt
+    assert "does not grant capabilities" in prompt
     assert loaded.success is True
     assert session.allow_network is False
     assert denied.success is False

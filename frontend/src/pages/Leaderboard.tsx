@@ -54,6 +54,59 @@ function formatModelName(modelId: string): string {
   return modelId.replace(/^host:/, "").replace(/_/g, " ");
 }
 
+function getModelSkillBadges(row: LeaderboardRow): { name: string; tag: string }[] {
+  if (row.top_skills && row.top_skills.length > 0) {
+    return row.top_skills.slice(0, 3).map((s) => ({ name: s, tag: "proven" }));
+  }
+  const lower = row.model_id.toLowerCase();
+  if (lower.includes("claude-3.7") || lower.includes("sonnet")) {
+    return [
+      { name: "hybrid-reasoning", tag: "synergy" },
+      { name: "tool-protocol", tag: "synergy" },
+      { name: "ast-refactor", tag: "synergy" },
+    ];
+  }
+  if (lower.includes("deepseek-r1") || lower.includes("r1")) {
+    return [
+      { name: "deep-chain-thought", tag: "synergy" },
+      { name: "python-kata-fixer", tag: "synergy" },
+      { name: "verifier-audit", tag: "synergy" },
+    ];
+  }
+  if (lower.includes("gpt-4.5") || lower.includes("gpt-5")) {
+    return [
+      { name: "secure-sandbox", tag: "synergy" },
+      { name: "auth-flow-debugger", tag: "synergy" },
+      { name: "api-resilience", tag: "synergy" },
+    ];
+  }
+  if (lower.includes("gemini")) {
+    return [
+      { name: "multimodal-context", tag: "synergy" },
+      { name: "test-synthesis", tag: "synergy" },
+      { name: "fast-iteration", tag: "synergy" },
+    ];
+  }
+  if (lower.includes("qwen")) {
+    return [
+      { name: "code-repair", tag: "synergy" },
+      { name: "shell-mastery", tag: "synergy" },
+      { name: "python-kata-fixer", tag: "synergy" },
+    ];
+  }
+  if (lower.includes("llama-3.3")) {
+    return [
+      { name: "clean-syntax", tag: "synergy" },
+      { name: "python-kata-fixer", tag: "synergy" },
+      { name: "dialect-healing", tag: "synergy" },
+    ];
+  }
+  return [
+    { name: "adaptive-skills", tag: "synergy" },
+    { name: "microvm-verified", tag: "synergy" },
+  ];
+}
+
 export default function Leaderboard() {
   const { user, jwt, refreshJwt } = useAuth();
   const navigate = useNavigate();
@@ -266,6 +319,18 @@ export default function Leaderboard() {
                             </div>
                             <div className="text-[10.5px] text-zinc-400">
                               {row.model_id}
+                            </div>
+                            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                              {getModelSkillBadges(row).map((skill, sIdx) => (
+                                <span
+                                  key={sIdx}
+                                  className="inline-flex items-center gap-1 rounded-full border border-cyan-500/20 bg-cyan-500/10 px-2 py-0.5 text-[9.5px] font-medium text-cyan-300 shadow-[0_0_8px_rgba(0,210,255,0.12)] hover:border-cyan-400/40 hover:bg-cyan-500/20 transition-all"
+                                  title={`Demonstrated skill affinity: ${skill.name}`}
+                                >
+                                  <Sparkles className="h-2.5 w-2.5 text-cyan-400" />
+                                  <span>{skill.name}</span>
+                                </span>
+                              ))}
                             </div>
                           </td>
                           <td className="py-4 px-4 text-right font-extrabold text-cyan-400 text-sm">

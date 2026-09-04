@@ -1230,6 +1230,13 @@ def memory_create(
     source_result_id: str | None = None,
 ) -> dict:
     if using_postgres():
+        embedding = None
+        try:
+            from agent_arena.mem0_pgvector import get_embedding
+
+            embedding = get_embedding(f"{insight} {theory or ''}".strip())
+        except Exception:
+            pass
         with session_scope() as session:
             row = repositories.memories.memory_create(
                 session,
@@ -1248,6 +1255,7 @@ def memory_create(
                 authoritative_status=authoritative_status,
                 context_mode=context_mode,
                 source_result_id=source_result_id,
+                embedding=embedding,
             )
             return {"id": row.id}
     databases, database_id = _aw()

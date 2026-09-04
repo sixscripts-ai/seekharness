@@ -30,6 +30,7 @@ data/
 .wip-*
 *.zip
 backend/scripts/out/
+dogfood-output/
 
 # Private evaluator packages (hidden tests, reference, fixtures).
 # Track only the placeholder; never commit per-target evaluator trees.

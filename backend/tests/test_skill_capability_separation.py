@@ -84,6 +84,7 @@ def test_actual_network_capability_remains_denied_by_existing_arena_policy(
     session = ToolSession(tmp_path, allow_network=False)
 
     result = session.shell("curl https://example.com", count_step=False)
+    fetched = session.fetch("https://example.com", count_step=False)
 
     assert result.success is False
     assert result.policy_rejected is True
@@ -91,6 +92,9 @@ def test_actual_network_capability_remains_denied_by_existing_arena_policy(
     assert (
         "network" in result.output.lower() or "network" in (result.error or "").lower()
     )
+    assert fetched.success is False
+    assert fetched.policy_rejected is True
+    assert "network" in fetched.output.lower()
 
 
 def test_unavailable_capability_does_not_hide_skill_from_discovery():
