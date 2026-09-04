@@ -25,6 +25,12 @@ from typing import Any
 
 from .base import Executor
 from .tool_result import ToolResult
+from agent_arena.first_token import (
+    FAILURE_REASON,
+    emit_status,
+    first_token_budget_seconds,
+    is_transport_timeout,
+)
 from .battle_plan import (
     parse_battle_plan,
     restore_protected,
@@ -3655,18 +3661,35 @@ class AdvancedExecutor(Executor):
         results: list[dict] = []
 
         halted_status: str | None = None
+        halt_detail: str | None = None
         halt_lock = threading.Lock()
+        first_token_seen = False
+        first_token_lock = threading.Lock()
+        first_token_deadline = time.time() + first_token_budget_seconds(
+            timeout_seconds
+        )
 
         def halted_now():
+            with first_token_lock:
+                seen = first_token_seen
+            if not seen and time.time() > first_token_deadline:
+                return "failed"
             return self.halted(status_check, deadline, stop)
 
-        def mark_halted(reason):
-            nonlocal halted_status
+        def mark_halted(reason, detail=None):
+            nonlocal halted_status, halt_detail
             if not reason:
                 return
             with halt_lock:
                 if halted_status is None:
                     halted_status = reason
+                if detail and halt_detail is None:
+                    halt_detail = detail
+
+        def note_first_token():
+            nonlocal first_token_seen
+            with first_token_lock:
+                first_token_seen = True
 
         def role_recorded(model_id, token=None):
             with io_lock:
@@ -3999,6 +4022,18 @@ class AdvancedExecutor(Executor):
                             mark_halted(halted_now() or "failed")
                             return
                         model_timeout = min(600.0, remaining)
+                    with first_token_lock:
+                        seen = first_token_seen
+                    if not seen:
+                        remaining_ft = first_token_deadline - time.time()
+                        if remaining_ft <= 0:
+                            mark_halted("failed", FAILURE_REASON)
+                            return
+                        model_timeout = (
+                            remaining_ft
+                            if model_timeout is None
+                            else min(model_timeout, remaining_ft)
+                        )
                     try:
                         from ...tool_protocol import REGISTRY, TOOL_SCHEMAS
 
@@ -4024,9 +4059,17 @@ class AdvancedExecutor(Executor):
                                 return_raw=True,
                             )
                     except Exception as exc:
+                        with first_token_lock:
+                            seen = first_token_seen
                         halted = halted_now()
                         if halted:
-                            mark_halted(halted)
+                            mark_halted(
+                                halted,
+                                FAILURE_REASON if not seen else None,
+                            )
+                            return
+                        if not seen and is_transport_timeout(exc):
+                            mark_halted("failed", FAILURE_REASON)
                             return
                         elapsed_ms = int((time.time() - t0) * 1000)
                         err = sanitize_artifact(f"{type(exc).__name__}: {exc}"[:1500])
@@ -4042,6 +4085,8 @@ class AdvancedExecutor(Executor):
                             terminal_reason="provider_error",
                         )
                         return
+
+                    note_first_token()
 
                     halted = halted_now()
                     if halted:
@@ -4802,11 +4847,14 @@ class AdvancedExecutor(Executor):
             )
 
         if halted_status:
-            # Battle was cancelled or hit the deadline. Keep the terminal status
-            # truthful (cancelled/failed) rather than marking it completed, but
-            # still score any fighters that finished so their work is not lost.
-            if on_status:
-                on_status(halted_status)
+            # Battle was cancelled, hit the deadline, or never produced a first
+            # token. Keep the terminal status truthful rather than completed.
+            if halted_status == "failed":
+                with first_token_lock:
+                    seen = first_token_seen
+                if not seen and halt_detail is None:
+                    halt_detail = FAILURE_REASON
+            emit_status(on_status, halted_status, halt_detail)
             if not results:
                 return {}
             return self.finish(

@@ -50,6 +50,60 @@ def test_entrypoint_empty_scores_finalizes_failed(monkeypatch):
     assert calls[0][2] == {}
 
 
+def test_entrypoint_on_status_is_sandbox_hint(monkeypatch):
+    rounds = []
+
+    class FakeTransport:
+        def __init__(self, *a, **k):
+            pass
+
+    class FakeClient:
+        def __init__(self, transport):
+            pass
+
+        def status(self, battle_id):
+            return "running"
+
+        def round(self, *a, **k):
+            rounds.append((a, k))
+
+        def finalize(self, battle_id, status, scores=None):
+            return {}
+
+    def run_loop(**kwargs):
+        kwargs["on_status"]("failed")
+        return {}
+
+    monkeypatch.setenv("BACKEND_PUBLIC_URL", "https://example.invalid")
+    monkeypatch.setenv("BATTLE_TOKEN", "tok")
+    monkeypatch.setenv(
+        "BATTLE_BOOTSTRAP_JSON",
+        json.dumps(
+            {
+                "format_config": {
+                    "engine": "scripted",
+                    "roles": ["a", "b", "judge"],
+                    "phases": [],
+                },
+                "model_ids": ["m1", "m2"],
+                "timeout_seconds": 10,
+            }
+        ),
+    )
+    monkeypatch.setattr("agent_arena.sandbox.client.HttpTransport", FakeTransport)
+    monkeypatch.setattr("agent_arena.sandbox.client.InternalClient", FakeClient)
+    monkeypatch.setattr("agent_arena.sandbox.runner.run_battle_loop", run_loop)
+    entrypoint.main("b-hint")
+    assert rounds
+    args, kwargs = rounds[0]
+    artifact = kwargs.get("artifact") or (args[3] if len(args) > 3 else "")
+    payload = json.loads(artifact)
+    assert payload["status"] == "failed"
+    assert payload["authoritative"] is False
+    assert kwargs.get("event_type") == "battle_status" or (
+        len(args) > 4 and args[4] == "battle_status"
+    )
+
 def test_entrypoint_scores_finalizes_completed(monkeypatch):
     calls = []
 

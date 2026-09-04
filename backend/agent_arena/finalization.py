@@ -768,7 +768,10 @@ def finalize_battle(
                 },
             },
         )
-    event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": status}})
+    event_bus.publish(
+        battle_id,
+        {"type": "battle_status", "data": {"status": status, "authoritative": True}},
+    )
 
     payload = {
         "ok": True,

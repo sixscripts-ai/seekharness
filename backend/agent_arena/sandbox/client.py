@@ -124,6 +124,8 @@ class HttpTransport:
                         f"(status {resp.status_code}, {len(resp.content)} bytes): "
                         f"{resp.text[:120]!r}"
                     ) from exc
+            except httpx.TimeoutException:
+                raise
             except (httpx.HTTPError, RuntimeError) as exc:
                 last_err = exc
                 if isinstance(exc, RuntimeError) and "failed: 4" in str(exc):

@@ -69,11 +69,19 @@ def _load_battle(battle_id: str):
     return None, None, battle, cfg
 
 
-def _set_status(databases, database_id: str, battle_id: str, status: str) -> None:
+def _set_status(
+    databases,
+    database_id: str,
+    battle_id: str,
+    status: str,
+    reason: str | None = None,
+) -> None:
     from .persistence import service
 
     try:
-        payload = {"status": status}
+        payload: dict = {"status": status}
+        if status == "failed" and reason:
+            payload["failure_reason"] = reason
         if service.using_postgres():
             if status == "running":
                 payload["started_at"] = datetime.now(timezone.utc)
@@ -84,7 +92,10 @@ def _set_status(databases, database_id: str, battle_id: str, status: str) -> Non
         service.battle_update(battle_id, payload)
     except Exception:
         pass
-    event_bus.publish(battle_id, {"type": "battle_status", "data": {"status": status}})
+    data = {"status": status, "authoritative": True}
+    if status == "failed" and reason:
+        data["reason"] = reason
+    event_bus.publish(battle_id, {"type": "battle_status", "data": data})
 
 
 def run_in_process(battle_id: str) -> None:
@@ -126,8 +137,8 @@ def run_in_process(battle_id: str) -> None:
         b = service.battle_get("", battle_id) or {}
         return b.get("status", "unknown")
 
-    def on_status(status: str) -> None:
-        _set_status(databases, database_id, battle_id, status)
+    def on_status(status: str, reason: str | None = None) -> None:
+        _set_status(databases, database_id, battle_id, status, reason=reason)
         if status == "completed":
             _finalize_scores(databases, database_id, battle_id, battle, None)
 
@@ -213,6 +224,7 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
         if path == "/internal/round":
             art = sanitize_artifact(body.get("artifact", ""))
             from .persistence import service
+            from .battle_public import annotate_sandbox_status_event
 
             service.round_create(
                 battle_id,
@@ -223,15 +235,18 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
                 verification_log=body.get("verification_log"),
                 meta=body.get("meta"),
             )
+            data = {
+                "phase": body.get("phase"),
+                "model_id": body.get("model_id"),
+                "artifact": art,
+            }
+            if body.get("event_type") == "battle_status":
+                data = annotate_sandbox_status_event(data, art)
             event_bus.publish(
                 battle_id,
                 {
                     "type": body.get("event_type", "artifact"),
-                    "data": {
-                        "phase": body.get("phase"),
-                        "model_id": body.get("model_id"),
-                        "artifact": art,
-                    },
+                    "data": data,
                 },
             )
             return {"ok": True}
@@ -246,8 +261,8 @@ def _run_direct(battle_id, databases, database_id, battle, cfg) -> None:
         b = service.battle_get("", battle_id) or {}
         return b.get("status", "unknown")
 
-    def on_status(status: str) -> None:
-        _set_status(databases, database_id, battle_id, status)
+    def on_status(status: str, reason: str | None = None) -> None:
+        _set_status(databases, database_id, battle_id, status, reason=reason)
 
     try:
         _set_status(databases, database_id, battle_id, "running")
@@ -512,7 +527,7 @@ def fail_sandbox_boot(battle_id: str, *, sandbox_id: str | None = None) -> None:
         battle_id,
         {
             "type": "battle_status",
-            "data": {"status": "failed", "reason": PUBLIC_SANDBOX_BOOT_FAILURE},
+            "data": {"status": "failed", "reason": PUBLIC_SANDBOX_BOOT_FAILURE, "authoritative": True},
         },
     )
 
@@ -527,7 +542,7 @@ def _fail_with_reason(battle_id: str, reason: str) -> None:
     event_bus.publish(battle_id, {"type": "error", "data": {"message": reason}})
     event_bus.publish(
         battle_id,
-        {"type": "battle_status", "data": {"status": "failed", "reason": reason}},
+        {"type": "battle_status", "data": {"status": "failed", "reason": reason, "authoritative": True}},
     )
 
 

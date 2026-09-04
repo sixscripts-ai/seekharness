@@ -850,20 +850,24 @@ def internal_round(
             status_code=400,
             detail="trusted verification cannot be submitted via /round",
         )
+    from .battle_public import annotate_sandbox_status_event
     from .persistence import service
 
     service.round_create(body.battle_id, body.phase, body.model_id, artifact)
     event_id = f"{body.battle_id}:{body.sequence if body.sequence is not None else int(time.time() * 1000)}"
+    data = {
+        "phase": body.phase,
+        "model_id": body.model_id,
+        "artifact": artifact,
+        "sequence": body.sequence,
+    }
+    if body.event_type == "battle_status":
+        data = annotate_sandbox_status_event(data, artifact)
     event = {
         "type": body.event_type,
         "event_id": event_id,
         "sequence": body.sequence,
-        "data": {
-            "phase": body.phase,
-            "model_id": body.model_id,
-            "artifact": artifact,
-            "sequence": body.sequence,
-        },
+        "data": data,
     }
     event_bus.publish(body.battle_id, event)
     return {"ok": True, "event_id": event_id, "sequence": body.sequence}

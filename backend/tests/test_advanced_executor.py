@@ -1446,3 +1446,60 @@ def test_harness_fallback_still_works(tmp_path):
     result = sess.test("", count_step=False)
     assert result.success is True
     assert "TEST_PASS" in result.output
+
+
+def test_model_hang_fails_no_first_token_not_provider_error(monkeypatch):
+    import os
+
+    from agent_arena.first_token import FAILURE_REASON
+    from agent_arena.sandbox.client import FakeTransport, InternalClient
+
+    class HangBoth(FakeTransport):
+        def __init__(self):
+            super().__init__()
+            self.model_timeouts = []
+
+        def post(self, path, json, timeout=None):
+            if path == "/internal/model":
+                self.model_timeouts.append(timeout)
+                raise TimeoutError("model HTTP hung")
+            return super().post(path, json, timeout=timeout)
+
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    monkeypatch.setenv("ARENA_PREVIEW", "0")
+    monkeypatch.setenv("ARENA_FIRST_TOKEN_SECONDS", "15")
+    transport = HangBoth()
+    statuses: list[str] = []
+    reasons: list[str | None] = []
+
+    def on_status(status, reason=None):
+        statuses.append(status)
+        reasons.append(reason)
+
+    scores = AdvancedExecutor().run_battle(
+        battle_id="silent-hang",
+        format_config={**_RACE_FORMAT, "max_tool_turns": 2, "max_tool_steps": 20},
+        model_ids=["a", "b"],
+        round_visibility="isolated",
+        timeout_seconds=600,
+        role_to_model={"player_a": "a", "player_b": "b"},
+        client=InternalClient(transport),
+        on_status=on_status,
+    )
+    assert scores == {}
+    assert "failed" in statuses
+    assert FAILURE_REASON in reasons
+    assert transport.model_timeouts
+    assert all(
+        timeout is not None and timeout <= 15 for timeout in transport.model_timeouts
+    )
+    actions = []
+    for row in transport.rounds:
+        if row.get("event_type") != "action_log":
+            continue
+        try:
+            actions.append(json.loads(row.get("artifact") or "{}").get("action"))
+        except json.JSONDecodeError:
+            continue
+    assert "model" not in actions
+    os.environ.pop("ARENA_IN_SANDBOX", None)

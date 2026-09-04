@@ -1,11 +1,13 @@
 import json
+import tempfile
+from pathlib import Path
+
+import pytest
 
 from agent_arena.sandbox.client import FakeTransport, InternalClient
 from agent_arena.sandbox.runner import map_roles, playable_roles, run_battle_loop
 from agent_arena.sandbox.executors.build_and_break import WIN_MARKER
 from agent_arena.sandbox.executors._harness import run_python
-from pathlib import Path
-import tempfile
 
 
 def test_playable_roles_skips_judge():
@@ -180,6 +182,24 @@ def test_internal_client_model_forwards_timeout_to_transport():
     transport = RecordingTransport()
     InternalClient(transport).model("b1", "m1", [], timeout=7.25)
     assert transport.timeout == 7.25
+
+
+def test_http_transport_does_not_retry_timeout():
+    import httpx
+    from agent_arena.sandbox.client import HttpTransport
+
+    calls = {"n": 0}
+
+    class FakeClient:
+        def post(self, url, headers=None, json=None, timeout=None):
+            calls["n"] += 1
+            raise httpx.ReadTimeout("timed out")
+
+    t = HttpTransport("http://backend", "k", timeout=10)
+    t.client = FakeClient()
+    with pytest.raises(httpx.ReadTimeout):
+        t.post("/internal/model", {"x": 1})
+    assert calls["n"] == 1
 
 
 def test_judge_weights_merges_criteria_and_phases():

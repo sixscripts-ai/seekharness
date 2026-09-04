@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   isAuthoritativeScoresEvent,
+  isAuthoritativeStatusEvent,
+  streamBattleStatus,
   targetResultPresentation,
   verificationLabel,
 } from "./targetResult";
@@ -64,6 +66,15 @@ describe("target result truth", () => {
     expect(isAuthoritativeScoresEvent({})).toBe(false);
     expect(isAuthoritativeScoresEvent({ authoritative: true })).toBe(true);
     expect(isAuthoritativeScoresEvent({ source: "arena-score-v1" })).toBe(true);
+  });
+
+  it("treats sandbox battle_status hints as non-authoritative", () => {
+    expect(isAuthoritativeStatusEvent("battle_status", { status: "failed" })).toBe(false);
+    expect(isAuthoritativeStatusEvent("battle_status", { status: "failed", authoritative: false })).toBe(false);
+    expect(isAuthoritativeStatusEvent("battle_status", { status: "failed", authoritative: true })).toBe(true);
+    expect(isAuthoritativeStatusEvent("done", { status: "failed" })).toBe(true);
+    expect(streamBattleStatus({ artifact: "failed" })).toBe("failed");
+    expect(streamBattleStatus({ status: "running", authoritative: false })).toBe("running");
   });
 
   it("keeps infrastructure failure distinct from unverified and failed", () => {

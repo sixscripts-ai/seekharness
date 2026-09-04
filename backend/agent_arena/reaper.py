@@ -5,8 +5,9 @@ demand through POST /internal/reap. Idempotent: only terminal-stale battles
 are touched, and each reaped battle is failed exactly once.
 
 Postgres scans queued/running rows (oldest first), not the newest 100 battles
-of any status. Clock start is started_at, else created_at, so queued rows with
-a null started_at still expire.
+of any status. Whole-battle clock start is started_at, else created_at, so
+queued rows with a null started_at still expire. Started running battles that
+never persist a first token fail earlier with no_first_token.
 """
 
 from __future__ import annotations
@@ -16,6 +17,8 @@ import time
 from datetime import datetime, timezone
 
 from appwrite.query import Query
+
+from .first_token import first_token_budget_seconds, first_token_expired, started_clock_unix
 
 
 def _started_at(battle: dict, created_meta: str | None = None) -> float:
@@ -67,6 +70,37 @@ def _is_expired(
     return True, int(age), reason
 
 
+def _battle_has_first_token(battle_id: str) -> bool:
+    from .first_token import is_first_token_event
+    from .persistence import repositories
+    from .persistence.session import session_scope
+
+    with session_scope() as session:
+        rows = repositories.events.event_list(session, battle_id, limit=400)
+        return any(
+            is_first_token_event(row.event_type, row.payload) for row in rows
+        )
+
+
+def _reap_reason(battle: dict, now: float, grace: float) -> str:
+    expired, _age, reason = _is_expired(battle, now, grace)
+    if expired:
+        return reason
+    if battle.get("status") != "running":
+        return ""
+    clock = started_clock_unix(battle.get("started_at"))
+    if clock is None:
+        return ""
+    if (now - clock) <= first_token_budget_seconds(battle.get("timeout_seconds")):
+        return ""
+    return first_token_expired(
+        started_at=battle.get("started_at"),
+        now=now,
+        timeout_seconds=battle.get("timeout_seconds"),
+        has_first_token=_battle_has_first_token(str(battle["id"])),
+    )
+
+
 def _stop_sandbox(sandbox_id: str | None) -> None:
     if not sandbox_id:
         return
@@ -84,7 +118,7 @@ def _publish_failed(battle_id: str, reason: str) -> None:
     event_bus.publish(battle_id, {"type": "error", "data": {"message": reason}})
     event_bus.publish(
         battle_id,
-        {"type": "battle_status", "data": {"status": "failed", "reason": reason}},
+        {"type": "battle_status", "data": {"status": "failed", "reason": reason, "authoritative": True}},
     )
 
 
@@ -108,8 +142,11 @@ def _reap_pg(now: float, grace: float) -> list[str]:
     reaped: list[str] = []
     completed_at = datetime.fromtimestamp(now, tz=timezone.utc)
     for battle in battles:
-        expired, _age, reason = _is_expired(battle, now, grace)
-        if not expired:
+        try:
+            reason = _reap_reason(battle, now, grace)
+        except Exception:
+            continue
+        if not reason:
             continue
         try:
             with session_scope() as session:
@@ -158,6 +195,7 @@ def reap_stale_battles(databases=None, database_id: str | None = None) -> list[s
         )
         if not expired:
             continue
+        # Appwrite is not the battle store. First-token silence is Postgres-only.
         try:
             databases.update_document(
                 database_id,

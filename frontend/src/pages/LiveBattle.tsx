@@ -26,7 +26,7 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
-import { isAuthoritativeScoresEvent, targetResultPresentation } from "@/lib/targetResult";
+import { isAuthoritativeScoresEvent, isAuthoritativeStatusEvent, isTerminalBattleStatus, streamBattleStatus, targetResultPresentation } from "@/lib/targetResult";
 import ExecutionSurface from "@/components/battle/ExecutionSurface";
 import BattleInspector from "@/components/battle/BattleInspector";
 import BattleStatus from "@/components/battle/BattleStatus";
@@ -201,11 +201,22 @@ export default function LiveBattle() {
           const data = unwrap(ev) || {};
 
           if (ev.event === "battle_status" || ev.event === "done") {
-            const next = data?.status;
-            if (next) {
-              statusRef.current = String(next);
-              setStatus(String(next));
-              setBattle((current) => current ? { ...current, status: String(next) } : current);
+            const next = streamBattleStatus(data);
+            if (isAuthoritativeStatusEvent(ev.event, data) && next) {
+              statusRef.current = next;
+              setStatus(next);
+              setBattle((current) => current ? { ...current, status: next } : current);
+            }
+            if (next && isTerminalBattleStatus(next) && id) {
+              void api.getBattle(token, id).then((loaded) => {
+                if (cancelled) return;
+                statusRef.current = loaded.status;
+                setStatus(loaded.status);
+                setBattle(loaded);
+                if (loaded.scores && Object.keys(loaded.scores).length) {
+                  setScores(loaded.scores);
+                }
+              }).catch(() => undefined);
             }
           }
 
@@ -404,9 +415,10 @@ export default function LiveBattle() {
   }
 
   function downloadReplay() {
+    const exportStatus = battle?.status || status;
     const payload = {
-      battle: battle ? { ...battle, status } : battle,
-      status,
+      battle: battle ? { ...battle, status: exportStatus } : battle,
+      status: exportStatus,
       phase,
       scores,
       events,

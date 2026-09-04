@@ -7,6 +7,7 @@ stay on the host. GET /battles and SSE must never echo them.
 from __future__ import annotations
 
 import copy
+import json
 from typing import Any
 
 from .target_library import fighter_visible_battle_config
@@ -29,6 +30,54 @@ VERIFIED_FAIL = "verified_fail"
 NOT_ATTEMPTED = "not_attempted"
 INFRA_FAILURE = "infra_failure"
 UNVERIFIED = "unverified"
+
+BATTLE_STATUSES = frozenset(
+    {"queued", "running", "completed", "failed", "cancelled"}
+)
+TERMINAL_BATTLE_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def battle_status_payload(
+    status: str, *, reason: str | None = None, authoritative: bool = True
+) -> dict[str, Any]:
+    """Host-published battle_status data. Sandbox callers must not use this."""
+    data: dict[str, Any] = {
+        "status": str(status),
+        "authoritative": bool(authoritative),
+    }
+    if reason:
+        data["reason"] = str(reason)
+    return data
+
+
+def is_authoritative_status_event(data: Any) -> bool:
+    """True only when the host marked the event. Missing flag is a hint."""
+    if not isinstance(data, dict):
+        return False
+    return data.get("authoritative") is True
+
+
+def annotate_sandbox_status_event(data: dict[str, Any], artifact: str) -> dict[str, Any]:
+    """Sandbox /internal/round battle_status is never authoritative, even if it claims to be."""
+    out = dict(data)
+    out["authoritative"] = False
+    text = str(artifact or "").strip()
+    if text in BATTLE_STATUSES:
+        out["status"] = text
+        return out
+    if text.startswith("{"):
+        try:
+            inner = json.loads(text)
+        except json.JSONDecodeError:
+            inner = None
+        if isinstance(inner, dict):
+            status = str(inner.get("status") or "").strip()
+            if status in BATTLE_STATUSES:
+                out["status"] = status
+            reason = inner.get("reason")
+            if reason:
+                out["reason"] = str(reason)
+    return out
 
 
 def scrub_evaluator_private(value: Any) -> Any:

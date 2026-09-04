@@ -37,11 +37,18 @@ def main(battle_id: str) -> None:
         except Exception:
             return "running"
 
-    def on_status(status: str) -> None:
+    def on_status(status: str, reason: str | None = None) -> None:
         terminal.append(status)
+        payload = {"status": status, "authoritative": False}
+        if reason:
+            payload["reason"] = reason
         try:
             client.round(
-                battle_id, "system", "system", status, event_type="battle_status"
+                battle_id,
+                "system",
+                "system",
+                json.dumps(payload),
+                event_type="battle_status",
             )
         except Exception as exc:
             print(f"on_status({status}) failed: {exc}", file=sys.stderr)

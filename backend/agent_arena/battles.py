@@ -198,7 +198,9 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
             if battle.get("status") in ("completed", "failed", "cancelled"):
                 yield {
                     "event": "done",
-                    "data": json.dumps({"status": battle["status"]}),
+                    "data": json.dumps(
+                        {"status": battle["status"], "authoritative": True}
+                    ),
                 }
                 return
             yield {"event": "heartbeat", "data": "{}"}
@@ -217,7 +219,7 @@ def cancel_battle(battle_id: str, user_id: str = Depends(get_current_user)):
     if sandbox_id:
         sandbox_launcher.stop_sandbox(sandbox_id)
     event_bus.publish(
-        battle_id, {"type": "battle_status", "data": {"status": "cancelled"}}
+        battle_id, {"type": "battle_status", "data": {"status": "cancelled", "authoritative": True}}
     )
     return {"id": battle_id, "status": "cancelled"}
 

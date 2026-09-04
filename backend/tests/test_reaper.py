@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from agent_arena.persistence.repositories import battles as battle_repo
-from agent_arena.reaper import _is_expired, _reap_pg
+from agent_arena.reaper import _is_expired, _reap_pg, _reap_reason
+from agent_arena.first_token import FAILURE_REASON
 
 
 NOW = 1_800_000_000.0  # 2027-01-14ish; far after the Aug 2026 leftovers
@@ -188,3 +189,103 @@ def test_reap_pg_skips_when_row_already_terminal(monkeypatch):
     monkeypatch.setattr("agent_arena.reaper._publish_failed", lambda *_a: None)
 
     assert _reap_pg(NOW, GRACE) == []
+
+
+def test_reap_reason_silence_after_budget(monkeypatch):
+    monkeypatch.setattr(
+        "agent_arena.reaper._battle_has_first_token", lambda _bid: False
+    )
+    reason = _reap_reason(
+        {
+            "id": "silent-1",
+            "status": "running",
+            "started_at": _dt(200),
+            "timeout_seconds": 600,
+        },
+        NOW,
+        GRACE,
+    )
+    assert FAILURE_REASON in reason
+    assert "budget" in reason
+
+
+def test_reap_reason_keeps_battle_with_first_token(monkeypatch):
+    monkeypatch.setattr(
+        "agent_arena.reaper._battle_has_first_token", lambda _bid: True
+    )
+    reason = _reap_reason(
+        {
+            "id": "3d50f4d83a6d4d808ba81d1b4b40137d",
+            "status": "running",
+            "started_at": _dt(200),
+            "timeout_seconds": 600,
+        },
+        NOW,
+        GRACE,
+    )
+    assert reason == ""
+
+
+def test_reap_reason_queued_without_started_at_skips_first_token():
+    reason = _reap_reason(
+        {
+            "id": "queued-1",
+            "status": "queued",
+            "started_at": None,
+            "created_at": _dt(200),
+            "timeout_seconds": 600,
+        },
+        NOW,
+        GRACE,
+    )
+    assert reason == ""
+
+
+def test_reap_pg_fails_silent_running(monkeypatch):
+    silent = SimpleNamespace(
+        id="silent-1",
+        status="running",
+        started_at=_dt(200),
+        created_at=_dt(210),
+        timeout_seconds=600,
+        sandbox_id="sbx-silent",
+    )
+    failed: list[str] = []
+    stopped: list[str] = []
+    published: list[str] = []
+
+    @contextmanager
+    def fake_scope():
+        yield SimpleNamespace()
+
+    monkeypatch.setattr("agent_arena.persistence.session.session_scope", fake_scope)
+    monkeypatch.setattr(
+        "agent_arena.persistence.repositories.battles.battle_list_active",
+        lambda _session, **_k: [silent],
+    )
+    monkeypatch.setattr(
+        "agent_arena.reaper._battle_has_first_token", lambda _bid: False
+    )
+
+    def fail_if_active(_session, battle_id, *, reason, completed_at):
+        assert FAILURE_REASON in reason
+        failed.append(battle_id)
+        return SimpleNamespace(id=battle_id, status="failed")
+
+    monkeypatch.setattr(
+        "agent_arena.persistence.repositories.battles.battle_fail_if_active",
+        fail_if_active,
+    )
+    monkeypatch.setattr(
+        "agent_arena.reaper._stop_sandbox", lambda sid: stopped.append(sid)
+    )
+    monkeypatch.setattr(
+        "agent_arena.reaper._publish_failed",
+        lambda bid, _reason: published.append(bid),
+    )
+
+    reaped = _reap_pg(NOW, GRACE)
+    assert reaped == ["silent-1"]
+    assert failed == ["silent-1"]
+    assert published == ["silent-1"]
+    assert stopped == ["sbx-silent"]

@@ -105,7 +105,7 @@ def run_battle(battle_id: str) -> None:
     if battle is None:
         return
     event_bus.publish(
-        battle_id, {"type": "battle_status", "data": {"status": "running"}}
+        battle_id, {"type": "battle_status", "data": {"status": "running", "authoritative": True}}
     )
     try:
         service.battle_update(battle_id, {"status": "running"})
@@ -134,7 +134,7 @@ def run_battle(battle_id: str) -> None:
                 battle_id,
                 {
                     "type": "battle_status",
-                    "data": {"status": "failed", "reason": reason},
+                    "data": {"status": "failed", "reason": reason, "authoritative": True},
                 },
             )
             return
@@ -149,7 +149,7 @@ def run_battle(battle_id: str) -> None:
                 if battle is None or battle["status"] == "cancelled":
                     event_bus.publish(
                         battle_id,
-                        {"type": "battle_status", "data": {"status": "cancelled"}},
+                        {"type": "battle_status", "data": {"status": "cancelled", "authoritative": True}},
                     )
                     return
                 artifact_text = sanitize_artifact(
@@ -192,7 +192,7 @@ def run_battle(battle_id: str) -> None:
             {"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()},
         )
         event_bus.publish(
-            battle_id, {"type": "battle_status", "data": {"status": "completed"}}
+            battle_id, {"type": "battle_status", "data": {"status": "completed", "authoritative": True}}
         )
     except Exception as exc:
         import traceback
@@ -202,5 +202,5 @@ def run_battle(battle_id: str) -> None:
         except Exception:
             pass
         event_bus.publish(
-            battle_id, {"type": "battle_status", "data": {"status": "failed"}}
+            battle_id, {"type": "battle_status", "data": {"status": "failed", "authoritative": True}}
         )

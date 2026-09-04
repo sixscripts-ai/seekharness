@@ -48,6 +48,35 @@ export function isAuthoritativeScoresEvent(data: {
   return data.authoritative === true || data.source === "arena-score-v1";
 }
 
+const BATTLE_STATUSES = new Set(["queued", "running", "completed", "failed", "cancelled"]);
+const TERMINAL_BATTLE_STATUSES = new Set(["completed", "failed", "cancelled"]);
+
+export function isBattleStatus(value: unknown): value is string {
+  return typeof value === "string" && BATTLE_STATUSES.has(value);
+}
+
+export function isAuthoritativeStatusEvent(
+  eventName: string,
+  data: { authoritative?: boolean; status?: string; artifact?: string } | string | null | undefined,
+): boolean {
+  if (eventName === "done") return true;
+  if (!data || typeof data !== "object") return false;
+  return data.authoritative === true;
+}
+
+export function streamBattleStatus(data: unknown): string | null {
+  if (isBattleStatus(data)) return data;
+  if (!data || typeof data !== "object") return null;
+  const rec = data as { status?: unknown; artifact?: unknown };
+  if (isBattleStatus(rec.status)) return rec.status;
+  if (isBattleStatus(rec.artifact)) return rec.artifact;
+  return null;
+}
+
+export function isTerminalBattleStatus(status: string | null | undefined): boolean {
+  return Boolean(status && TERMINAL_BATTLE_STATUSES.has(status));
+}
+
 export function targetResultPresentation(input: {
   status: string;
   isTargetBattle: boolean;
