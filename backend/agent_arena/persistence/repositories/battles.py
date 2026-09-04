@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Battle, BattleParticipant
+
+_ACTIVE_STATUSES = ("queued", "running")
+_STALE_SCAN_LIMIT = 2000
 
 
 def battle_create(
@@ -127,6 +131,41 @@ def battle_list(
     if saved is not None:
         stmt = stmt.where(Battle.saved == saved)
     return list(session.scalars(stmt))
+
+
+def battle_list_active(
+    session: Session,
+    *,
+    limit: int = _STALE_SCAN_LIMIT,
+) -> list[Battle]:
+    """Queued/running battles, oldest first. Used by the reaper."""
+    stmt = (
+        select(Battle)
+        .where(Battle.status.in_(_ACTIVE_STATUSES))
+        .order_by(Battle.created_at.asc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt))
+
+
+def battle_fail_if_active(
+    session: Session,
+    battle_id: str,
+    *,
+    reason: str,
+    completed_at: datetime,
+) -> Battle | None:
+    """Fail a battle only if it is still queued/running. Idempotent for terminals."""
+    battle = session.scalar(
+        select(Battle).where(Battle.id == battle_id).with_for_update()
+    )
+    if battle is None or battle.status not in _ACTIVE_STATUSES:
+        return None
+    battle.status = "failed"
+    battle.failure_reason = reason
+    battle.completed_at = completed_at
+    session.flush()
+    return battle
 
 
 def battle_model_ids(session: Session, battle_id: str) -> list[str]:

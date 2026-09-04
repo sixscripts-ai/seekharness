@@ -3,13 +3,17 @@
 Run periodically via the Modal scheduled function (modal_entry.py) or on
 demand through POST /internal/reap. Idempotent: only terminal-stale battles
 are touched, and each reaped battle is failed exactly once.
+
+Postgres scans queued/running rows (oldest first), not the newest 100 battles
+of any status. Clock start is started_at, else created_at, so queued rows with
+a null started_at still expire.
 """
 
 from __future__ import annotations
 
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 from appwrite.query import Query
 
@@ -21,6 +25,8 @@ def _started_at(battle: dict, created_meta: str | None = None) -> float:
             continue
         try:
             if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=timezone.utc)
                 return value.timestamp()
             return float(value)
         except (TypeError, ValueError):
@@ -36,13 +42,58 @@ def _started_at(battle: dict, created_meta: str | None = None) -> float:
     return 0.0
 
 
-def _reap_pg(now: float, grace: float) -> list[str]:
+def _is_expired(
+    battle: dict,
+    now: float,
+    grace: float,
+    *,
+    created_meta: str | None = None,
+) -> tuple[bool, int, str]:
+    """Return (expired, age_seconds, reason)."""
+    status = battle.get("status")
+    if status not in ("queued", "running"):
+        return False, 0, ""
+    started = _started_at(battle, created_meta)
+    if not started:
+        return False, 0, ""
+    timeout = int(battle.get("timeout_seconds") or 600)
+    age = now - started
+    if age <= timeout + grace:
+        return False, int(age), ""
+    reason = (
+        f"Stuck in '{status}' for {int(age)}s "
+        f"(timeout {timeout}s + grace {int(grace)}s)"
+    )
+    return True, int(age), reason
+
+
+def _stop_sandbox(sandbox_id: str | None) -> None:
+    if not sandbox_id:
+        return
+    try:
+        from . import sandbox_launcher
+
+        sandbox_launcher.stop_sandbox(sandbox_id)
+    except Exception:
+        pass
+
+
+def _publish_failed(battle_id: str, reason: str) -> None:
     from . import event_bus
-    from .persistence import repositories, service
+
+    event_bus.publish(battle_id, {"type": "error", "data": {"message": reason}})
+    event_bus.publish(
+        battle_id,
+        {"type": "battle_status", "data": {"status": "failed", "reason": reason}},
+    )
+
+
+def _reap_pg(now: float, grace: float) -> list[str]:
+    from .persistence import repositories
     from .persistence.session import session_scope
 
     with session_scope() as session:
-        rows = repositories.battles.battle_list(session, user_id=None, status=None)
+        rows = repositories.battles.battle_list_active(session)
         battles = [
             {
                 "id": b.id,
@@ -55,42 +106,33 @@ def _reap_pg(now: float, grace: float) -> list[str]:
             for b in rows
         ]
     reaped: list[str] = []
+    completed_at = datetime.fromtimestamp(now, tz=timezone.utc)
     for battle in battles:
-        if battle.get("status") not in ("queued", "running"):
+        expired, _age, reason = _is_expired(battle, now, grace)
+        if not expired:
             continue
-        started = _started_at(battle)
-        if not started:
-            continue
-        timeout = int(battle.get("timeout_seconds") or 600)
-        age = now - started
-        if age <= timeout + grace:
-            continue
-        reason = f"Stuck in '{battle.get('status')}' for {int(age)}s (timeout {timeout}s + grace {int(grace)}s)"
         try:
-            service.battle_update(
-                battle["id"], {"status": "failed", "failure_reason": reason}
-            )
+            with session_scope() as session:
+                updated = repositories.battles.battle_fail_if_active(
+                    session,
+                    battle["id"],
+                    reason=reason,
+                    completed_at=completed_at,
+                )
         except Exception:
+            continue
+        if updated is None:
             continue
         sandbox_id = battle.get("sandbox_id")
         if sandbox_id:
-            try:
-                from . import sandbox_launcher
-
-                sandbox_launcher.stop_sandbox(sandbox_id)
-            except Exception:
-                pass
-        event_bus.publish(battle["id"], {"type": "error", "data": {"message": reason}})
-        event_bus.publish(
-            battle["id"],
-            {"type": "battle_status", "data": {"status": "failed", "reason": reason}},
-        )
+            _stop_sandbox(sandbox_id)
+        _publish_failed(battle["id"], reason)
         reaped.append(battle["id"])
     return reaped
 
 
 def reap_stale_battles(databases=None, database_id: str | None = None) -> list[str]:
-    from . import db, event_bus
+    from . import db
     from .persistence import service
 
     now = time.time()
@@ -109,15 +151,13 @@ def reap_stale_battles(databases=None, database_id: str | None = None) -> list[s
     )
     reaped: list[str] = []
     for doc in res.documents:
-        battle = doc.data
-        started = _started_at(battle, getattr(doc, "createdat", None))
-        if not started:
+        battle = dict(doc.data)
+        battle.setdefault("id", doc.id)
+        expired, _age, reason = _is_expired(
+            battle, now, grace, created_meta=getattr(doc, "createdat", None)
+        )
+        if not expired:
             continue
-        timeout = int(battle.get("timeout_seconds") or 600)
-        age = now - started
-        if age <= timeout + grace:
-            continue
-        reason = f"Stuck in '{battle.get('status')}' for {int(age)}s (timeout {timeout}s + grace {int(grace)}s)"
         try:
             databases.update_document(
                 database_id,
@@ -129,16 +169,7 @@ def reap_stale_battles(databases=None, database_id: str | None = None) -> list[s
             continue
         sandbox_id = battle.get("sandbox_id")
         if sandbox_id:
-            try:
-                from . import sandbox_launcher
-
-                sandbox_launcher.stop_sandbox(sandbox_id)
-            except Exception:
-                pass
-        event_bus.publish(doc.id, {"type": "error", "data": {"message": reason}})
-        event_bus.publish(
-            doc.id,
-            {"type": "battle_status", "data": {"status": "failed", "reason": reason}},
-        )
+            _stop_sandbox(sandbox_id)
+        _publish_failed(doc.id, reason)
         reaped.append(doc.id)
     return reaped
