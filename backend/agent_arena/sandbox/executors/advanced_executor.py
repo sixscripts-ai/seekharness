@@ -2152,6 +2152,24 @@ class ToolSession:
         except Exception:
             return None
 
+    def _playwright_unavailable(
+        self, tool: str, t0: float, *, count_step: bool
+    ) -> ToolResult:
+        elapsed_ms = int((time.time() - t0) * 1000)
+        message = "Playwright/page is unavailable"
+        return ToolResult(
+            tool=tool,
+            success=False,
+            output=f"ERROR: {message}",
+            error=message,
+            exit_code=1,
+            error_type="browser_unavailable",
+            duration_ms=elapsed_ms,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+        )
+
     def playwright_navigate(self, url: str, *, count_step: bool = True) -> ToolResult:
         t0 = time.time()
         if count_step:
@@ -2253,16 +2271,8 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-        elapsed_ms = int((time.time() - t0) * 1000)
-        return ToolResult(
-            tool="playwright_click",
-            success=True,
-            output=f"CLICKED selector '{selector}' (simulated)",
-            exit_code=0,
-            duration_ms=elapsed_ms,
-            mutated=False,
-            step_charged=count_step,
-            truncated=False,
+        return self._playwright_unavailable(
+            "playwright_click", t0, count_step=count_step
         )
 
     def playwright_fill(
@@ -2300,16 +2310,8 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-        elapsed_ms = int((time.time() - t0) * 1000)
-        return ToolResult(
-            tool="playwright_fill",
-            success=True,
-            output=f"FILLED selector '{selector}' (simulated)",
-            exit_code=0,
-            duration_ms=elapsed_ms,
-            mutated=False,
-            step_charged=count_step,
-            truncated=False,
+        return self._playwright_unavailable(
+            "playwright_fill", t0, count_step=count_step
         )
 
     def playwright_screenshot(
@@ -2349,17 +2351,8 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-        p.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRmock_screenshot")
-        elapsed_ms = int((time.time() - t0) * 1000)
-        return ToolResult(
-            tool="playwright_screenshot",
-            success=True,
-            output=f"SCREENSHOT saved to {target_path} (mock screenshot)",
-            exit_code=0,
-            duration_ms=elapsed_ms,
-            mutated=True,
-            step_charged=count_step,
-            truncated=False,
+        return self._playwright_unavailable(
+            "playwright_screenshot", t0, count_step=count_step
         )
 
     def playwright_read(
@@ -2411,16 +2404,8 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-        elapsed_ms = int((time.time() - t0) * 1000)
-        return ToolResult(
-            tool="playwright_read",
-            success=True,
-            output=f"DOM TEXT ({target_sel}):\n(simulated page text for {target_sel})",
-            exit_code=0,
-            duration_ms=elapsed_ms,
-            mutated=False,
-            step_charged=count_step,
-            truncated=False,
+        return self._playwright_unavailable(
+            "playwright_read", t0, count_step=count_step
         )
 
     def playwright_wait(
@@ -2458,16 +2443,8 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-        elapsed_ms = int((time.time() - t0) * 1000)
-        return ToolResult(
-            tool="playwright_wait",
-            success=True,
-            output=f"WAIT_SUCCESS: selector '{selector}' appeared (simulated)",
-            exit_code=0,
-            duration_ms=elapsed_ms,
-            mutated=False,
-            step_charged=count_step,
-            truncated=False,
+        return self._playwright_unavailable(
+            "playwright_wait", t0, count_step=count_step
         )
 
     def http_request(
@@ -4015,19 +3992,42 @@ class AdvancedExecutor(Executor):
                         ]
 
                     t0 = time.time()
+                    model_timeout = None
+                    if deadline:
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            mark_halted(halted_now() or "failed")
+                            return
+                        model_timeout = min(600.0, remaining)
                     try:
                         from ...tool_protocol import REGISTRY, TOOL_SCHEMAS
 
-                        raw_resp = client.model(
-                            battle_id,
-                            model_id,
-                            conversation_messages,
-                            phase=local_phase,
-                            max_tokens=race_tokens,
-                            tools=REGISTRY.openai_schemas(),
-                            return_raw=True,
-                        )
+                        try:
+                            raw_resp = client.model(
+                                battle_id,
+                                model_id,
+                                conversation_messages,
+                                phase=local_phase,
+                                max_tokens=race_tokens,
+                                tools=REGISTRY.openai_schemas(),
+                                return_raw=True,
+                                timeout=model_timeout,
+                            )
+                        except TypeError:
+                            raw_resp = client.model(
+                                battle_id,
+                                model_id,
+                                conversation_messages,
+                                phase=local_phase,
+                                max_tokens=race_tokens,
+                                tools=REGISTRY.openai_schemas(),
+                                return_raw=True,
+                            )
                     except Exception as exc:
+                        halted = halted_now()
+                        if halted:
+                            mark_halted(halted)
+                            return
                         elapsed_ms = int((time.time() - t0) * 1000)
                         err = sanitize_artifact(f"{type(exc).__name__}: {exc}"[:1500])
                         emit_action(
@@ -4041,6 +4041,11 @@ class AdvancedExecutor(Executor):
                             outcome_override="PROVIDER_ERROR",
                             terminal_reason="provider_error",
                         )
+                        return
+
+                    halted = halted_now()
+                    if halted:
+                        mark_halted(halted)
                         return
 
                     from ...tool_protocol import ModelResponse, normalize_response

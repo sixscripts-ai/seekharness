@@ -382,10 +382,11 @@ export async function streamBattle(
               data = JSON.parse(raw);
             } catch {}
 
-            // Deduplicate events to prevent replaying upon reconnect
+            // Deduplicate events to prevent replaying upon reconnect.
+            // Prefer durable envelope/payload event_id when the backend includes it.
             const eid =
-              data?.event_id ||
-              data?.data?.event_id ||
+              (typeof data?.event_id === "string" && data.event_id) ||
+              (typeof data?.data?.event_id === "string" && data.data.event_id) ||
               (data && typeof data === "object"
                 ? `${eventName}_${data.created_at || data.ts || data.step || ""}_${data.action || data.tool_name || ""}`
                 : null);

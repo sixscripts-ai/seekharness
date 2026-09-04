@@ -572,15 +572,19 @@ def test_breaker_tools_exec_through_tool_session(tmp_path, monkeypatch):
         if page:
             page.set_content("<div id='vault-balance'>$100,000</div><div id='status-banner'>ACTIVE</div>")
 
-        # 1. playwright_read
-        res_read = session.exec_tool({"tool": "playwright_read", "selector": "#vault-balance"}, count_step=False)
-        assert res_read.success is True
-        assert "$100,000" in res_read.output or "DOM TEXT" in res_read.output
+            # 1. playwright_read
+            res_read = session.exec_tool({"tool": "playwright_read", "selector": "#vault-balance"}, count_step=False)
+            assert res_read.success is True
+            assert "$100,000" in res_read.output or "DOM TEXT" in res_read.output
 
-        # 2. playwright_wait
-        res_wait = session.exec_tool({"tool": "playwright_wait", "selector": "#status-banner", "timeout_ms": 1000}, count_step=False)
-        assert res_wait.success is True
-        assert "WAIT_SUCCESS" in res_wait.output
+            # 2. playwright_wait
+            res_wait = session.exec_tool({"tool": "playwright_wait", "selector": "#status-banner", "timeout_ms": 1000}, count_step=False)
+            assert res_wait.success is True
+            assert "WAIT_SUCCESS" in res_wait.output
+        else:
+            res_read = session.exec_tool({"tool": "playwright_read", "selector": "#vault-balance"}, count_step=False)
+            assert res_read.success is False
+            assert res_read.error_type == "browser_unavailable"
 
         # 3. sql_query (mock / hermetic)
         res_sql = session.exec_tool({"tool": "sql_query", "query": "SELECT * FROM public_profiles;"}, count_step=False)
@@ -591,6 +595,35 @@ def test_breaker_tools_exec_through_tool_session(tmp_path, monkeypatch):
         res_sec = session.exec_tool({"tool": "sql_query", "query": "SELECT flag FROM arena_trusted.evaluator_secrets;"}, count_step=False)
         assert res_sec.success is False
         assert "arena_trusted" in res_sec.output or "Access denied" in res_sec.output
+    finally:
+        session.close()
+
+
+def test_playwright_tools_fail_closed_when_page_unavailable(tmp_path, monkeypatch):
+    session = ToolSession(workdir=tmp_path)
+    monkeypatch.setattr(session, "_ensure_page", lambda: None)
+    try:
+        before = session.steps
+        click = session.playwright_click("#missing")
+        fill = session.playwright_fill("#missing", "x")
+        read = session.playwright_read("body")
+        wait = session.playwright_wait("#missing", timeout_ms=10)
+        shot = session.playwright_screenshot("shot.png")
+        for res, name in (
+            (click, "playwright_click"),
+            (fill, "playwright_fill"),
+            (read, "playwright_read"),
+            (wait, "playwright_wait"),
+            (shot, "playwright_screenshot"),
+        ):
+            assert res.success is False, name
+            assert res.exit_code not in (0, None), name
+            assert res.error_type == "browser_unavailable", name
+            assert res.step_charged is True, name
+            assert "unavailable" in (res.error or res.output).lower(), name
+        assert session.steps == before + 5
+        assert not (tmp_path / "shot.png").exists()
+        assert not any(tmp_path.rglob("*.png"))
     finally:
         session.close()
 

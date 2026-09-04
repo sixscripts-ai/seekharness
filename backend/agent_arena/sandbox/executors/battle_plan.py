@@ -95,27 +95,30 @@ def snapshot_to_deployment(
     Copies frontend, backend, package files, configs, etc., while excluding secrets and dev caches.
     """
     deployment_dir.mkdir(parents=True, exist_ok=True)
+    root = builder_private.resolve()
     copied = []
-    for item in builder_private.rglob("*"):
-        if item.is_file():
-            try:
-                rel = item.relative_to(builder_private)
-            except ValueError:
-                continue
-            rel_str = str(rel).replace("\\", "/")
-            if any(
-                rel_str.startswith(pat)
-                or rel_str.endswith(pat)
-                or f"/{pat}/" in f"/{rel_str}/"
-                for pat in exclude_patterns
-            ):
-                continue
-            if is_forbidden_handoff(rel_str):
-                continue
-            dest = deployment_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, dest)
-            copied.append(rel_str)
+    for item in root.rglob("*"):
+        try:
+            rel = item.relative_to(root)
+        except ValueError:
+            continue
+        rel_str = str(rel).replace("\\", "/")
+        if any(
+            rel_str.startswith(pat)
+            or rel_str.endswith(pat)
+            or f"/{pat}/" in f"/{rel_str}/"
+            for pat in exclude_patterns
+        ):
+            continue
+        if is_forbidden_handoff(rel_str):
+            continue
+        real = _contained_file(item, root)
+        if real is None:
+            continue
+        dest = deployment_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(real, dest)
+        copied.append(rel_str)
     return copied
 
 
@@ -292,6 +295,33 @@ def is_forbidden_handoff(rel: str) -> bool:
     return False
 
 
+def _resolved_inside(path: Path, root: Path) -> Path | None:
+    """Return path.resolve() when it stays inside root; else None.
+
+    Used to refuse copying files whose real path escapes the source workspace
+    via symlink. Does not invent fighter intent; it only enforces containment.
+    """
+    try:
+        real = path.resolve()
+        real.relative_to(root)
+        return real
+    except (OSError, RuntimeError, ValueError):
+        return None
+
+
+def _contained_file(path: Path, root: Path) -> Path | None:
+    """Resolved regular file inside root, or None for dirs / escaping symlinks."""
+    real = _resolved_inside(path, root)
+    if real is None:
+        return None
+    try:
+        if real.is_file():
+            return real
+    except OSError:
+        return None
+    return None
+
+
 def snapshot_handoff(work: Path, artifact_refs: list[str]) -> dict[str, Any]:
     """Copy allowlisted files from a fighter workspace into a handoff snapshot."""
     root = work.resolve()
@@ -302,39 +332,43 @@ def snapshot_handoff(work: Path, artifact_refs: list[str]) -> dict[str, Any]:
         if rel is None or is_forbidden_handoff(rel):
             manifest.append({"path": ref, "rejected": True})
             continue
-        path = (root / rel).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError:
-            manifest.append({"path": rel, "rejected": True})
-            continue
-        if path.is_dir():
+        candidate = root / rel
+        contained_dir = _resolved_inside(candidate, root)
+        if contained_dir is not None and contained_dir.is_dir():
             sub_count = 0
-            for sub_file in path.rglob("*"):
-                if sub_file.is_file():
-                    try:
-                        sub_rel = str(sub_file.relative_to(root)).replace("\\", "/")
-                    except ValueError:
-                        continue
-                    if is_forbidden_handoff(sub_rel):
-                        continue
-                    sub_data = sub_file.read_bytes()
-                    files[sub_rel] = sub_data
-                    manifest.append(
-                        {
-                            "path": sub_rel,
-                            "sha256": hashlib.sha256(sub_data).hexdigest(),
-                            "bytes": len(sub_data),
-                        }
-                    )
-                    sub_count += 1
+            for sub_file in contained_dir.rglob("*"):
+                try:
+                    sub_rel = str(sub_file.relative_to(root)).replace("\\", "/")
+                except ValueError:
+                    continue
+                if is_forbidden_handoff(sub_rel):
+                    continue
+                real = _contained_file(sub_file, root)
+                if real is None:
+                    if sub_file.is_symlink() or sub_file.is_file():
+                        manifest.append({"path": sub_rel, "rejected": True})
+                    continue
+                sub_data = real.read_bytes()
+                files[sub_rel] = sub_data
+                manifest.append(
+                    {
+                        "path": sub_rel,
+                        "sha256": hashlib.sha256(sub_data).hexdigest(),
+                        "bytes": len(sub_data),
+                    }
+                )
+                sub_count += 1
             if sub_count == 0:
                 manifest.append({"path": rel, "empty_dir": True})
             continue
-        if not path.is_file():
-            manifest.append({"path": rel, "missing": True})
+        real = _contained_file(candidate, root)
+        if real is None:
+            if candidate.is_symlink() or candidate.exists():
+                manifest.append({"path": rel, "rejected": True})
+            else:
+                manifest.append({"path": rel, "missing": True})
             continue
-        data = path.read_bytes()
+        data = real.read_bytes()
         files[rel] = data
         manifest.append(
             {

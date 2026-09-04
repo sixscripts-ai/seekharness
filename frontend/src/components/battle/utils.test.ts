@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { BattleStreamItem } from "./types";
-import { skillActivityFromEvent } from "./utils";
+import { mergeEvent, skillActivityFromEvent } from "./utils";
 
 function event(kind: BattleStreamItem["kind"], artifact: Record<string, unknown>, extra?: Partial<BattleStreamItem>): BattleStreamItem {
   return {
@@ -70,5 +70,47 @@ describe("D6 skill activity from real SSE payloads", () => {
       skill_id: "ambiguous-skill",
     }));
     expect(activity?.success).toBe(false);
+  });
+});
+
+describe("mergeEvent sequence aliases", () => {
+  it("treats payload.sequence as equivalent to event_sequence for non-action events", () => {
+    const first: BattleStreamItem = {
+      kind: "phase_start",
+      phase: "build",
+      model_id: "model-a",
+      artifact: '{"phase":"build"}',
+      t: 1,
+      payload: { phase: "build", sequence: 3 },
+    };
+    const replay: BattleStreamItem = {
+      kind: "phase_start",
+      phase: "build",
+      model_id: "model-a",
+      artifact: '{"phase":"build"}',
+      t: 99,
+      payload: { phase: "build", event_sequence: 3 },
+    };
+    expect(mergeEvent([first], replay)).toHaveLength(1);
+  });
+
+  it("dedupes non-action events by payload event_id", () => {
+    const first: BattleStreamItem = {
+      kind: "artifact",
+      phase: "build",
+      model_id: "model-a",
+      artifact: "one",
+      t: 1,
+      payload: { event_id: "evt-1", sequence: 1 },
+    };
+    const replay: BattleStreamItem = {
+      kind: "artifact",
+      phase: "build",
+      model_id: "model-a",
+      artifact: "two",
+      t: 2,
+      payload: { event_id: "evt-1", sequence: 2 },
+    };
+    expect(mergeEvent([first], replay)).toHaveLength(1);
   });
 });

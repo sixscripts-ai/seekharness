@@ -89,7 +89,7 @@ def derive_trusted_scores(
         format_id=format_id,
     )
     decision = decide_winner(summary, fmt_cfg)
-    det_scores = deterministic_scores(decision)
+    det_scores = deterministic_scores(decision, summary)
     if not det_scores:
         return None, "", INCOMPLETE_EVIDENCE, summary, decision
     return det_scores, "arena-score-v1", None, summary, decision

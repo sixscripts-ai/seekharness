@@ -151,6 +151,37 @@ def test_http_transport_retries_non_json():
     assert calls["n"] == 3
 
 
+def test_http_transport_post_accepts_per_request_timeout():
+    import httpx
+    from agent_arena.sandbox.client import HttpTransport, InternalClient
+
+    def handler(request):
+        return httpx.Response(200, json={"content": "ok", "tool_calls": []})
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    t = HttpTransport("http://backend", "k", timeout=600)
+    t.client = http
+    client = InternalClient(t)
+    out = client.model("b1", "m1", [], timeout=12.5, return_raw=True)
+    assert out["content"] == "ok"
+
+
+def test_internal_client_model_forwards_timeout_to_transport():
+    from agent_arena.sandbox.client import InternalClient
+
+    class RecordingTransport:
+        def __init__(self):
+            self.timeout = None
+
+        def post(self, path, json, timeout=None):
+            self.timeout = timeout
+            return {"content": "ok", "tool_calls": []}
+
+    transport = RecordingTransport()
+    InternalClient(transport).model("b1", "m1", [], timeout=7.25)
+    assert transport.timeout == 7.25
+
+
 def test_judge_weights_merges_criteria_and_phases():
     from agent_arena.sandbox.executors.base import judge_weights
 

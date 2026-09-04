@@ -158,3 +158,48 @@ def test_cancelled_battle_stays_cancelled(monkeypatch):
     assert is_terminal_battle_status("cancelled")
     assert is_terminal_battle_status("failed")
     assert is_terminal_battle_status("completed")
+
+
+def test_derive_trusted_scores_fullstack_clean_defense():
+    """Finalization call site must pass evidence so fullstack scoring runs."""
+    results = [
+        {
+            "model_id": "model_builder",
+            "role": "builder",
+            "phase": "build",
+            "outcome": "TEST_PASS",
+            "passed": True,
+            "deployment_status": "DEPLOY_SUCCESS",
+            "deployment_ready": True,
+            "tests": {"passed": 5, "total": 5},
+            "_trusted": True,
+        },
+        {
+            "model_id": "model_breaker",
+            "role": "breaker",
+            "phase": "break",
+            "outcome": "COMPLETED",
+            "passed": False,
+            "exploit_evidence": {
+                "server_crashed": False,
+                "availability_degraded": False,
+                "unauthorized_mutation": False,
+                "flag_captured": False,
+            },
+            "_trusted": True,
+        },
+    ]
+    scores, source, error, summary, decision = derive_trusted_scores(
+        battle_id="b-fullstack",
+        results=results,
+        fmt_cfg={},
+        battle_model_ids=["model_builder", "model_breaker"],
+        format_id="fullstack",
+        untrusted_hint_scores={"model_builder": 0.0, "model_breaker": 99.0},
+    )
+    assert error is None
+    assert source == "arena-score-v1"
+    assert scores is not None
+    assert scores["model_builder"] == 100.0
+    assert scores["model_breaker"] == 0.0
+    assert 99.0 not in scores.values()

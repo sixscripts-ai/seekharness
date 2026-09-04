@@ -160,7 +160,7 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
     _require_owned_battle(user_id, battle_id)
 
     def event_generator():
-        from .battle_public import scrub_evaluator_private
+        from .battle_public import public_sse_payload
 
         seen_ids: set[str] = set()
         # Durable snapshot first (survives scale-to-zero / other replicas)
@@ -172,7 +172,7 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
                 seen_ids.add(eid)
             yield {
                 "event": ev["type"],
-                "data": json.dumps(scrub_evaluator_private(ev.get("data", {}))),
+                "data": json.dumps(public_sse_payload(ev)),
             }
         while True:
             events = event_bus.subscribe(battle_id)
@@ -192,7 +192,7 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
                     seen_ids.add(eid)
                 yield {
                     "event": ev["type"],
-                    "data": json.dumps(scrub_evaluator_private(ev.get("data", {}))),
+                    "data": json.dumps(public_sse_payload(ev)),
                 }
             battle = service.battle_get(user_id, battle_id) or {}
             if battle.get("status") in ("completed", "failed", "cancelled"):

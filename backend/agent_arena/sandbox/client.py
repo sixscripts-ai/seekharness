@@ -73,7 +73,9 @@ def _assert_egress_allowed(url: str) -> None:
 
 
 class Transport(Protocol):
-    def post(self, path: str, json: dict) -> dict: ...
+    def post(
+        self, path: str, json: dict, timeout: float | None = None
+    ) -> dict: ...
 
 
 class HttpTransport:
@@ -90,7 +92,7 @@ class HttpTransport:
         self.timeout = timeout
         self.client = httpx.Client(timeout=timeout, follow_redirects=True)
 
-    def post(self, path: str, json: dict) -> dict:
+    def post(self, path: str, json: dict, timeout: float | None = None) -> dict:
         url = self.base_url + path
         _assert_egress_allowed(url)
         headers: dict[str, str] = {}
@@ -101,10 +103,13 @@ class HttpTransport:
             headers["X-Sandbox-Token"] = self.sandbox_token
         elif self.internal_key:
             headers["X-Internal-Key"] = self.internal_key
+        req_timeout = self.timeout if timeout is None else timeout
         last_err: Exception | None = None
         for attempt in range(3):
             try:
-                resp = self.client.post(url, headers=headers, json=json)
+                resp = self.client.post(
+                    url, headers=headers, json=json, timeout=req_timeout
+                )
                 if resp.status_code >= 500:
                     raise httpx.HTTPError(f"server {resp.status_code}")
                 if resp.status_code >= 400:
@@ -142,7 +147,10 @@ class FakeTransport:
         self.battle_status: str = "running"
         self._lock = threading.Lock()
 
-    def post(self, path: str, json: dict) -> dict:
+    def post(
+        self, path: str, json: dict, timeout: float | None = None
+    ) -> dict:
+        del timeout
         with self._lock:
             return self._post_locked(path, json)
 
@@ -180,6 +188,16 @@ class InternalClient:
     def __init__(self, transport: Transport):
         self.t = transport
 
+    def _post(
+        self, path: str, payload: dict, timeout: float | None = None
+    ) -> dict:
+        if timeout is None:
+            return self.t.post(path, payload)
+        try:
+            return self.t.post(path, payload, timeout=timeout)
+        except TypeError:
+            return self.t.post(path, payload)
+
     def model(
         self,
         battle_id: str,
@@ -190,6 +208,7 @@ class InternalClient:
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
         return_raw: bool = False,
+        timeout: float | None = None,
     ) -> str | dict:
         payload: dict[str, Any] = {
             "battle_id": battle_id,
@@ -203,7 +222,7 @@ class InternalClient:
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-        data = self.t.post("/internal/model", payload)
+        data = self._post("/internal/model", payload, timeout=timeout)
         if return_raw:
             return data
         return data.get("content", "")

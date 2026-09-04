@@ -25,6 +25,7 @@ class MockInternalClient:
         max_tokens: int = 1024,
         tools: list[dict] | None = None,
         return_raw: bool = False,
+        timeout: float | None = None,
     ):
         self.calls_made.append(
             {
@@ -33,6 +34,7 @@ class MockInternalClient:
                 "messages": list(messages),
                 "phase": phase,
                 "tools": tools,
+                "timeout": timeout,
             }
         )
         resp_list = self.responses.get(model_id, [])
@@ -411,6 +413,55 @@ def test_arena_internal_verification_does_not_consume_fighter_steps(monkeypatch)
     assert res["outcome"] == "TEST_PASS"
     # Exactly 1 step was spent by the fighter (write solution.py). DONE and internal verification test cost 0 steps.
     assert res["steps"] == 1
+
+
+def test_model_timeout_is_forwarded_and_halt_after_return_skips_turn(monkeypatch):
+    """Deadline-bounded timeout is passed; halt after model returns records no turn."""
+    monkeypatch.setenv("ARENA_IN_SANDBOX", "1")
+    executor = AdvancedExecutor()
+    status = {"v": "running"}
+
+    class CancelAfterModel(MockInternalClient):
+        def model(self, *args, timeout=None, **kwargs):
+            status["v"] = "cancelled"
+            return super().model(*args, timeout=timeout, **kwargs)
+
+    client = CancelAfterModel(
+        {
+            "model_halt": [
+                'TOOL write path=solution.py content="val = 42"\nTOOL done',
+            ]
+        }
+    )
+    executor.run_battle(
+        battle_id="b_model_halt",
+        format_config={
+            "name": "halt-after-model",
+            "phases": [{"name": "race", "participants": ["fighter_a"]}],
+            "test_code": "import solution\nassert solution.val == 42\nprint('TEST_PASS rc=0')",
+            "max_turns": 3,
+            "max_steps": 10,
+        },
+        model_ids=["model_halt"],
+        round_visibility="private",
+        timeout_seconds=30,
+        role_to_model={"fighter_a": "model_halt"},
+        client=client,
+        status_check=lambda: status["v"],
+    )
+    assert client.calls_made
+    timeout = client.calls_made[0].get("timeout")
+    assert timeout is not None
+    assert 0 < float(timeout) <= 30
+    action_logs = [
+        json.loads(r["artifact"])
+        for r in client.rounds_emitted
+        if r.get("event_type") == "action_log"
+    ]
+    assert not any(
+        p.get("action") in ("write", "tool_parse_success", "done") for p in action_logs
+    )
+    assert client.results_emitted == []
 
 
 

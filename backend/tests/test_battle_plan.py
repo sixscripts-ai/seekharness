@@ -9,6 +9,7 @@ from agent_arena.sandbox.executors.battle_plan import (
     parse_battle_plan,
     restore_protected,
     snapshot_handoff,
+    snapshot_to_deployment,
     write_allowed_file,
 )
 from agent_arena.sandbox.executors import get_executor
@@ -79,6 +80,48 @@ def test_forbidden_paths():
     assert is_forbidden_handoff("id_rsa")
     assert not is_forbidden_handoff("auth.py")
     assert not is_forbidden_handoff("exploit.py")
+
+
+def test_snapshot_handoff_rejects_escaping_symlink(tmp_path):
+    work = tmp_path / "builder"
+    work.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("LEAKED_SECRET\n", encoding="utf-8")
+    backend = work / "backend"
+    backend.mkdir()
+    (backend / "app.py").write_text("ok\n", encoding="utf-8")
+    (backend / "leak.txt").symlink_to(secret)
+    snap = snapshot_handoff(work, ["backend"])
+    assert "backend/app.py" in snap["files"]
+    assert "backend/leak.txt" not in snap["files"]
+    assert all(b"LEAKED_SECRET" not in data for data in snap["files"].values())
+    rejected = [row for row in snap["manifest"] if row.get("path") == "backend/leak.txt"]
+    assert rejected
+    assert rejected[0].get("rejected") is True
+
+
+def test_snapshot_to_deployment_rejects_escaping_symlink(tmp_path):
+    builder_private = tmp_path / "builder-private"
+    builder_private.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    secret = outside / "secret.txt"
+    secret.write_text("LEAKED_SECRET\n", encoding="utf-8")
+    backend = builder_private / "backend"
+    backend.mkdir()
+    (backend / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (backend / "leak.txt").symlink_to(secret)
+    deployment = tmp_path / "deployment"
+    copied = snapshot_to_deployment(builder_private, deployment)
+    assert "backend/main.py" in copied
+    assert "backend/leak.txt" not in copied
+    assert (deployment / "backend" / "main.py").exists()
+    assert not (deployment / "backend" / "leak.txt").exists()
+    for path in deployment.rglob("*"):
+        if path.is_file():
+            assert "LEAKED_SECRET" not in path.read_text(encoding="utf-8")
 
 
 def test_protected_restore_overwrites_cheat(tmp_path):

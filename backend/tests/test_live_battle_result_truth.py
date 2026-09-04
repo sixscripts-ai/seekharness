@@ -189,6 +189,30 @@ def test_scrub_evaluator_private_drops_nested_hidden_fields():
     assert cleaned["data"]["visible_command"] == "pytest tests/visible"
 
 
+def test_public_sse_payload_keeps_envelope_ids_without_hidden_fields():
+    from agent_arena.battle_public import public_sse_payload
+
+    out = public_sse_payload(
+        {
+            "event_id": "e1",
+            "created_at": 1.5,
+            "ts": 1.6,
+            "type": "phase_start",
+            "data": {
+                "phase": "build",
+                "sequence": 3,
+                "hidden_command": "pytest tests/hidden",
+            },
+        }
+    )
+    assert out["event_id"] == "e1"
+    assert out["created_at"] == 1.5
+    assert out["ts"] == 1.6
+    assert out["phase"] == "build"
+    assert out["sequence"] == 3
+    assert "hidden_command" not in out
+
+
 def test_finalize_turn_budget_verified_fail_is_unverified_zero(
     monkeypatch,
 ):

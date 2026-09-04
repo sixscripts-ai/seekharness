@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-"""Sync all production tables, rows, and skills from Neon dev branch to main branch.
+"""Sync production tables from a source Neon URL to a main/target Neon URL.
+
+Reads connection strings from the environment (typically repo-root `.env`):
+- source: DATABASE_URL_UNPOOLED or DATABASE_URL
+- target: DATABASE_URL_UNPOOLED_MAIN or DATABASE_URL_MAIN
+
+Refuses to run without an explicit `--yes` confirmation. Never writes `.env`.
 
 Order is strictly topologically sorted:
 1. alembic_version
 2. formats
 3. providers
 4. skills
-5. battles (parent for drafts, participants, rounds, scores, events)
-6. battle_drafts
-7. battle_participants
-8. rounds
-9. scores
-10. battle_events
-11. leaderboard
-12. memories
+5. battles (parent)
+6. battle_results (child of battles)
+7. battle_drafts
+8. battle_participants
+9. rounds
+10. scores
+11. battle_events
+12. leaderboard
+13. memories
 """
 from __future__ import annotations
 
+import argparse
 import io
 import os
 import sys
 from pathlib import Path
+
 import psycopg
 from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 ENV_FILE = ROOT_DIR / ".env"
-
-MAIN_POOLED_URL = (
-    "postgresql://neondb_owner:npg_EGjOZhdiBz92@"
-    "ep-late-paper-a6xhbxsc-pooler.us-west-2.aws.neon.tech/neondb?sslmode=require"
-)
-MAIN_UNPOOLED_URL = (
-    "postgresql://neondb_owner:npg_EGjOZhdiBz92@"
-    "ep-late-paper-a6xhbxsc.us-west-2.aws.neon.tech/neondb?sslmode=require"
-)
 
 TABLES_IN_ORDER = [
     "alembic_version",
@@ -42,6 +42,7 @@ TABLES_IN_ORDER = [
     "providers",
     "skills",
     "battles",
+    "battle_results",
     "battle_drafts",
     "battle_participants",
     "rounds",
@@ -65,28 +66,64 @@ def get_table_counts(conn_str: str) -> dict[str, int]:
     return counts
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Copy all listed tables from the source Neon database to the "
+            "main/target database. Truncates the target first. Destructive."
+        )
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Required confirmation to TRUNCATE the target and COPY rows.",
+    )
+    args = parser.parse_args(argv)
+
     load_dotenv(ENV_FILE)
-    source_url = os.environ.get("DATABASE_URL_UNPOOLED") or os.environ.get("DATABASE_URL")
+    source_url = os.environ.get("DATABASE_URL_UNPOOLED") or os.environ.get(
+        "DATABASE_URL"
+    )
+    target_url = os.environ.get("DATABASE_URL_UNPOOLED_MAIN") or os.environ.get(
+        "DATABASE_URL_MAIN"
+    )
     if not source_url:
-        print("Error: DATABASE_URL not found in .env", file=sys.stderr)
+        print(
+            "Error: DATABASE_URL_UNPOOLED or DATABASE_URL is required",
+            file=sys.stderr,
+        )
+        return 1
+    if not target_url:
+        print(
+            "Error: DATABASE_URL_UNPOOLED_MAIN or DATABASE_URL_MAIN is required",
+            file=sys.stderr,
+        )
+        return 1
+    if not args.yes:
+        print(
+            "Error: refusing to TRUNCATE without --yes",
+            file=sys.stderr,
+        )
         return 1
 
-    print("=== STEP 1: Audit Source (dev) and Target (main) Before Sync ===")
+    print("=== STEP 1: Audit Source and Target Before Sync ===")
     source_counts = get_table_counts(source_url)
-    target_counts_before = get_table_counts(MAIN_UNPOOLED_URL)
+    target_counts_before = get_table_counts(target_url)
 
-    print(f"{'Table':22} | {'dev (Source)':12} | {'main (Before)':12}")
-    print("-" * 52)
+    print(f"{'Table':22} | {'source':12} | {'target (Before)':16}")
+    print("-" * 56)
     for t in TABLES_IN_ORDER:
-        print(f"{t:22} | {source_counts.get(t, 0):12} | {target_counts_before.get(t, 0):12}")
+        print(
+            f"{t:22} | {source_counts.get(t, 0):12} | {target_counts_before.get(t, 0):16}"
+        )
 
     print("\n=== STEP 2: Streaming Tables via psycopg Binary COPY ===")
-    with psycopg.connect(source_url) as src_conn, psycopg.connect(MAIN_UNPOOLED_URL) as tgt_conn:
+    with psycopg.connect(source_url) as src_conn, psycopg.connect(
+        target_url
+    ) as tgt_conn:
         with tgt_conn.cursor() as tgt_cur:
-            # Truncate all tables in one statement with CASCADE
             tables_joined = ", ".join(TABLES_IN_ORDER)
-            print(f"Truncating tables on main: {tables_joined}...")
+            print(f"Truncating tables on target: {tables_joined}...")
             tgt_cur.execute(f"TRUNCATE TABLE {tables_joined} CASCADE")
 
             for table in TABLES_IN_ORDER:
@@ -112,11 +149,11 @@ def main() -> int:
 
         tgt_conn.commit()
 
-    print("\n=== STEP 3: Audit Target (main) After Sync ===")
-    target_counts_after = get_table_counts(MAIN_UNPOOLED_URL)
+    print("\n=== STEP 3: Audit Target After Sync ===")
+    target_counts_after = get_table_counts(target_url)
 
-    print(f"{'Table':22} | {'dev (Source)':12} | {'main (After)':12} | {'Status'}")
-    print("-" * 62)
+    print(f"{'Table':22} | {'source':12} | {'target (After)':14} | {'Status'}")
+    print("-" * 66)
     mismatch = False
     for t in TABLES_IN_ORDER:
         src = source_counts.get(t, 0)
@@ -124,28 +161,13 @@ def main() -> int:
         status = "MATCH" if src == tgt else "MISMATCH"
         if src != tgt:
             mismatch = True
-        print(f"{t:22} | {src:12} | {tgt:12} | {status}")
+        print(f"{t:22} | {src:12} | {tgt:14} | {status}")
 
     if mismatch:
-        print("\nERROR: Mismatch detected between dev and main!", file=sys.stderr)
+        print("\nERROR: Mismatch detected between source and target!", file=sys.stderr)
         return 1
 
-    print("\nAll tables match 100%! main branch is now fully in sync with dev.")
-
-    print("\n=== STEP 4: Update .env URLs to point to main branch ===")
-    env_content = ENV_FILE.read_text(encoding="utf-8")
-
-    source_pooled = os.environ.get("DATABASE_URL", "")
-    source_unpooled = os.environ.get("DATABASE_URL_UNPOOLED", "")
-
-    if source_pooled and source_pooled in env_content:
-        env_content = env_content.replace(source_pooled, MAIN_POOLED_URL)
-    if source_unpooled and source_unpooled in env_content:
-        env_content = env_content.replace(source_unpooled, MAIN_UNPOOLED_URL)
-
-    ENV_FILE.write_text(env_content, encoding="utf-8")
-    print(".env updated successfully to use main branch endpoints.")
-
+    print("\nAll tables match. Target is in sync with source.")
     return 0
 
 

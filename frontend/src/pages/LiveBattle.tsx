@@ -205,6 +205,7 @@ export default function LiveBattle() {
             if (next) {
               statusRef.current = String(next);
               setStatus(String(next));
+              setBattle((current) => current ? { ...current, status: String(next) } : current);
             }
           }
 
@@ -376,6 +377,7 @@ export default function LiveBattle() {
       await api.cancelBattle(token, id);
       statusRef.current = "cancelled";
       setStatus("cancelled");
+      setBattle((current) => current ? { ...current, status: "cancelled" } : current);
     } catch (error) {
       setErr(error instanceof Error ? error.message : "Failed to cancel battle");
     } finally { setBusy(null); }
@@ -402,7 +404,13 @@ export default function LiveBattle() {
   }
 
   function downloadReplay() {
-    const payload = { battle, status, phase, scores, events };
+    const payload = {
+      battle: battle ? { ...battle, status } : battle,
+      status,
+      phase,
+      scores,
+      events,
+    };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");

@@ -80,12 +80,22 @@ export function actionKey(item: BattleStreamItem): string {
   return `${item.model_id}:${item.phase}:${action.action}:${action.command}:${action.tool_step ?? ""}`;
 }
 
+export function payloadSequence(payload: Record<string, unknown> | undefined): number | undefined {
+  if (!payload) return undefined;
+  if (typeof payload.event_sequence === "number") return payload.event_sequence;
+  if (typeof payload.sequence === "number") return payload.sequence;
+  return undefined;
+}
+
 export function mergeEvent(previous: BattleStreamItem[], next: BattleStreamItem): BattleStreamItem[] {
   if (next.kind !== "action_log") {
-    const nextSequence = typeof next.payload?.event_sequence === "number" ? next.payload.event_sequence : undefined;
+    const nextSequence = payloadSequence(next.payload);
+    const nextEventId = typeof next.payload?.event_id === "string" ? next.payload.event_id : undefined;
     const duplicate = previous.some((item) => {
       if (item.kind !== next.kind || item.model_id !== next.model_id) return false;
-      const itemSequence = typeof item.payload?.event_sequence === "number" ? item.payload.event_sequence : undefined;
+      const itemEventId = typeof item.payload?.event_id === "string" ? item.payload.event_id : undefined;
+      if (nextEventId && itemEventId && nextEventId === itemEventId) return true;
+      const itemSequence = payloadSequence(item.payload);
       if (nextSequence !== undefined && itemSequence !== undefined) return nextSequence === itemSequence;
       return item.t === next.t && item.artifact === next.artifact;
     });

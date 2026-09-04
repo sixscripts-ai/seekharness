@@ -44,6 +44,25 @@ def scrub_evaluator_private(value: Any) -> Any:
     return value
 
 
+def public_sse_payload(event: dict) -> dict:
+    """Scrubbed SSE data plus envelope ids needed for reconnect dedupe.
+
+    `event_id`, `created_at`, and `ts` are telemetry metadata, not evaluator
+    private material. Hidden evaluator fields stay stripped.
+    """
+    raw = event.get("data", {})
+    payload = scrub_evaluator_private(raw)
+    if not isinstance(payload, dict):
+        payload = {"value": payload}
+    else:
+        payload = dict(payload)
+    for key in ("event_id", "created_at", "ts"):
+        value = event.get(key)
+        if value is not None and value != "":
+            payload[key] = value
+    return payload
+
+
 def owner_visible_battle_config(cfg: dict | None) -> dict:
     """Public mission config for owner/browser clients."""
     return scrub_evaluator_private(fighter_visible_battle_config(cfg))
