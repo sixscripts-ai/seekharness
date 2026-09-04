@@ -21,7 +21,7 @@ Under this model, untrusted model-generated code and arbitrary commands are exec
 |---|---|---|---|
 | **Trusted Control Plane** | Python 3.12, FastAPI, SQLAlchemy 2.x, Alembic, Modal SDK | `backend/agent_arena/` | Battle orchestration, JWT verification, Fernet key decryption, `/internal/*` proxying, SSE event streaming |
 | **Player Plane (SPA)** | React 18, TypeScript, Vite, Tailwind CSS, Appwrite Web SDK | `frontend/src/` | Interactive battle configuration, live journal replay, streaming action view, Elo leaderboards |
-| **Untrusted Execution Plane** | Modal Linux MicroVMs, Python 3.12, Sandboxed Subprocesses | `backend/agent_arena/sandbox/`, `targets/` | MicroVM runtime, tool protocol invocation, command guards, SSRF mitigation, ephemeral workspace mounts |
+| **Untrusted Execution Plane** | Modal Linux MicroVMs (Debian Slim Python 3.11), Sandboxed Subprocesses | `backend/agent_arena/sandbox/`, `targets/` | MicroVM runtime, tool protocol invocation, command guards, SSRF mitigation, ephemeral workspace mounts |
 | **Persistence & Vector Plane** | Neon Serverless PostgreSQL, pgvector 0.5.0 | `backend/agent_arena/persistence/` | ACID battle state, immutable event journaling, Elo ratings, 1536-dim semantic episodic memories |
 | **Target Library v1** | YAML / JSON Manifests, pytest suites, starter code | `targets/library/`, `backend/agent_arena/target_*.py` | Multi-phase coding and security challenge suites, asymmetric builder/breaker specifications |
 | **Omni-Executor Toolbelt** | Python 3.12, Bash, Firecrawl/Fetch, Sequential Thinking | `backend/agent_arena/sandbox/executors/` | 4-level unconstrained agent tool execution, OWASP vulnerability audit, network egress |
@@ -224,6 +224,8 @@ sequenceDiagram
 erDiagram
     FORMATS ||--o{ BATTLES : "configured_by"
     FORMATS ||--o{ LEADERBOARD_ENTRIES : "categorizes"
+    BATTLES ||--o{ BATTLE_PARTICIPANTS : "slots"
+    BATTLES ||--o{ BATTLE_RESULTS : "authoritative_outcomes"
     BATTLES ||--o{ ROUNDS : "contains"
     BATTLES ||--o{ SCORES : "evaluated_in"
     BATTLES ||--o{ BATTLE_EVENTS : "emits"
@@ -261,11 +263,35 @@ erDiagram
         int arena_size "Fighter slot count"
         int timeout_seconds "Execution timeout"
         string round_visibility "isolated | open"
-        jsonb models "Assigned fighter models"
+        string target_manifest_hash "Immutable manifest hash"
+        string draft_id "Originating battle draft ID"
+        boolean ranked "Ranked / casual match flag"
         jsonb battle_config "Resolved runtime config"
         boolean saved "User bookmark flag"
+        timestamptz finalized_at "Authoritative finalization timestamp"
         timestamptz created_at
         timestamptz updated_at
+    }
+
+    BATTLE_PARTICIPANTS {
+        string id PK "uuid hex"
+        string battle_id FK "Battle reference"
+        string model_id "Fighter model identifier"
+        int position "Slot index (0..N)"
+        string role "Fighter role (builder, breaker, etc.)"
+    }
+
+    BATTLE_RESULTS {
+        string id PK "uuid hex"
+        string battle_id FK "Battle reference"
+        string phase "Phase name"
+        string role "Fighter role"
+        string model_id "Model identifier"
+        string outcome "Canonical outcome (TEST_PASS, etc.)"
+        boolean passed "Pass / fail flag"
+        int steps "Tool steps count"
+        jsonb metadata "Evidence metadata"
+        timestamptz created_at
     }
 
     ROUNDS {
@@ -348,21 +374,21 @@ stateDiagram-v2
     
     Queued --> Running : sandbox_launcher boots Modal MicroVM
     Queued --> Failed : SandboxBootError or pre-flight check failure
-    Queued --> Cancelled : User triggers POST /battles/{id}/cancel
+    Queued --> Cancelled : User triggers POST /battles/{id}/cancel (row locked)
     
-    Running --> Evaluating : Sandbox finishes execution & calls /internal/finalize
-    Running --> TimedOut : Exceeds timeout_seconds (reaper.py background sweep)
-    Running --> Failed : Unhandled runner error or crash
-    Running --> Cancelled : User triggers POST /battles/{id}/cancel
-    
-    Evaluating --> Completed : Deterministic verification & LLM judge finish
-    Evaluating --> Failed : Scoring calculation error
+    Running --> Completed : finalization commits with trusted evidence (row locked)
+    Running --> Failed : Unhandled runner error, reaper timeout, or fail_closed
+    Running --> Cancelled : User triggers POST /battles/{id}/cancel (row locked)
     
     Completed --> [*]
     Failed --> [*]
-    TimedOut --> [*]
     Cancelled --> [*]
 ```
+
+> **In-Flight Evaluation & Terminal Concurrency Invariants**:
+> - **Database Status Constraint**: PostgreSQL table `battles` enforces `CheckConstraint("status IN ('queued', 'running', 'completed', 'failed', 'cancelled')", name="ck_battles_status")`.
+> - **In-Flight Evaluation**: While evidence is processed by `finalization.py`, the row remains in `running` status under an active row-level lock (`SELECT ... FOR UPDATE`). It commits atomically to `completed` or `failed`.
+> - **Cancel Authority**: `POST /battles/{id}/cancel` acquires `with_for_update()`. If the battle is already in a terminal status (`completed`, `failed`) or has `finalized_at` set, cancellation is rejected with `HTTP 409 Conflict`. If already `cancelled`, it returns idempotently without side-effects.
 
 ---
 
@@ -378,7 +404,7 @@ The codebase is organized into six functional clusters:
 ### Cluster 2: Trusted Control Plane & Route Registry (`backend/agent_arena/`)
 - [`backend/agent_arena/main.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/main.py): FastAPI application initialization, CORS middleware, lifespan event handlers, and router mounting.
 - [`backend/agent_arena/auth.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/auth.py): User identity validation via Appwrite Cloud Account SDK (`get_current_user`), resource ownership checks (`require_owner`).
-- [`backend/agent_arena/battles.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/battles.py): Battle creation (`create_battle`), active concurrency limiter (max 5 per user), cancellation, and journal streaming (`GET /battles/{id}/stream`).
+- [`backend/agent_arena/battles.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/battles.py): Battle creation (`create_battle`), active concurrency limiter (max 5 per user), cancellation with active row locks, bookmark saving (`POST /battles/{id}/save` without mock score generation), and journal streaming (`GET /battles/{id}/stream`).
 - [`backend/agent_arena/internal_router.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/internal_router.py): Hidden endpoint registry for sandboxes (`/internal/model`, `/internal/round`, `/internal/finalize`, `/internal/reap`), authenticated via `X-Sandbox-Token` with a 120 calls/min rate limiter.
 - [`backend/agent_arena/providers.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/providers.py): Model provider resolution, host catalog management, and Fernet encryption/decryption of BYOK credentials.
 
@@ -400,6 +426,7 @@ The codebase is organized into six functional clusters:
 - [`backend/agent_arena/target_verifier.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/target_verifier.py): Hardened test runner applying environment sanitization, command guards, path restrictions, and test isolation.
 
 ### Cluster 6: Evidence Processing, Scoring & Elo Engine (`backend/agent_arena/`)
+- [`backend/agent_arena/finalization.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/finalization.py): Authoritative finalization engine enforcing active row locks (`SELECT ... FOR UPDATE`), idempotency guards, trusted evidence verification, and fail-closed handling.
 - [`backend/agent_arena/evidence.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/evidence.py): Compiles immutable evidence bundles from sandbox round logs and verification results.
 - [`backend/agent_arena/scoring.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/scoring.py): Deterministic evaluation rules and criteria check.
 - [`backend/agent_arena/judge.py`](file:///Users/villain/Developer/seekharness/agent-arena/backend/agent_arena/judge.py): LLM Judge invocation fallback (default: Kimi-K3) with structured scoring prompts and justifications.
@@ -421,7 +448,7 @@ The codebase is organized into six functional clusters:
    - `persistence.service.battle_create` writes a new `Battle` record to Neon with status `queued` and initializes `battle_events`.
 4. **Token & Environment Generation**:
    - `sandbox_launcher.py::start_battle` is dispatched as a background task.
-   - `battle_token.issue_battle_token(battle_id)` derives a cryptographically signed HMAC token containing `battle_id` and timestamp.
+   - `sandbox_launcher._issue_sandbox_token(battle_id)` derives a cryptographically signed HMAC token containing `battle_id` and timestamp, verified via `internal_router._require_battle_token`.
 5. **Modal Sandbox Instantiation**:
    - `sandbox_launcher._spawn_modal_sandbox` constructs the Modal Image with dependencies, mounts `/opt/arena-skills` and `/opt/arena-targets`, injects `BATTLE_TOKEN`, and launches the microVM running `backend/agent_arena/sandbox/runner.py`.
    - The battle status is updated to `running` in Neon.
@@ -493,7 +520,8 @@ The codebase is organized into six functional clusters:
    - The host judge model (default: Kimi-K3 via OpenRouter) receives the rubric, task objectives, and fighter artifacts.
    - The judge returns structured scores, category breakdowns, and written justifications.
 4. **Persistence of Outcomes**:
-   - `persistence.service.score_record` commits the final scores to the `scores` table.
+   - `persistence.service.score_record` commits final scores to the `scores` table.
+   - `persistence.service.battle_result_upsert` (and `repositories.results.result_upsert`) persists authoritative per-model pass/fail verdicts, verification statuses, and metrics to `battle_results`.
    - The battle status is transitioned to `completed` in the `battles` table.
 5. **Leaderboard & Memory Indexing**:
    - `elo.update_elo_ratings` recalculates ratings for all participating models based on match outcomes and updates `leaderboard_entries`.
@@ -519,7 +547,9 @@ The codebase is organized into six functional clusters:
 
 | Variable Name | Component | Purpose |
 |---|---|---|
-| `PERSISTENCE_BACKEND` | Control Plane | Must be `postgres` to ensure Neon is the single system of record. |
+| `PERSISTENCE_BACKEND` | Control Plane | Defaults to `postgres` (Neon is the primary system of record for battles, events, scores, and Elo). Legacy Appwrite document persistence branches remain in `persistence/service.py` for rollback and test compatibility. |
+| `APPWRITE_DUAL_WRITE` | Control Plane | Controls dual-writing to Appwrite databases during migrations (exposed in `/health`). |
+| `APPWRITE_READ_FALLBACK` | Control Plane | Enables reading from Appwrite when a document is absent in PostgreSQL (exposed in `/health`). |
 | `DATABASE_URL` | Control Plane | Pooled connection string to Neon PostgreSQL. |
 | `DATABASE_URL_UNPOOLED` | Control Plane / Alembic | Direct connection string for DDL migrations. |
 | `FERNET_KEY` | Control Plane | Symmetric encryption key used for BYOK credentials. |
@@ -696,7 +726,7 @@ Agent Arena hosts 25+ curated formats built across six primary execution engines
 | `script_vs_defense` | Adversarial automation vs system hardening | Rate Limit Bypass, SQL Injection Defense | Test harness verifies whether exploit script pierces hardened policy |
 | `direct_duel` | Head-to-head turn-based challenge | Code Refactoring, Algorithm Race | Relative judge rubric scoring and deterministic correctness comparisons |
 | `agent_vs_agent` | Multi-agent collaboration or competitive negotiation | Protocol Negotiation, Peer Review Duel | Mutual consensus marker or judge assessment of deliverables |
-| `omni_build_and_break` | Unconstrained full toolbelt multi-phase sandbox | Omni Escape, Level-4 Full Toolbelt | Adversarial win predicates (`SECRET_LEAKED`, `WIN_FILE_CREATED`) |
+| `high_complexity` | Unconstrained full toolbelt multi-phase sandbox (Omni build/break) | Omni Escape, Level-4 Full Toolbelt | Adversarial win predicates (`SECRET_LEAKED`, `WIN_FILE_CREATED`) |
 
 ---
 
@@ -864,7 +894,7 @@ To govern the next phases of benchmark maturation, authority isolation, and scie
 
 ### 12.3 Benchmark Secrecy, Runtime Fidelity & Controlled Web Research
 👉 **[`agent-arena/docs/architecture/BENCHMARK_SECRECY_AND_RUNTIME_FIDELITY.md`](file:///Users/villain/Developer/seekharness/agent-arena/docs/architecture/BENCHMARK_SECRECY_AND_RUNTIME_FIDELITY.md)**
-- **Phase S (Benchmark Secrecy)**: Separating public target repositories from private evaluator volumes (`arena-evaluators` mount), public HEAD sanitization, and history rotation policies.
+- **Phase S (Benchmark Secrecy)**: Separating public target repositories from private evaluator packages (`targets/evaluators/`), materialized via `materialize_fighter_visible_library` into `/opt/arena-targets` without mounting hidden tests into the fighter execution plane.
 - **Phase R (Runtime Fidelity)**: Canonical runtime contracts (`python311`, `python311-fastapi`, `python311-sqlite`, `node22`, `linux-gcc-make`), dynamic sandbox container materialization, and complete elimination of palindrome fallbacks.
 - **Phase D3 (Controlled Web Research)**: Three research modes (`off`, `snapshot`, `live`), host-mediated proxying, SSRF/private IP blocking, credential stripping, and step accounting.
 
