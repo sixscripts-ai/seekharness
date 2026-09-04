@@ -28,6 +28,10 @@ Hooks still deny force push, `git reset --hard`, `git clean`, dangerous `rm -rf`
 
 ## Skills
 
+Load one skill at a time. Arena-invariant skills remain the authority for battles, isolation, and finalization. Do not let the grilling family override them.
+
+### Arena (project)
+
 | Skill | Purpose |
 | --- | --- |
 | `battle-trace-audit` | Reconstruct a battle and classify MODEL / TOOL_INTERFACE / TARGET_RUNTIME / TARGET_BUNDLE / SANDBOX / VERIFIER / FINALIZATION / PRESENTATION_ONLY |
@@ -38,6 +42,24 @@ Hooks still deny force push, `git reset --hard`, `git clean`, dangerous `rm -rf`
 | `deployment-alignment` | Read-only HEAD vs origin/main vs dirty tree vs proven Modal/Vercel/migration state |
 | `regression-gate` | Focused → subsystem → Change Set A → B → C → target security → hermetic backend → frontend if relevant |
 
+### Grilling family (mattpocock/skills)
+
+Installed from [mattpocock/skills](https://github.com/mattpocock/skills) into `.cursor/skills/` only. Do not copy these into `.agents/skills/` (fighter plane). Use one grill dialect per session (`grill-with-docs` / `grill-me` / personal `deep-inquiry`).
+
+| Skill | Invoke | When to load |
+| --- | --- | --- |
+| `grill-with-docs` | user | Daily engineering door: grill a change and update `CONTEXT.md` / ADRs. Primary after install. |
+| `grill-me` | user | Same interview, no doc writes (product / non-code). |
+| `grilling` | model | Interview primitive. Do not invoke directly unless a door skill is missing. |
+| `domain-modeling` | model | Glossary / ADR sharpening. Loaded by `grill-with-docs`. |
+| `codebase-design` | model | Deep-module vocabulary (seam, interface, depth). |
+| `improve-codebase-architecture` | user | Scan for deepening opportunities, then grill one candidate. |
+| `tdd` | user or model | Red-green-refactor on an approved slice. Then `regression-gate`. |
+| `diagnosing-bugs` | user or model | Hard bugs: reproduce, minimise, hypothesise, instrument. |
+| `handoff` | user | Compact this conversation for another agent. |
+| `wait-what` | user | Last message did not land; re-pitch in `CONTEXT.md` vocabulary. |
+| `setup-matt-pocock-skills` | user | Once-per-repo tracker + doc layout. **Do not run until asked.** |
+
 ## Feature chains
 
 Load one skill at a time. Project subagents stay Grok 4.6 Extra High Fast.
@@ -47,6 +69,9 @@ Load one skill at a time. Project subagents stay Grok 4.6 Extra High Fast.
 | First-token watchdog | `battle-trace-audit` → `battle-runtime-observability` → `lead-engineer` → `regression-gate` |
 | Live/export status truth | `finalization-audit` → `realtime-execution-streaming` → `implementation-worker` (or `lead-engineer` if stored status changes) → `regression-gate` |
 | Target leakage | `target-integrity-audit` (slash: `/target-leakage` or `/audit-target`) |
+| Shape a change | `grill-with-docs` (or `grill-me`) → approve → `tdd` or `implementation-worker` → `regression-gate` |
+| Deepen a module | `improve-codebase-architecture` → `grilling` one candidate |
+| Session break | `handoff` |
 
 `battle-runtime-observability` and `realtime-execution-streaming` live under `.agents/skills/`.
 
