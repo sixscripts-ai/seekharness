@@ -30,6 +30,9 @@ function formatModelName(modelId: string): string {
   if (lower.includes("claude-3.7") || lower.includes("sonnet")) {
     return "Claude 3.7 Sonnet";
   }
+  if (lower.includes("deepseek-v4-pro") || lower.includes("deepseek-v4")) {
+    return "DeepSeek V4 Pro (0813)";
+  }
   if (lower.includes("deepseek-r1") || lower.includes("r1")) {
     return "DeepSeek R1";
   }
@@ -64,6 +67,13 @@ function getModelSkillBadges(row: LeaderboardRow): { name: string; tag: string }
       { name: "hybrid-reasoning", tag: "synergy" },
       { name: "tool-protocol", tag: "synergy" },
       { name: "ast-refactor", tag: "synergy" },
+    ];
+  }
+  if (lower.includes("deepseek-v4-pro") || lower.includes("deepseek-v4")) {
+    return [
+      { name: "hypothesis-driven-debugging", tag: "synergy" },
+      { name: "secure-code-execution", tag: "synergy" },
+      { name: "api-contract-auditor", tag: "synergy" },
     ];
   }
   if (lower.includes("deepseek-r1") || lower.includes("r1")) {

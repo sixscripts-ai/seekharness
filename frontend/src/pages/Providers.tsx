@@ -197,7 +197,7 @@ const PRESETS: Record<PresetKey, PresetConfig> = {
     auth_style: "bearer",
     model_name: "anthropic/claude-3.7-sonnet",
     context_window: "200k",
-    description: "Universal multi-provider router gateway.",
+    description: "Universal multi-provider router gateway (Claude 3.7, DeepSeek V4 Pro 0813, etc.).",
   },
   groq: {
     name: "Groq High Speed",
