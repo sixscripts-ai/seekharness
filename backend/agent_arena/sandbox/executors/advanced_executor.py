@@ -30,6 +30,10 @@ from .battle_plan import (
     restore_protected,
     snapshot_handoff,
     write_allowed_file,
+    snapshot_to_deployment,
+    wipe_builder_private,
+    parse_services_spec,
+    classify_deployment_failure,
 )
 from .procs import ProcessManager
 from .preview import (
@@ -4279,8 +4283,23 @@ class AdvancedExecutor(Executor):
                             continue
 
                         if tool_name == "done":
+                            has_harness = bool(
+                                sess.test_cmd
+                                or (sess.workdir / "tests" / "test_target.py").exists()
+                                or format_config.get("test_code")
+                                or format_config.get("test_command")
+                            )
+                            should_enforce_advisory = bool(
+                                format_config.get("target_id")
+                                or format_config.get("enforce_self_correction")
+                                or format_config.get("enforce_verification")
+                                or format_config.get("services")
+                            )
                             if (
-                                not has_tested_solution
+                                should_enforce_advisory
+                                and has_harness
+                                and role not in ("breaker", "attacker")
+                                and not has_tested_solution
                                 and not done_warning_issued
                                 and (turn + 1 < max_turns)
                                 and (sess.steps < max_steps)
@@ -4629,7 +4648,24 @@ class AdvancedExecutor(Executor):
                             workspace=work.name,
                             phase_id=phase.phase_id,
                         )
-                    if work.exists():
+                    is_fullstack = bool(format_config.get("services")) or any(
+                        s in str(format_config.get("runtime") or "") for s in ("fullstack", "vite")
+                    )
+                    if is_fullstack and phase.actor == "builder" and work.exists():
+                        deployment_dir = root / "deployment"
+                        snapshot_to_deployment(work, deployment_dir)
+                        wipe_builder_private(work)
+                        if model_id:
+                            emit_action(
+                                model_id,
+                                "deployment_snapshot",
+                                target="deployment",
+                                state="done",
+                                role=phase.actor,
+                                workspace="deployment",
+                                phase_id=phase.phase_id,
+                            )
+                    elif work.exists():
                         shutil.rmtree(work, ignore_errors=True)
                         if model_id:
                             emit_action(

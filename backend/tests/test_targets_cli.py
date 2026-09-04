@@ -26,6 +26,7 @@ from tests.eval_fixtures import write_private_evaluator
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 LIBRARY_ROOT = (BACKEND_ROOT.parent / "targets" / "library").resolve()
+REAL_TARGETS_COUNT = len([p for p in LIBRARY_ROOT.iterdir() if p.is_dir() and (p / "target.yaml").exists()])
 
 MINIMAL_MANIFEST = {
     "schema_version": 1,
@@ -113,7 +114,7 @@ def _cli(*args: str, library_root: Path | None = None) -> subprocess.CompletedPr
 def test_list_reports_10_targets():
     result = _cli("list")
     assert result.returncode == 0
-    assert "10 targets" in result.stdout
+    assert f"{REAL_TARGETS_COUNT} targets" in result.stdout
     for tid in ["authentication-gate", "broken-package-recovery", "tinyshop"]:
         assert tid in result.stdout
 
@@ -123,7 +124,7 @@ def test_list_json_keys():
     assert result.returncode == 0
     data = json.loads(result.stdout)
     assert isinstance(data, list)
-    assert len(data) == 10
+    assert len(data) == REAL_TARGETS_COUNT
     for entry in data:
         for key in ["id", "version", "category", "difficulty", "format"]:
             assert key in entry
@@ -212,7 +213,7 @@ def test_validate_invalid_version_warn_via_doctor(tmp_path: Path):
 def test_validate_all_passes_real_library():
     result = _cli("validate", "--all")
     assert result.returncode == 0
-    assert "10 valid" in result.stdout
+    assert f"{REAL_TARGETS_COUNT} valid" in result.stdout
     assert "0 invalid" in result.stdout
 
 
@@ -220,7 +221,7 @@ def test_validate_all_json():
     result = _cli("validate", "--all", "--json")
     assert result.returncode == 0
     data = json.loads(result.stdout)
-    assert data["total"] == 10
+    assert data["total"] == REAL_TARGETS_COUNT
     assert data["invalid"] == 0
 
 
@@ -542,7 +543,7 @@ def test_test_command_fails_on_broken_bundle(tmp_path: Path):
 def test_stats_counts():
     result = _cli("stats")
     assert result.returncode == 0
-    assert "total targets: 10" in result.stdout
+    assert f"total targets: {REAL_TARGETS_COUNT}" in result.stdout
     assert "by category:" in result.stdout
 
 
@@ -550,7 +551,7 @@ def test_stats_json():
     result = _cli("stats", "--json")
     assert result.returncode == 0
     data = json.loads(result.stdout)
-    assert data["total"] == 10
+    assert data["total"] == REAL_TARGETS_COUNT
     assert "by_category" in data
     assert "by_format" in data
     assert "by_runtime" in data

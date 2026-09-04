@@ -60,6 +60,8 @@ KNOWN_RUNTIMES = {
     "python311-sqlite",
     "node22",
     "linux-gcc-make",
+    "fullstack-vite-fastapi",
+    "fullstack-vite-node",
 }
 
 # ID / version patterns

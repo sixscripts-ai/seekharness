@@ -134,8 +134,8 @@ def test_probe_b_parse_recovery_privacy_no_free_workspace_disclosure(monkeypatch
             "model_probe_b": [
                 # Turn 1: Malformed response (no tools)
                 "I am thinking about writing code...",
-                # Turn 2: Valid done
-                "TOOL write path=solution.py content=\"x = 1\"\nTOOL done",
+                # Turn 2: Valid test and done
+                "TOOL write path=solution.py content=\"x = 1\"\nTOOL test\nTOOL done",
             ]
         }
     )

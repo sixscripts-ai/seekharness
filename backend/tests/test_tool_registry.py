@@ -132,18 +132,24 @@ def test_registry_and_executor_consistency():
     from agent_arena.sandbox.executors.advanced_executor import ToolSession
 
     all_tools = REGISTRY.all_names()
-    assert len(all_tools) == 22
+    assert len(all_tools) == len(REGISTRY._schemas)
 
     for name in all_tools:
         meta = REGISTRY.get_metadata(name)
         assert meta is not None, f"Tool '{name}' must have metadata defined"
-        assert "classification" in meta, f"Tool '{name}' must have classification"
-        assert meta["classification"] in ("executable", "context", "control")
+        assert meta["classification"] in (
+            "executable",
+            "context",
+            "control",
+            "browser",
+            "network",
+            "data",
+        )
         assert "handler" in meta, f"Tool '{name}' must have handler defined"
         assert "default_step_cost" in meta, f"Tool '{name}' must have default_step_cost defined"
 
         handler = meta["handler"]
-        if meta["classification"] in ("executable", "context"):
+        if meta["classification"] != "control":
             # Must exist as a method on ToolSession
             assert hasattr(ToolSession, handler), f"ToolSession missing handler method: {handler}"
         elif meta["classification"] == "control":

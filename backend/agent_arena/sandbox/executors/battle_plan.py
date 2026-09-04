@@ -266,6 +266,8 @@ def _str_list(value: Any) -> list[str]:
 
 def safe_relpath(rel: str) -> str | None:
     text = str(rel or "").replace("\\", "/").strip()
+    if text.endswith("/"):
+        text = text[:-1]
     if not text or text.startswith("/") or ".." in text.split("/"):
         return None
     if not _SAFE_REL.match(text):
@@ -305,6 +307,29 @@ def snapshot_handoff(work: Path, artifact_refs: list[str]) -> dict[str, Any]:
             path.relative_to(root)
         except ValueError:
             manifest.append({"path": rel, "rejected": True})
+            continue
+        if path.is_dir():
+            sub_count = 0
+            for sub_file in path.rglob("*"):
+                if sub_file.is_file():
+                    try:
+                        sub_rel = str(sub_file.relative_to(root)).replace("\\", "/")
+                    except ValueError:
+                        continue
+                    if is_forbidden_handoff(sub_rel):
+                        continue
+                    sub_data = sub_file.read_bytes()
+                    files[sub_rel] = sub_data
+                    manifest.append(
+                        {
+                            "path": sub_rel,
+                            "sha256": hashlib.sha256(sub_data).hexdigest(),
+                            "bytes": len(sub_data),
+                        }
+                    )
+                    sub_count += 1
+            if sub_count == 0:
+                manifest.append({"path": rel, "empty_dir": True})
             continue
         if not path.is_file():
             manifest.append({"path": rel, "missing": True})

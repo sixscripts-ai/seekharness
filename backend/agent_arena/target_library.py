@@ -127,6 +127,7 @@ class TargetBundle:
     reference_files: dict[str, bytes] = field(repr=False)
     raw_manifest: dict[str, Any] = field(repr=False)
     private_fixture_files: dict[str, bytes] = field(default_factory=dict, repr=False)
+    services: dict[str, Any] = field(default_factory=dict, repr=False)
 
 
 def _validate_safe_relative_path(rel_path: str, context: str = "") -> str:
@@ -390,6 +391,7 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
         reference_files=reference_files,
         private_fixture_files=private_fixture_files,
         raw_manifest=raw,
+        services=raw.get("services") if isinstance(raw.get("services"), dict) else {},
     )
 
 
@@ -503,6 +505,7 @@ def compile_target_to_battle_config(
                 f"### Objectives\n{brk_lines}\n"
             ),
         }
+        is_fullstack = bool(bundle.services) or "fullstack" in (bundle.runtime or "")
         phases = [
             {
                 "phase_id": "build",
@@ -517,8 +520,8 @@ def compile_target_to_battle_config(
                 "phase_id": "break",
                 "phase_type": "break",
                 "actor": "breaker",
-                "handoff_from": ["build"],
-                "handoff_artifacts": bundle.workspace.handoff_allowlist,
+                "handoff_from": [] if is_fullstack else ["build"],
+                "handoff_artifacts": [] if is_fullstack else bundle.workspace.handoff_allowlist,
                 "protected_artifacts": protected_in_starter,
                 "workspace_policy": "fresh",
             },
@@ -607,6 +610,7 @@ def compile_target_to_battle_config(
             "network": bundle.network,
         },
         "ranked": target_ranked_eligible(bundle.id, bundle.version),
+        "services": bundle.services,
         "battle_plan": {
             "plan_id": f"target-plan-{bundle.id}",
             "phases": phases,
