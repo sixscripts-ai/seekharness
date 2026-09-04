@@ -30,6 +30,7 @@ from agent_arena.target_library import materialize_fighter_visible_library
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_pyproject(str(Path(__file__).resolve().parent / "pyproject.toml"))
+    .run_commands("playwright install --with-deps chromium")
     .add_local_python_source("agent_arena")
 )
 # add_local_python_source ships .py only. Attach D0 YAML after that overlay.
