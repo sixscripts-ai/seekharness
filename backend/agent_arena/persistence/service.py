@@ -841,17 +841,41 @@ def battle_save(user_id: str, battle_id: str) -> dict:
 
 
 def battle_cancel(user_id: str, battle_id: str) -> dict:
-    battle = battle_get(user_id, battle_id)
-    if battle is None:
-        from fastapi import HTTPException
+    from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="Battle not found")
-    if battle.get("user_id") != user_id:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=403, detail="Forbidden")
-    battle_update(battle_id, {"status": "cancelled"})
-    return {"id": battle_id, "status": "cancelled"}
+    if using_postgres():
+        with session_scope() as session:
+            battle, err = repositories.battles.battle_cancel(
+                session, battle_id, user_id=user_id
+            )
+            if err == "not_found":
+                raise HTTPException(status_code=404, detail="Battle not found")
+            if err == "forbidden":
+                raise HTTPException(status_code=403, detail="Forbidden")
+            if err == "already_terminal":
+                if battle.status == "cancelled":
+                    return {"id": battle_id, "status": "cancelled", "already_terminal": True}
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot cancel battle in terminal status '{battle.status}'",
+                )
+            return {"id": battle_id, "status": "cancelled"}
+    else:
+        battle = battle_get(user_id, battle_id)
+        if battle is None:
+            raise HTTPException(status_code=404, detail="Battle not found")
+        if battle.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        current_status = battle.get("status")
+        if current_status in ("completed", "failed", "cancelled") or battle.get("finalized_at"):
+            if current_status == "cancelled":
+                return {"id": battle_id, "status": "cancelled", "already_terminal": True}
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot cancel battle in terminal status '{current_status}'",
+            )
+        battle_update(battle_id, {"status": "cancelled"})
+        return {"id": battle_id, "status": "cancelled"}
 
 
 # ---------------------------------------------------------------------------

@@ -189,3 +189,33 @@ def battle_participant_slots(
         .order_by(BattleParticipant.position)
     )
     return [(str(mid), role) for mid, role in session.execute(stmt).all()]
+
+
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def battle_cancel(
+    session: Session,
+    battle_id: str,
+    *,
+    user_id: str | None = None,
+) -> tuple[Battle | None, str | None]:
+    """Lock battle row and transition to cancelled if active.
+
+    Returns (battle, error_reason):
+      - (None, "not_found"): battle does not exist
+      - (None, "forbidden"): user_id does not match
+      - (battle, "already_terminal"): battle is already in terminal state or finalized
+      - (battle, None): successfully cancelled
+    """
+    stmt = select(Battle).where(Battle.id == battle_id).with_for_update()
+    battle = session.scalars(stmt).first()
+    if battle is None:
+        return None, "not_found"
+    if user_id is not None and battle.user_id != user_id:
+        return None, "forbidden"
+    if battle.finalized_at is not None or battle.status in _TERMINAL_STATUSES:
+        return battle, "already_terminal"
+    battle.status = "cancelled"
+    session.flush()
+    return battle, None

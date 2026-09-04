@@ -214,13 +214,14 @@ def cancel_battle(battle_id: str, user_id: str = Depends(get_current_user)):
     from .persistence import service
 
     battle = _require_owned_battle(user_id, battle_id)
-    service.battle_cancel(user_id, battle_id)
-    sandbox_id = battle.get("sandbox_id")
-    if sandbox_id:
-        sandbox_launcher.stop_sandbox(sandbox_id)
-    event_bus.publish(
-        battle_id, {"type": "battle_status", "data": {"status": "cancelled", "authoritative": True}}
-    )
+    res = service.battle_cancel(user_id, battle_id)
+    if not res.get("already_terminal"):
+        sandbox_id = battle.get("sandbox_id")
+        if sandbox_id:
+            sandbox_launcher.stop_sandbox(sandbox_id)
+        event_bus.publish(
+            battle_id, {"type": "battle_status", "data": {"status": "cancelled", "authoritative": True}}
+        )
     return {"id": battle_id, "status": "cancelled"}
 
 
@@ -229,5 +230,4 @@ def save_battle(battle_id: str, user_id: str = Depends(get_current_user)):
     from .persistence import service
 
     service.battle_save(user_id, battle_id)
-    mock_runner.persist_scores(battle_id)
     return {"id": battle_id, "saved": True}
