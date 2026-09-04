@@ -1,0 +1,16 @@
+{
+  "name": "Agent Arena",
+  "install": "./.cursor/install.sh",
+  "start": "./.cursor/start.sh",
+  "terminals": [
+    {
+      "name": "backend",
+      "command": "./.cursor/run-backend.sh"
+    },
+    {
+      "name": "frontend",
+      "command": "./.cursor/run-frontend.sh"
+    }
+  ],
+  "ports": [8000, 3000]
+}
