@@ -51,10 +51,16 @@ export default function ExecutionSurface({
   const [tab, setTab] = useState<Tab>("terminal");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const terminalRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const programmaticScrollRef = useRef(false);
 
   const actions = useMemo(
     () => events.map((item) => ({ item, action: parseAction(item) })).filter((row) => row.action),
     [events],
+  );
+  const terminalSignature = useMemo(
+    () => actions.map(({ action }) => `${action?.command}:${action?.state}:${action?.result || ""}`).join("\n"),
+    [actions],
   );
 
   const latestArtifact = artifacts[artifacts.length - 1]?.artifact || "";
@@ -69,10 +75,28 @@ export default function ExecutionSurface({
   }, [fileNames, files, selectedFile]);
 
   useEffect(() => {
-    if (tab === "terminal" && terminalRef.current) {
-      terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
-    }
-  }, [actions.length, tab]);
+    if (tab === "terminal") stickToBottomRef.current = true;
+  }, [tab]);
+
+  useEffect(() => {
+    const node = terminalRef.current;
+    if (tab !== "terminal" || !node || !stickToBottomRef.current) return;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    programmaticScrollRef.current = true;
+    node.scrollTo({
+      top: node.scrollHeight,
+      behavior: reduceMotion ? "auto" : "smooth",
+    });
+    const release = () => {
+      programmaticScrollRef.current = false;
+    };
+    node.addEventListener("scrollend", release, { once: true });
+    const fallback = window.setTimeout(release, 450);
+    return () => {
+      node.removeEventListener("scrollend", release);
+      window.clearTimeout(fallback);
+    };
+  }, [tab, terminalSignature]);
 
   const loadedSkills = useMemo(() => {
     const seen = new Set<string>();
@@ -110,28 +134,35 @@ export default function ExecutionSurface({
       aria-label={`${displayName} execution workspace`}
     >
       <header className="arena-surface-header">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2.5">
-            <span
-              className={cn(
-                "h-1.5 w-1.5 rounded-full",
-                state === "running" && "bg-fuchsia-400 shadow-[0_0_10px_rgba(232,121,249,.65)]",
-                state === "complete" && "bg-emerald-400",
-                state === "failed" && "bg-rose-400",
-                (state === "waiting" || state === "starting") && "bg-zinc-600",
-              )}
-            />
-            <h2 className="truncate text-[14px] font-semibold tracking-[-0.02em] text-zinc-100">
-              {displayName}
-            </h2>
-            <span className="hidden font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-600 sm:inline">
-              {role}
-            </span>
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <div className="h-2.5 w-2.5 rounded-full bg-rose-500/80 shadow-[0_0_6px_rgba(244,63,94,0.5)]" />
+            <div className="h-2.5 w-2.5 rounded-full bg-amber-500/80 shadow-[0_0_6px_rgba(245,158,11,0.5)]" />
+            <div className="h-2.5 w-2.5 rounded-full bg-emerald-500/80 shadow-[0_0_6px_rgba(16,185,129,0.5)]" />
           </div>
-          <div className="mt-1.5 flex min-w-0 items-center gap-2 font-mono text-[9px] text-zinc-600">
-            <span className="truncate">{modelId}</span>
-            <span>·</span>
-            <span className="shrink-0">{phase || "runtime"}</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2.5">
+              <span
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full",
+                  state === "running" && "bg-cyan-400 shadow-[0_0_12px_rgba(0,210,255,0.8)] animate-pulse",
+                  state === "complete" && "bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]",
+                  state === "failed" && "bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.5)]",
+                  (state === "waiting" || state === "starting") && "bg-zinc-600",
+                )}
+              />
+              <h2 className="truncate text-[14px] font-semibold tracking-[-0.02em] text-zinc-100">
+                {displayName}
+              </h2>
+              <span className="hidden font-mono text-[9px] uppercase tracking-[0.14em] text-zinc-500 sm:inline">
+                {role}
+              </span>
+            </div>
+            <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[9px] text-zinc-500">
+              <span className="truncate">{modelId}</span>
+              <span>·</span>
+              <span className="shrink-0">{phase || "runtime"}</span>
+            </div>
           </div>
         </div>
 
@@ -143,14 +174,14 @@ export default function ExecutionSurface({
                 {humanSkillLabel(loadedSkills[loadedSkills.length - 1])}
               </span>
               {loadedSkills.length > 1 ? (
-                <span className="font-mono text-[9px] text-fuchsia-300">+{loadedSkills.length - 1}</span>
+                <span className="font-mono text-[9px] text-cyan-400">+{loadedSkills.length - 1}</span>
               ) : null}
             </div>
           ) : null}
           <span
             className={cn(
               "font-mono text-[9px] font-semibold uppercase tracking-[0.12em]",
-              state === "running" && "text-fuchsia-300",
+              state === "running" && "text-cyan-400 drop-shadow-[0_0_8px_rgba(0,210,255,0.6)]",
               state === "complete" && "text-emerald-300",
               state === "failed" && "text-rose-300",
               (state === "waiting" || state === "starting") && "text-zinc-500",
@@ -177,9 +208,19 @@ export default function ExecutionSurface({
         ))}
       </nav>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[#08090b]">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-transparent">
         {tab === "terminal" ? (
-          <div ref={terminalRef} className="arena-terminal">
+          <div
+            ref={terminalRef}
+            className="arena-terminal"
+            onScroll={() => {
+              if (programmaticScrollRef.current) return;
+              const node = terminalRef.current;
+              if (!node) return;
+              const distance = node.scrollHeight - node.scrollTop - node.clientHeight;
+              stickToBottomRef.current = distance <= 96;
+            }}
+          >
             {actions.length ? (
               <div className="space-y-0">
                 {actions.map(({ item, action }, index) => {
@@ -194,13 +235,13 @@ export default function ExecutionSurface({
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex min-w-0 items-start gap-2 font-mono text-[12px] leading-5">
-                            <span className={cn("select-none", failed ? "text-rose-400" : running ? "text-fuchsia-300" : "text-zinc-600")}>
+                            <span className={cn("select-none font-bold", failed ? "text-rose-400" : running ? "text-cyan-400 drop-shadow-[0_0_6px_rgba(0,210,255,0.8)]" : "text-zinc-600")}>
                               {failed ? "×" : running ? "›" : "$"}
                             </span>
                             <span className="break-words text-zinc-200">{action.command}</span>
                           </div>
                           {action.result ? (
-                            <pre className={cn("mt-2 whitespace-pre-wrap break-words font-mono text-[11.5px] leading-[1.6]", failed ? "text-rose-300/90" : "text-zinc-500")}>
+                            <pre className={cn("mt-2 rounded-lg bg-black/50 p-3 border whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.6]", failed ? "text-rose-300/90 border-rose-500/20" : "text-zinc-400 border-white/[0.04]")}>
                               {action.result}
                             </pre>
                           ) : null}
@@ -212,11 +253,14 @@ export default function ExecutionSurface({
               </div>
             ) : (
               <div className="flex h-full items-center justify-center px-8 text-center">
-                <div>
-                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-zinc-600">
+                <div className="flex flex-col items-center">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-500/20 bg-cyan-500/5 text-cyan-400">
+                    <TerminalSquare className="h-5 w-5 opacity-75" />
+                  </div>
+                  <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-400/90">
                     {state === "waiting" ? "Waiting for execution" : "No tool activity yet"}
                   </div>
-                  <p className="mt-2 max-w-[36ch] text-[12px] leading-5 text-zinc-700">
+                  <p className="mt-1.5 max-w-[34ch] text-[11px] leading-5 text-zinc-500">
                     This surface only renders runtime events emitted by the battle.
                   </p>
                 </div>
@@ -227,7 +271,7 @@ export default function ExecutionSurface({
 
         {tab === "files" ? (
           <div className="grid h-full min-h-0 grid-cols-[180px_minmax(0,1fr)]">
-            <aside className="overflow-y-auto border-r border-white/[0.06] bg-[#0a0b0d] py-2">
+            <aside className="overflow-y-auto border-r border-white/[0.06] bg-[#0d101a]/80 py-2">
               {fileNames.map((name) => (
                 <button
                   key={name}

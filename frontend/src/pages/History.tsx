@@ -127,15 +127,15 @@ export default function History() {
   }, [battles, statusFilter, formatFilter, sortOption, searchQuery]);
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#0A0A0A] py-8 text-foreground">
+    <div className="min-h-[calc(100vh-56px)] bg-transparent py-8 text-foreground relative z-10">
       <div className="mx-auto max-w-[1560px] space-y-8 px-4 sm:px-6">
         {/* ================================================================= */}
         {/* HERO CONTAINER                                                    */}
         {/* ================================================================= */}
-        <div className="relative overflow-hidden rounded-2xl border border-[#1F1F22] bg-[#09090E] p-6 shadow-2xl space-y-8 md:p-8">
-          {/* Ambient Neon Radial Glows */}
-          <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.22)_0%,transparent_70%)]"></div>
-          <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.12)_0%,transparent_70%)]"></div>
+        <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0C0E15]/85 backdrop-blur-xl p-6 shadow-2xl space-y-8 md:p-8">
+          {/* Ambient Radiant Glows */}
+          <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(0,210,255,0.18)_0%,transparent_70%)]"></div>
+          <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(217,70,239,0.14)_0%,transparent_70%)]"></div>
 
           {/* Header Row */}
           {err && (
@@ -153,20 +153,20 @@ export default function History() {
               </button>
             </div>
           )}
-          <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-[#1F1F22] pb-6 lg:flex-row lg:items-end">
+          <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-white/[0.08] pb-6 lg:flex-row lg:items-end">
             <div className="space-y-3">
-              <div className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3.5 py-1 text-[11px] font-semibold text-accent shadow-[0_0_12px_rgba(255,0,160,0.25)]">
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-1 text-[11px] font-semibold text-cyan-300 shadow-[0_0_16px_rgba(0,210,255,0.25)]">
                 <Archive className="h-3.5 w-3.5" />
                 HISTORICAL RUN LOGS & VERIFIED REPLAYS
               </div>
 
               <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-white md:text-4xl">
                 Battle{" "}
-                <span className="text-accent drop-shadow-[0_0_20px_rgba(255,0,160,0.45)]">
+                <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#00D2FF] via-[#38BDF8] to-[#D946EF] drop-shadow-[0_0_24px_rgba(0,210,255,0.45)]">
                   Archive
                 </span>
               </h1>
-              <p className="max-w-2xl text-xs leading-relaxed text-zinc-400">
+              <p className="max-w-2xl text-xs leading-relaxed text-zinc-300">
                 Inspect past microVM runs, trace step-by-step terminal outputs,
                 examine generated test suites, and review judge scorecards.
               </p>
@@ -175,7 +175,7 @@ export default function History() {
             <div className="flex items-center gap-3">
               <Link
                 to="/battles/new"
-                className="btn btn-primary flex h-11 items-center gap-2 px-6 text-xs font-bold shadow-[0_0_18px_rgba(255,0,160,0.4)]"
+                className="qos-btn-glow flex h-11 items-center gap-2 px-6 text-xs font-bold"
               >
                 <Plus className="h-4 w-4" />
                 <span>New Battle</span>
@@ -186,9 +186,9 @@ export default function History() {
           {/* =============================================================== */}
           {/* FILTER CONTROLS & SEARCH                                         */}
           {/* =============================================================== */}
-          <div className="relative z-10 flex flex-col gap-4 border-b border-[#1F1F22] pb-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="relative z-10 flex flex-col gap-4 border-b border-white/[0.08] pb-4 lg:flex-row lg:items-center lg:justify-between">
             {/* Status Tabs */}
-            <div className="flex flex-wrap items-center gap-1.5 rounded-xl border border-[#1F1F22] bg-[#050508] p-1.5">
+            <div className="flex flex-wrap items-center gap-1.5 rounded-full border border-white/10 bg-[#0F121A] p-1.5">
               {(
                 [
                   { id: "all", label: "All" },
@@ -203,10 +203,10 @@ export default function History() {
                   key={tab.id}
                   type="button"
                   onClick={() => setStatusFilter(tab.id)}
-                  className={`mono rounded-lg px-3.5 py-1.5 text-xs font-bold transition-all ${
+                  className={`mono rounded-full px-3.5 py-1.5 text-xs font-bold transition-all ${
                     statusFilter === tab.id
-                      ? "bg-accent text-white shadow-[0_0_12px_rgba(255,0,160,0.3)]"
-                      : "text-zinc-400 hover:text-white hover:bg-[#161619]"
+                      ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-[0_0_16px_rgba(0,210,255,0.35)]"
+                      : "text-zinc-400 hover:text-white hover:bg-white/[0.04]"
                   }`}
                 >
                   {tab.label}
@@ -220,7 +220,7 @@ export default function History() {
               <select
                 value={formatFilter}
                 onChange={(e) => setFormatFilter(e.target.value)}
-                className="mono h-9 rounded-xl border border-[#1F1F22] bg-[#050508] px-3 text-xs text-white focus:border-accent focus:outline-none"
+                className="mono h-9 rounded-full border border-white/10 bg-[#0F121A] px-4 text-xs text-white focus:border-cyan-400 focus:outline-none"
               >
                 <option value="all">All Formats</option>
                 {formats.map((f) => (
@@ -234,7 +234,7 @@ export default function History() {
               <select
                 value={sortOption}
                 onChange={(e) => setSortOption(e.target.value as SortOption)}
-                className="mono h-9 rounded-xl border border-[#1F1F22] bg-[#050508] px-3 text-xs text-white focus:border-accent focus:outline-none"
+                className="mono h-9 rounded-full border border-white/10 bg-[#0F121A] px-4 text-xs text-white focus:border-cyan-400 focus:outline-none"
               >
                 <option value="newest">Newest First</option>
                 <option value="duration">By Duration</option>
@@ -242,13 +242,13 @@ export default function History() {
 
               {/* Search Bar */}
               <div className="relative">
-                <Search className="absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                <Search className="absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Search battles..."
-                  className="mono h-9 w-52 rounded-xl border border-[#1F1F22] bg-[#050508] pl-9 pr-3 text-xs text-white placeholder:text-zinc-600 focus:border-accent focus:outline-none"
+                  className="mono h-9 w-52 rounded-full border border-white/10 bg-[#0F121A] pl-9 pr-4 text-xs text-white placeholder:text-zinc-500 focus:border-cyan-400 focus:shadow-[0_0_16px_rgba(0,210,255,0.25)] focus:outline-none"
                 />
               </div>
             </div>
@@ -260,14 +260,14 @@ export default function History() {
           <div className="relative z-10">
             {loading ? (
               <div className="flex flex-col items-center justify-center py-16 space-y-3">
-                <RefreshCw className="h-6 w-6 animate-spin text-accent" />
+                <RefreshCw className="h-6 w-6 animate-spin text-cyan-400" />
                 <span className="mono text-xs text-zinc-400">
                   Loading battle archive…
                 </span>
               </div>
             ) : filteredBattles.length === 0 ? (
-              <div className="rounded-xl border border-[#1F1F22] bg-[#050508] p-12 text-center space-y-4">
-                <div className="grid h-12 w-12 place-items-center rounded-xl bg-accent/10 border border-accent/30 text-accent mx-auto">
+              <div className="rounded-2xl border border-white/[0.08] bg-[#11141E]/80 backdrop-blur-md p-12 text-center space-y-4 shadow-xl">
+                <div className="grid h-12 w-12 place-items-center rounded-2xl bg-cyan-400/10 border border-cyan-400/30 text-cyan-400 mx-auto">
                   <Archive className="h-6 w-6" />
                 </div>
                 <div className="space-y-1.5">
@@ -282,17 +282,17 @@ export default function History() {
                 </div>
                 <Link
                   to="/battles/new"
-                  className="btn btn-primary mx-auto inline-flex h-10 items-center gap-2 px-6 text-xs font-bold mt-2 shadow-[0_0_14px_rgba(255,0,160,0.3)]"
+                  className="qos-btn-glow mx-auto inline-flex h-10 items-center gap-2 px-6 text-xs font-bold mt-2"
                 >
                   <Plus className="h-4 w-4" />
                   <span>Launch New Battle</span>
                 </Link>
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-[#1F1F22] bg-[#050508]">
+              <div className="overflow-x-auto rounded-2xl border border-white/[0.08] bg-[#11141E]/85 backdrop-blur-md shadow-xl">
                 <table className="w-full text-left text-xs mono">
                   <thead>
-                    <tr className="border-b border-[#1F1F22] bg-[#0D0D0F] text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
+                    <tr className="border-b border-white/[0.08] bg-white/[0.02] text-[11px] font-bold text-zinc-400 uppercase tracking-wider">
                       <th className="py-3.5 pl-6 pr-3 w-28">STATUS</th>
                       <th className="py-3.5 px-4">BATTLE / FORMAT</th>
                       <th className="py-3.5 px-4">FIGHTERS</th>
@@ -301,7 +301,7 @@ export default function History() {
                       <th className="py-3.5 pr-6 pl-4 text-right">ACTION</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#1F1F22]">
+                  <tbody className="divide-y divide-white/[0.06]">
                     {filteredBattles.map((b) => {
                       const isLive = b.status === "running";
                       const isDone = b.status === "completed";
@@ -311,24 +311,24 @@ export default function History() {
                       return (
                         <tr
                           key={b.id}
-                          className="transition-colors hover:bg-[#0D0D0F]"
+                          className="transition-colors hover:bg-white/[0.03]"
                         >
                           {/* Status */}
                           <td className="py-4 pl-6 pr-3 font-bold">
                             {isLive && (
-                              <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/40 bg-accent/15 px-2.5 py-0.5 text-[10.5px] font-bold text-accent">
-                                <span className="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+                              <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/40 bg-cyan-400/15 px-2.5 py-0.5 text-[10.5px] font-bold text-cyan-300 shadow-[0_0_12px_rgba(0,210,255,0.25)]">
+                                <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-ping" />
                                 ● LIVE
                               </span>
                             )}
                             {isDone && (
-                              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-400">
+                              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-950/40 px-2.5 py-0.5 text-[10.5px] font-bold text-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.15)]">
                                 <CheckCircle2 className="h-3 w-3" />
                                 ✓ DONE
                               </span>
                             )}
                             {isFailed && (
-                              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-500/40 bg-red-950/40 px-2.5 py-0.5 text-[10.5px] font-bold text-red-400">
+                              <span className="inline-flex items-center gap-1.5 rounded-full border border-red-500/40 bg-red-950/40 px-2.5 py-0.5 text-[10.5px] font-bold text-red-400 shadow-[0_0_12px_rgba(239,68,68,0.15)]">
                                 <XCircle className="h-3 w-3" />
                                 × FAILED
                               </span>
@@ -345,15 +345,15 @@ export default function History() {
                             <div className="font-bold text-white text-sm">
                               {b.custom_title || b.title || (b.target_id ? `Target: ${b.target_id}` : b.format_id)}
                             </div>
-                            <div className="text-[10.5px] text-zinc-500 flex flex-wrap items-center gap-2 mt-1">
+                            <div className="text-[10.5px] text-zinc-400 flex flex-wrap items-center gap-2 mt-1">
                               <span>ID: {b.id.slice(0, 12)}…</span>
                               {b.target_id && (
-                                <span className="rounded border border-accent/40 bg-accent/15 px-2 py-0.5 text-[9.5px] font-bold text-accent">
+                                <span className="rounded-full border border-cyan-400/40 bg-cyan-400/15 px-2.5 py-0.5 text-[9.5px] font-bold text-cyan-300 shadow-[0_0_10px_rgba(0,210,255,0.2)]">
                                   TARGET · {b.target_id} {b.target_version ? `v${b.target_version}` : ""}
                                 </span>
                               )}
                               {b.saved && (
-                                <span className="text-accent font-bold">★ SAVED</span>
+                                <span className="text-cyan-400 font-bold">★ SAVED</span>
                               )}
                             </div>
                           </td>
@@ -363,7 +363,7 @@ export default function History() {
                             <div className="font-bold text-zinc-200">
                               {(b.model_ids || []).join("  vs  ")}
                             </div>
-                            <div className="text-[10.5px] text-zinc-500">
+                            <div className="text-[10.5px] text-zinc-400">
                               Isolated MicroVM execution
                             </div>
                           </td>
@@ -371,7 +371,7 @@ export default function History() {
                           {/* Result / Verdict */}
                           <td className="py-4 px-4">
                             {isLive && (
-                              <span className="text-accent font-bold">
+                              <span className="text-cyan-400 font-bold animate-pulse">
                                 Running Phase Pipeline…
                               </span>
                             )}
@@ -391,7 +391,7 @@ export default function History() {
                           {/* Duration */}
                           <td className="py-4 px-4 text-zinc-400 text-xs">
                             <div className="flex items-center gap-1.5">
-                              <Clock className="h-3 w-3 text-zinc-500" />
+                              <Clock className="h-3 w-3 text-zinc-400" />
                               <span>{formatDuration(b.timeout_seconds)}</span>
                             </div>
                           </td>
@@ -400,7 +400,7 @@ export default function History() {
                           <td className="py-4 pr-6 pl-4 text-right">
                             <Link
                               to={`/battles/${b.id}`}
-                              className="mono inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3.5 py-1.5 text-xs font-bold text-accent transition-all hover:bg-accent/20 hover:border-accent"
+                              className="mono inline-flex items-center gap-1.5 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-1.5 text-xs font-bold text-cyan-300 transition-all hover:bg-cyan-400/20 hover:border-cyan-400 hover:shadow-[0_0_12px_rgba(0,210,255,0.25)]"
                             >
                               <span>{isLive ? "View Live →" : "Replay →"}</span>
                             </Link>

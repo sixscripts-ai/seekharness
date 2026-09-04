@@ -18,7 +18,7 @@ export default function BattleStatus({ status, verificationStatus, compact = fal
   if (normalized === "running" || normalized === "queued") {
     label = normalized === "running" ? "Live" : "Queued";
     Icon = normalized === "running" ? Loader2 : CircleDot;
-    tone = normalized === "running" ? "text-fuchsia-300" : "text-zinc-400";
+    tone = normalized === "running" ? "text-cyan-400 drop-shadow-[0_0_8px_rgba(0,210,255,0.6)]" : "text-zinc-400";
   } else if (normalized === "completed" && verification === "verified_pass") {
     label = "Verified pass";
     Icon = CheckCircle2;

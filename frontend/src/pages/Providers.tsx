@@ -579,34 +579,34 @@ export default function Providers() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-56px)] bg-[#0A0A0A] py-8 text-foreground">
+    <div className="min-h-[calc(100vh-56px)] bg-transparent py-8 text-foreground relative z-10">
       <div className="mx-auto max-w-[1560px] space-y-10 px-4 sm:px-6">
         {/* ================================================================= */}
         {/* HERO CONTAINER WITH RADIAL HOME PAGE GLOWS                        */}
         {/* ================================================================= */}
-        <div className="relative overflow-hidden rounded-2xl border border-[#1F1F22] bg-[#09090E] p-6 shadow-2xl space-y-8 md:p-8">
-          {/* Ambient Neon Radial Glows */}
-          <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.22)_0%,transparent_70%)]"></div>
-          <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(255,0,160,0.12)_0%,transparent_70%)]"></div>
+        <div className="relative overflow-hidden rounded-2xl border border-white/[0.08] bg-[#0C0E15]/85 backdrop-blur-xl p-6 shadow-2xl space-y-8 md:p-8">
+          {/* Ambient Radiant Glows */}
+          <div className="pointer-events-none absolute -right-24 -top-24 h-96 w-96 rounded-full bg-[radial-gradient(circle,rgba(0,210,255,0.18)_0%,transparent_70%)]"></div>
+          <div className="pointer-events-none absolute -bottom-24 -left-24 h-80 w-80 rounded-full bg-[radial-gradient(circle,rgba(217,70,239,0.14)_0%,transparent_70%)]"></div>
 
           {/* Header Row */}
-          <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-[#1F1F22] pb-6 lg:flex-row lg:items-end">
+          <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-white/[0.08] pb-6 lg:flex-row lg:items-end">
             <div className="space-y-3">
-              <div className="inline-flex items-center gap-2 rounded-full border border-accent/40 bg-accent/10 px-3.5 py-1 text-[11px] font-semibold text-accent shadow-[0_0_12px_rgba(255,0,160,0.25)]">
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-1 text-[11px] font-semibold text-cyan-300 shadow-[0_0_16px_rgba(0,210,255,0.25)]">
                 <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"></span>
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-accent"></span>
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400 opacity-75"></span>
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-cyan-400"></span>
                 </span>
                 AUTHORITATIVE MODEL REGISTRY • ZERO FABRICATED LOGS
               </div>
 
               <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-white md:text-4xl">
                 Model{" "}
-                <span className="text-accent drop-shadow-[0_0_20px_rgba(255,0,160,0.45)]">
+                <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#00D2FF] via-[#38BDF8] to-[#D946EF] drop-shadow-[0_0_24px_rgba(0,210,255,0.45)]">
                   Registry
                 </span>
               </h1>
-              <p className="max-w-2xl text-xs leading-relaxed text-zinc-400">
+              <p className="max-w-2xl text-xs leading-relaxed text-zinc-300">
                 Authoritative catalog of platform-hosted models and encrypted
                 personal credentials with real-time health verification.
               </p>
@@ -616,7 +616,7 @@ export default function Providers() {
               <button
                 type="button"
                 onClick={() => openRegisterModal()}
-                className="btn btn-primary flex h-11 items-center gap-2 px-6 text-xs font-bold shadow-[0_0_18px_rgba(255,0,160,0.4)]"
+                className="qos-btn-glow flex h-11 items-center gap-2 px-6 text-xs font-bold"
               >
                 <Plus className="h-4 w-4" />
                 <span>Register Provider</span>
@@ -625,8 +625,8 @@ export default function Providers() {
           </div>
 
           {loading && (
-            <div className="relative z-10 flex items-center gap-2 rounded-xl border border-[#1F1F22] bg-[#0D0D0F] p-4 text-xs text-zinc-400">
-              <RefreshCw className="h-4 w-4 animate-spin text-accent" />
+            <div className="relative z-10 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-[#11141E]/80 p-4 text-xs text-zinc-400">
+              <RefreshCw className="h-4 w-4 animate-spin text-cyan-400" />
               <span className="mono">Loading model registry…</span>
             </div>
           )}
@@ -666,15 +666,15 @@ export default function Providers() {
           {/* =============================================================== */}
           {/* GLOBAL TABS & SEARCH CONTROLS                                    */}
           {/* =============================================================== */}
-          <div className="relative z-10 flex flex-col gap-4 border-b border-[#1F1F22] pb-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-1.5 rounded-xl border border-[#1F1F22] bg-[#050508] p-1.5">
+          <div className="relative z-10 flex flex-col gap-4 border-b border-white/[0.08] pb-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-[#0F121A] p-1.5">
               <button
                 type="button"
                 onClick={() => setActiveTab("all")}
-                className={`mono rounded-lg px-4 py-2 text-xs font-bold transition-all ${
+                className={`mono rounded-full px-4 py-2 text-xs font-bold transition-all ${
                   activeTab === "all"
-                    ? "bg-accent text-white shadow-[0_0_12px_rgba(255,0,160,0.35)]"
-                    : "text-zinc-400 hover:text-white hover:bg-[#161619]"
+                    ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-[0_0_16px_rgba(0,210,255,0.35)]"
+                    : "text-zinc-400 hover:text-white hover:bg-white/[0.04]"
                 }`}
               >
                 All Active ({totalActiveCount})
@@ -682,10 +682,10 @@ export default function Providers() {
               <button
                 type="button"
                 onClick={() => setActiveTab("hidden")}
-                className={`mono rounded-lg px-4 py-2 text-xs font-bold transition-all ${
+                className={`mono rounded-full px-4 py-2 text-xs font-bold transition-all ${
                   activeTab === "hidden"
-                    ? "bg-accent text-white shadow-[0_0_12px_rgba(255,0,160,0.35)]"
-                    : "text-zinc-400 hover:text-white hover:bg-[#161619]"
+                    ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-[0_0_16px_rgba(0,210,255,0.35)]"
+                    : "text-zinc-400 hover:text-white hover:bg-white/[0.04]"
                 }`}
               >
                 Hidden ({totalHiddenCount})
@@ -700,20 +700,20 @@ export default function Providers() {
                     clearAll();
                     setMsg("Restored all hidden models to active arena lineup.");
                   }}
-                  className="mono h-9 px-3.5 rounded-xl border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60"
+                  className="mono h-9 px-4 rounded-full border border-emerald-500/40 bg-emerald-950/30 text-xs font-bold text-emerald-400 hover:bg-emerald-950/60"
                 >
                   [ RESTORE ALL HIDDEN ]
                 </button>
               )}
 
               <div className="relative">
-                <Search className="absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                <Search className="absolute left-3.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
                 <input
                   type="text"
                   value={filterQuery}
                   onChange={(e) => setFilterQuery(e.target.value)}
                   placeholder="Search models & credentials..."
-                  className="mono h-9 w-60 rounded-xl border border-[#1F1F22] bg-[#050508] pl-9 pr-3 text-xs text-white placeholder:text-zinc-600 focus:border-accent focus:outline-none"
+                  className="mono h-9 w-60 rounded-full border border-white/10 bg-[#0F121A] pl-9 pr-4 text-xs text-white placeholder:text-zinc-500 focus:border-cyan-400 focus:shadow-[0_0_16px_rgba(0,210,255,0.25)] focus:outline-none"
                 />
               </div>
             </div>

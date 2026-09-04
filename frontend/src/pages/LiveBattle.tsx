@@ -12,6 +12,7 @@ import {
   Save,
   Square,
   Target,
+  TerminalSquare,
   XCircle,
 } from "lucide-react";
 import {
@@ -105,7 +106,7 @@ function rolesForFormat(format: FormatOut | null): string[] {
 
 export default function LiveBattle() {
   const { id } = useParams<{ id: string }>();
-  const { user, jwt, refreshJwt } = useAuth();
+  const { user, jwt, refreshJwt, loading } = useAuth();
   const [battle, setBattle] = useState<BattleOut | null>(null);
   const [format, setFormat] = useState<FormatOut | null>(null);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
@@ -411,13 +412,24 @@ export default function LiveBattle() {
     URL.revokeObjectURL(url);
   }
 
+  if (loading) {
+    return (
+      <div className="grid min-h-[calc(100vh-56px)] place-items-center bg-transparent">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-400 border-t-transparent shadow-[0_0_15px_rgba(0,210,255,0.4)]" />
+          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-300">Synchronizing Battle Stream...</div>
+        </div>
+      </div>
+    );
+  }
+
   if (!user) {
     return (
-      <div className="grid min-h-[calc(100vh-56px)] place-items-center bg-[#07080a] px-6">
-        <div className="max-w-[34ch] text-center">
-          <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-zinc-600">Private execution</div>
+      <div className="grid min-h-[calc(100vh-56px)] place-items-center bg-transparent px-6">
+        <div className="max-w-[36ch] text-center rounded-2xl border border-white/[0.08] bg-[#0c0f18]/80 p-8 backdrop-blur-xl shadow-2xl">
+          <div className="font-mono text-[9px] uppercase tracking-[0.16em] text-cyan-400">Private execution</div>
           <p className="mt-3 text-[13px] leading-6 text-zinc-400">Log in to inspect this battle and its execution stream.</p>
-          <Link to="/login" className="mt-5 inline-flex h-9 items-center rounded-md bg-zinc-100 px-4 text-[11px] font-semibold text-zinc-950">Log in</Link>
+          <Link to="/login" className="mt-5 inline-flex h-9 items-center rounded-xl bg-gradient-to-r from-cyan-400 to-blue-500 px-5 text-[11px] font-semibold text-zinc-950 shadow-[0_0_15px_rgba(0,210,255,0.4)] transition hover:brightness-110">Log in</Link>
         </div>
       </div>
     );
@@ -428,7 +440,7 @@ export default function LiveBattle() {
   const dualDesktop = modelIds.length === 2;
 
   return (
-    <div className="battle-live bg-[#07080a] text-zinc-100">
+    <div className="battle-live bg-transparent text-zinc-100">
       <header className="battle-command-bar">
         <div className="flex min-w-0 items-center gap-3">
           <Link to="/battles" className="battle-icon-button" title="Back to battles"><ArrowLeft className="h-4 w-4" /></Link>
@@ -475,9 +487,9 @@ export default function LiveBattle() {
       </header>
 
       {err ? (
-        <div className="flex items-start gap-3 border-b border-rose-400/20 bg-rose-400/[0.05] px-5 py-2.5 text-[10px] text-rose-200">
-          <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span className="min-w-0 flex-1 break-words">{err}</span>
-          <button type="button" onClick={() => setErr(null)} className="text-zinc-600 hover:text-zinc-300">dismiss</button>
+        <div className="flex items-start gap-3 border-b border-rose-500/30 bg-rose-950/40 px-5 py-2.5 text-[11px] text-rose-200 backdrop-blur-md">
+          <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" /><span className="min-w-0 flex-1 break-words">{err}</span>
+          <button type="button" onClick={() => setErr(null)} className="font-mono text-[10px] uppercase text-zinc-400 hover:text-zinc-100">dismiss</button>
         </div>
       ) : null}
 
@@ -489,27 +501,27 @@ export default function LiveBattle() {
             const done = index < currentPhaseIndex || (TERMINAL_STATES.has(status) && index <= currentPhaseIndex);
             return (
               <div key={`${item}-${index}`} className="flex shrink-0 items-center gap-2">
-                <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-fuchsia-400" : done ? "bg-emerald-400/70" : "bg-zinc-800")} />
-                <span className={cn("font-mono text-[9px]", active ? "text-zinc-200" : done ? "text-zinc-500" : "text-zinc-700")}>{titleCase(item)}</span>
-                {index < pipeline.length - 1 ? <span className="h-px w-5 bg-white/[0.07]" /> : null}
+                <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-cyan-400 shadow-[0_0_8px_rgba(0,210,255,0.8)] animate-pulse" : done ? "bg-emerald-400/80" : "bg-zinc-800")} />
+                <span className={cn("font-mono text-[9px]", active ? "text-cyan-200 font-semibold drop-shadow-[0_0_8px_rgba(0,210,255,0.4)]" : done ? "text-zinc-400" : "text-zinc-600")}>{titleCase(item)}</span>
+                {index < pipeline.length - 1 ? <span className="h-px w-5 bg-white/[0.08]" /> : null}
               </div>
             );
           })}
         </div>
 
         {targetDetail?.objectives?.length ? (
-          <button type="button" onClick={() => setShowMission((value) => !value)} className="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.11em] text-zinc-600 hover:text-zinc-300 md:flex">
+          <button type="button" onClick={() => setShowMission((value) => !value)} className="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.11em] text-zinc-500 hover:text-cyan-300 md:flex">
             Mission <ChevronDown className={cn("h-3 w-3 transition", showMission && "rotate-180")} />
           </button>
         ) : null}
       </div>
 
       {showMission && targetDetail?.objectives?.length ? (
-        <div className="border-b border-white/[0.06] bg-[#090a0c] px-5 py-3">
+        <div className="border-b border-white/[0.08] bg-[#0c0f18]/80 backdrop-blur-md px-5 py-3">
           <div className="mx-auto flex max-w-[1500px] flex-wrap gap-x-8 gap-y-2">
             {targetDetail.objectives.map((objective, index) => (
-              <div key={`${objective}-${index}`} className="flex max-w-[46ch] items-start gap-2 text-[10px] leading-5 text-zinc-500">
-                <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-zinc-700" /><span>{objective}</span>
+              <div key={`${objective}-${index}`} className="flex max-w-[46ch] items-start gap-2 text-[10px] leading-5 text-zinc-400">
+                <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-cyan-400/60" /><span>{objective}</span>
               </div>
             ))}
           </div>
@@ -517,7 +529,7 @@ export default function LiveBattle() {
       ) : null}
 
       {modelIds.length > 1 ? (
-        <div className="battle-fighter-switcher xl:hidden">
+        <div className={cn("battle-fighter-switcher", dualDesktop && "md:hidden")}>
           {modelIds.map((modelId, index) => (
             <button key={modelId} type="button" onClick={() => setSelectedModelId(modelId)} className={cn("battle-fighter-switch", selectedModelId === modelId && "battle-fighter-switch-active")}>
               <span>{modelName(modelId)}</span><span>{roleForModel(modelId, index)}</span>
@@ -533,9 +545,10 @@ export default function LiveBattle() {
               const history = histories.get(modelId) || [];
               const artifacts = history.filter((item) => item.kind === "artifact");
               const skills = skillActivity.filter((item) => item.modelId === modelId);
-              const hideWhenCompact = modelIds.length > 1 && selectedModelId !== modelId;
+              const hideOnMobile = dualDesktop && selectedModelId !== modelId;
+              const hideExtra = modelIds.length > 2 && selectedModelId !== modelId;
               return (
-                <div key={modelId} className={cn("battle-stage-slot", hideWhenCompact && "hidden xl:block", modelIds.length > 2 && hideWhenCompact && "xl:hidden")}>
+                <div key={modelId} className={cn("battle-stage-slot", hideExtra && "hidden", hideOnMobile && "max-md:hidden")}>
                   <ExecutionSurface
                     modelId={modelId}
                     displayName={modelName(modelId)}
@@ -554,11 +567,12 @@ export default function LiveBattle() {
             })}
 
             {!modelIds.length ? (
-              <div className="flex min-h-[520px] items-center justify-center bg-[#08090b] text-center">
-                <div>
-                  <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-zinc-700">Waiting for fighters</div>
-                  <p className="mt-2 text-[11px] text-zinc-700">No execution slot has been reported yet.</p>
+              <div className="flex min-h-[520px] flex-col items-center justify-center rounded-2xl border border-white/[0.08] bg-[#0b0e15]/70 p-8 text-center backdrop-blur-xl">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-400 shadow-[0_0_20px_rgba(0,210,255,0.2)]">
+                  <TerminalSquare className="h-6 w-6 animate-pulse" />
                 </div>
+                <div className="mt-4 font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-300">Awaiting Fighter Stream</div>
+                <p className="mt-2 max-w-[34ch] text-[12px] leading-5 text-zinc-400">Battle initialized. Ready to receive streaming runtime events and execution slots.</p>
               </div>
             ) : null}
           </div>

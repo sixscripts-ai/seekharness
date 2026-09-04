@@ -585,45 +585,45 @@ export default function NewBattle() {
   return (
     <form
       onSubmit={onSubmit}
-      className="min-h-[calc(100vh-56px)] bg-background text-foreground"
+      className="min-h-[calc(100vh-56px)] bg-transparent text-foreground relative z-10"
     >
-      <header className="border-b border-border">
+      <header className="border-b border-white/[0.08] bg-[#0C0E15]/80 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1360px] flex-col gap-4 px-6 py-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-accent">
+            <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-cyan-400 font-bold">
               New battle
             </div>
 
-            <h1 className="mt-2 font-display text-[38px] font-semibold leading-none tracking-[-0.04em] md:text-[52px]">
+            <h1 className="mt-2 font-display text-[38px] font-semibold leading-none tracking-[-0.04em] md:text-[52px] bg-clip-text text-transparent bg-gradient-to-r from-white via-cyan-100 to-cyan-400">
               Battle Control Room
             </h1>
 
-            <p className="mt-3 max-w-[62ch] text-[13px] leading-5 text-muted">
+            <p className="mt-3 max-w-[62ch] text-[13px] leading-5 text-zinc-300">
               {target
                 ? "Assign models to the frozen target roles, review the immutable execution contract, and deploy."
                 : "Define the arena, assign the fighters, set the execution contract, and deploy."}
             </p>
           </div>
 
-          <div className="border border-border bg-surface px-4 py-3">
-            <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-muted">
+          <div className="rounded-xl border border-white/[0.08] bg-[#11141E]/90 backdrop-blur-md px-5 py-3.5 shadow-lg">
+            <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-zinc-400">
               Launch readiness
             </div>
 
             <div className="mt-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em]">
               <span
-                className={`h-1.5 w-1.5 ${
+                className={`h-2 w-2 rounded-full ${
                   ready
-                    ? "bg-[var(--success)]"
-                    : "bg-[var(--warn)]"
+                    ? "bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.6)]"
+                    : "bg-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.6)]"
                 }`}
               />
 
               <span
                 className={
                   ready
-                    ? "text-[var(--success)]"
-                    : "text-muted"
+                    ? "text-emerald-400 font-bold"
+                    : "text-zinc-400"
                 }
               >
                 {ready
@@ -1421,7 +1421,7 @@ export default function NewBattle() {
       )}
 
       {/* STICKY DEPLOY BAR */}
-      <div className="sticky bottom-0 z-20 border-t border-border bg-background/95 backdrop-blur">
+      <div className="sticky bottom-0 z-20 border-t border-white/[0.08] bg-[#0C0E15]/90 backdrop-blur-xl shadow-[0_-8px_32px_rgba(0,0,0,0.5)]">
         <div className="mx-auto grid max-w-[1360px] gap-4 px-6 py-4 lg:grid-cols-[1fr_420px] lg:items-center">
           <div className="grid gap-3 sm:grid-cols-4">
             <ReadinessItem
@@ -1452,11 +1452,11 @@ export default function NewBattle() {
             <ReadinessItem
               ok={
                 visibility ===
-                "isolated"
+                  "isolated"
               }
               warning={
                 visibility ===
-                "open"
+                  "open"
               }
               label="Access"
               value={visibility}
@@ -1474,7 +1474,7 @@ export default function NewBattle() {
           <button
             type="submit"
             disabled={!ready}
-            className="btn btn-primary h-12 w-full px-8 text-[12px]"
+            className="qos-btn-glow h-12 w-full px-8 text-[12px] font-bold disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy
               ? "Deploying…"
@@ -1500,23 +1500,23 @@ function SectionHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div className="flex items-start gap-3">
-        <span className="grid h-5 w-5 shrink-0 place-items-center bg-accent font-mono text-[9px] font-bold text-white">
+        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-cyan-400 font-mono text-[9px] font-bold text-black shadow-[0_0_10px_rgba(0,210,255,0.4)]">
           {index}
         </span>
 
         <div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-foreground">
+          <div className="font-mono text-[10px] uppercase tracking-[0.16em] text-cyan-300 font-bold">
             {title}
           </div>
 
-          <p className="mt-1 text-[11px] text-muted">
+          <p className="mt-1 text-[11px] text-zinc-400">
             {description}
           </p>
         </div>
       </div>
 
       {trailing && (
-        <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-accent">
+        <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-cyan-400">
           {trailing}
         </div>
       )}
@@ -1543,39 +1543,39 @@ function ModeCard({
     <button
       type="button"
       onClick={onClick}
-      className={`relative min-h-[170px] p-5 text-left transition-colors ${
+      className={`relative min-h-[170px] p-5 text-left transition-all rounded-2xl border ${
         active
-          ? "bg-[var(--accent-soft)]"
-          : "bg-surface hover:bg-surface2"
+          ? "border-cyan-400/60 bg-cyan-950/20 shadow-[0_0_24px_rgba(0,210,255,0.2)]"
+          : "border-white/[0.08] bg-[#11141E]/80 backdrop-blur-md hover:border-white/20"
       }`}
     >
       {active && (
-        <span className="absolute inset-x-0 top-0 h-px bg-accent" />
+        <span className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent shadow-[0_0_8px_rgba(0,210,255,0.8)]" />
       )}
 
       <div
         className={`font-mono text-[9px] uppercase tracking-[0.15em] ${
           active
-            ? "text-accent"
-            : "text-muted"
+            ? "text-cyan-400 font-bold"
+            : "text-zinc-400"
         }`}
       >
         {eyebrow}
       </div>
 
-      <div className="mt-6 text-[16px] font-semibold tracking-[-0.02em]">
+      <div className="mt-6 text-[16px] font-semibold tracking-[-0.02em] text-white">
         {title}
       </div>
 
-      <p className="mt-2 max-w-[42ch] text-[11px] leading-5 text-muted">
+      <p className="mt-2 max-w-[42ch] text-[11px] leading-5 text-zinc-400">
         {description}
       </p>
 
       <div
         className={`mt-4 font-mono text-[9px] uppercase tracking-[0.1em] ${
           active
-            ? "text-accent"
-            : "text-muted"
+            ? "text-cyan-400 font-bold"
+            : "text-zinc-500"
         }`}
       >
         {footer}{" "}
@@ -1595,14 +1595,14 @@ function ControlCell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="min-h-[154px] bg-surface p-5">
+    <div className="min-h-[154px] rounded-2xl border border-white/[0.08] bg-[#11141E]/85 backdrop-blur-md p-5 shadow-lg">
       <div className="flex items-center justify-between gap-3">
-        <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-muted">
+        <div className="font-mono text-[9px] uppercase tracking-[0.15em] text-zinc-400">
           {label}
         </div>
 
         {value && (
-          <div className="font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
+          <div className="font-mono text-[9px] uppercase tracking-[0.1em] text-cyan-400 font-bold">
             {value}
           </div>
         )}
@@ -1621,16 +1621,16 @@ function SummaryPill({
   text: string;
 }) {
   return (
-    <div className="flex items-center gap-2 border border-border bg-background px-3 py-2">
+    <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3.5 py-2">
       <span
-        className={`h-1.5 w-1.5 ${
+        className={`h-1.5 w-1.5 rounded-full ${
           ok
-            ? "bg-[var(--success)]"
-            : "bg-muted"
+            ? "bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+            : "bg-zinc-500"
         }`}
       />
 
-      <span className="truncate">
+      <span className="truncate text-xs text-zinc-300">
         {text}
       </span>
     </div>
@@ -1645,14 +1645,14 @@ function LockedCell({
   value: string;
 }) {
   return (
-    <div className="bg-surface p-4">
-      <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-muted">
+    <div className="rounded-2xl border border-white/[0.08] bg-[#11141E]/80 p-4 shadow-md">
+      <div className="font-mono text-[8px] uppercase tracking-[0.14em] text-zinc-400">
         {label}
       </div>
-      <div className="mt-3 text-[12px] font-medium text-foreground">
+      <div className="mt-3 text-[12px] font-medium text-white">
         {value}
       </div>
-      <div className="mt-2 font-mono text-[8px] uppercase tracking-[0.1em] text-accent">
+      <div className="mt-2 font-mono text-[8px] uppercase tracking-[0.1em] text-cyan-400 font-bold">
         Manifest locked
       </div>
     </div>
@@ -1671,22 +1671,22 @@ function ReadinessItem({
   value: string;
 }) {
   const dot = warning
-    ? "bg-[var(--warn)]"
+    ? "bg-amber-400 shadow-[0_0_6px_rgba(245,158,11,0.6)]"
     : ok
-      ? "bg-[var(--success)]"
-      : "bg-muted";
+      ? "bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.6)]"
+      : "bg-zinc-600";
 
   return (
     <div className="min-w-0">
-      <div className="flex items-center gap-2 font-mono text-[8px] uppercase tracking-[0.12em] text-muted">
+      <div className="flex items-center gap-2 font-mono text-[8px] uppercase tracking-[0.12em] text-zinc-400">
         <span
-          className={`h-1.5 w-1.5 ${dot}`}
+          className={`h-1.5 w-1.5 rounded-full ${dot}`}
         />
 
         {label}
       </div>
 
-      <div className="mt-1 truncate font-mono text-[9px] text-foreground">
+      <div className="mt-1 truncate font-mono text-[9px] text-white">
         {value}
       </div>
     </div>

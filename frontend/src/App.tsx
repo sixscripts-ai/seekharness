@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, useLocation } from "react-router-dom";
 import SiteHeader from "@/components/SiteHeader";
+import QuantumBackground from "@/components/QuantumBackground";
 import Home from "@/pages/Home";
 import Login from "@/pages/Login";
 import Signup from "@/pages/Signup";
@@ -50,16 +51,18 @@ function AppShell() {
   }, []);
 
   return (
-    <>
-      <SiteHeader />
-      <main
-        className={[
-          fullWidth ? "px-0 py-0" : "mx-auto max-w-[1560px] px-6 py-8",
-          liveBattle ? "meticulous-ignore" : "",
-        ]
-          .filter(Boolean)
-          .join(" ")}
-      >
+    <div className="relative min-h-screen text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
+      <QuantumBackground />
+      <div className="relative z-10">
+        <SiteHeader />
+        <main
+          className={[
+            fullWidth ? "px-0 py-0" : "mx-auto max-w-[1560px] px-6 py-8",
+            liveBattle ? "meticulous-ignore" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={<Login />} />
@@ -77,7 +80,8 @@ function AppShell() {
           <Route path="*" element={<div className="p-8 text-center text-zinc-400">404 — Not found</div>} />
         </Routes>
       </main>
-    </>
+      </div>
+    </div>
   );
 }
 

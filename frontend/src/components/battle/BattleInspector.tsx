@@ -162,11 +162,11 @@ export default function BattleInspector({
                   <span
                     className={cn(
                       "mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full",
-                      row.failed ? "bg-rose-400" : row.type === "skill" ? "bg-fuchsia-400" : row.type === "phase" ? "bg-amber-300" : "bg-zinc-600",
+                      row.failed ? "bg-rose-400" : row.type === "skill" ? "bg-cyan-400 shadow-[0_0_6px_rgba(0,210,255,0.6)]" : row.type === "phase" ? "bg-amber-300" : "bg-zinc-600",
                     )}
                   />
                   <div className="min-w-0">
-                    <div className={cn("font-mono text-[9px] uppercase tracking-[0.09em]", row.failed ? "text-rose-300" : row.type === "skill" ? "text-fuchsia-300" : "text-zinc-600")}>
+                    <div className={cn("font-mono text-[9px] uppercase tracking-[0.09em]", row.failed ? "text-rose-300" : row.type === "skill" ? "text-cyan-400" : "text-zinc-600")}>
                       {row.title}
                     </div>
                     <div className="mt-1 break-words font-mono text-[10px] leading-4 text-zinc-300">{row.detail}</div>
@@ -215,7 +215,7 @@ export default function BattleInspector({
                       return (
                         <div key={`${item.kind}-${item.t}-${index}`} className="grid grid-cols-[14px_minmax(0,1fr)] gap-2 pb-3 last:pb-0">
                           <div className="relative flex justify-center">
-                            <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-fuchsia-400" />
+                            <span className="mt-1.5 h-1.5 w-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(0,210,255,0.6)]" />
                             {index < Math.min(11, selectedSkills.length - 1) ? <span className="absolute top-3 h-[calc(100%-6px)] w-px bg-white/[0.08]" /> : null}
                           </div>
                           <div>
@@ -306,7 +306,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 function ExpertiseRow({ label, active = false }: { label: string; active?: boolean }) {
   return (
     <div className="flex items-center gap-2 text-[10px] text-zinc-300">
-      <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-fuchsia-400" : "bg-zinc-600")} />
+      <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-cyan-400 shadow-[0_0_6px_rgba(0,210,255,0.7)]" : "bg-zinc-600")} />
       <span>{label}</span>
     </div>
   );
