@@ -41,8 +41,12 @@ A packaged challenge the arena verifies. Hidden evaluator material is not fighte
 _Avoid_: challenge, benchmark item (when meaning the hidden suite)
 
 **Evidence**:
-Sandbox or runtime output used as input to judgment. It is never itself the official outcome.
+Input to judgment: sandbox or runtime output, and ingested Finding artifacts when present. It is never itself the official outcome.
 _Avoid_: result, score, winner (when referring to sandbox payloads)
+
+**Finding**:
+A structured risk claim (severity, witness, affected files, confidence, remediation). When a Battle ingests it, it is Evidence. It is never an Official Result.
+_Avoid_: result, score, vulnerability report (as a second store), audit ledger (when meaning Official Result)
 
 **Official Result**:
 The arena-authored score, winner, and pass/fail for a battle. Only the arena may persist it.
