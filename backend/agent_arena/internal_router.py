@@ -64,10 +64,10 @@ def require_internal_key(x_internal_key: str | None = Header(default=None)) -> b
 def _rate_limit(battle_id: str) -> None:
     """Durable per-battle rate limit backed by PostgreSQL / Appwrite.
 
-    The in-process dict was unreliable across Modal replicas and reset on cold
-    start. We persist an internal_call audit event so the limit holds
-    regardless of which replica serves the request. Falls back to the local
-    in-memory window if the datastore is unavailable (best-effort).
+    The in-process dict is a local fast path only. PostgreSQL admission is
+    atomic under a per-battle row lock and is the distributed authority.
+    Datastore failure falls back to the local window and does not claim
+    cross-replica correctness.
     """
     now = time.time()
     # Local fast-path first (cheap, no I/O).
@@ -76,22 +76,17 @@ def _rate_limit(battle_id: str) -> None:
         _rate_counts[battle_id] = window
         if len(window) >= _RATE_LIMIT:
             raise HTTPException(status_code=429, detail="internal rate limit exceeded")
-    # Durable cross-replica window via persistent event store.
     try:
         from .persistence import service
 
         if service.using_postgres():
-            count = service.event_count(
-                battle_id, event_type="internal_call", since_seconds=60
+            admitted = service.rate_limit_admit(
+                battle_id, now=now, limit=_RATE_LIMIT, window_seconds=60.0
             )
-            if count >= _RATE_LIMIT:
-                raise HTTPException(status_code=429, detail="internal rate limit exceeded")
-            service.events_append(
-                battle_id,
-                "internal_call",
-                {"ts": now},
-                event_id=f"rate_{uuid.uuid4().hex}",
-            )
+            if not admitted:
+                raise HTTPException(
+                    status_code=429, detail="internal rate limit exceeded"
+                )
         else:
             databases = db.get_databases()
             database_id = db.get_database_id()
@@ -117,8 +112,13 @@ def _rate_limit(battle_id: str) -> None:
             )
     except HTTPException:
         raise
-    except Exception:
-        pass  # datastore unavailable — rely on the local window only
+    except Exception as exc:
+        try:
+            from .persistence.service import _sanitized_log
+
+            _sanitized_log("rate-limit datastore fallback", exc)
+        except Exception:
+            pass
     with _rate_lock:
         window.append(now)
         _rate_counts[battle_id] = window

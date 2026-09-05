@@ -12,11 +12,18 @@ from __future__ import annotations
 import ipaddress
 import re
 import socket
+from typing import Iterable
 from urllib.parse import urlparse
 
 _URL_IN_TEXT = re.compile(r"(?:[a-z][a-z0-9+.-]*)://[^\s\"'<>]+", re.I)
 _FETCH_BIN = re.compile(
     r"(?:^|[\s;&|`(\n])(?:sudo\s+)?(?:[A-Za-z0-9._/-]+/)?(?:curl|wget)\b",
+    re.I,
+)
+_PACKAGE_INSTALL = re.compile(
+    r"(?:^|[\s;&|`(\n])(?:sudo\s+)?(?:"
+    r"(?:python(?:3)?|python)\s+-m\s+pip|pip3?|uv|"
+    r"npm|pnpm|yarn|bun|poetry)\s+(?:install|add)\b",
     re.I,
 )
 _ABS_PATH_IN_CMD = re.compile(r"(?:^|[\s=<>|&;`'\"(])(/[^\s;|&<>`'\"\)]*)")
@@ -90,6 +97,26 @@ def _normalize_fetch_url(token: str) -> str:
     return "http://" + t
 
 
+def origin_key(url: str) -> str:
+    try:
+        parsed = urlparse(str(url or "").strip())
+        scheme = (parsed.scheme or "").lower()
+        host = (parsed.hostname or "").lower()
+        if scheme not in {"http", "https"} or not host:
+            return ""
+        port = parsed.port
+        if port is None:
+            port = 443 if scheme == "https" else 80
+        if ":" in host and not host.startswith("["):
+            host = f"[{host}]"
+        return f"{scheme}://{host}:{port}"
+    except (TypeError, ValueError):
+        return ""
+
+
+_origin_key = origin_key
+
+
 def _fetch_targets_in_command(command: str) -> list[str]:
     found: list[str] = []
     for match in _URL_IN_TEXT.finditer(command):
@@ -125,7 +152,12 @@ def _fetch_targets_in_command(command: str) -> list[str]:
     return out
 
 
-def command_block_reason(command: str, *, allow_network: bool) -> str | None:
+def command_block_reason(
+    command: str,
+    *,
+    allow_network: bool,
+    allowed_origins: Iterable[str] = (),
+) -> str | None:
     """Return a rejection reason if `command` must not run, else None.
 
     Mirrors the executor's tool-call guard so verification commands (which run
@@ -148,11 +180,26 @@ def command_block_reason(command: str, *, allow_network: bool) -> str | None:
     if abs_match:
         return f"absolute path rejected: {abs_match.group(1)}"
     has_fetch_bin = bool(_FETCH_BIN.search(text))
+    has_package_install = bool(_PACKAGE_INSTALL.search(text))
     targets = _fetch_targets_in_command(text)
-    if (has_fetch_bin or targets) and not allow_network:
-        return "network fetch blocked (target network is false)"
+    allowed = {_origin_key(origin) for origin in allowed_origins if _origin_key(origin)}
+    # A shell fetch command accepts a rich positional grammar (multiple URLs,
+    # --next, config files, and protocol-specific options). Parsing it as a
+    # single URL creates an egress/SSRF bypass when one local origin is
+    # allowlisted. The structured http_request tool is the only safe route to
+    # an explicitly allowed local preview while general network access is off.
+    if has_fetch_bin and not allow_network:
+        return "shell network fetch blocked (use http_request for an allowed local origin)"
+    if (has_package_install or targets) and not allow_network:
+        if not targets or any(
+            _origin_key(_normalize_fetch_url(raw)) not in allowed for raw in targets
+        ):
+            return "network fetch blocked (target network is false)"
     for raw in targets:
-        reason = _fetch_url_blocked(_normalize_fetch_url(raw))
+        normalized = _normalize_fetch_url(raw)
+        if _origin_key(normalized) in allowed:
+            continue
+        reason = _fetch_url_blocked(normalized)
         if reason:
             return f"fetch blocked ({reason})"
     return None

@@ -273,6 +273,10 @@ def test_builder_breaker_executor_runs_asymmetric_phases(
     )
 
     results = _executor_results(transport.rounds)
+    identities = [
+        (r.get("phase"), r.get("role"), r.get("model_id")) for r in results
+    ]
+    assert len(identities) == len(set(identities))
     phases = {r.get("phase"): r for r in results}
     assert "build" in phases and "break" in phases
     assert phases["build"]["role"] == "builder"

@@ -996,6 +996,31 @@ def event_count(
         return 0
 
 
+def rate_limit_admit(
+    battle_id: str,
+    *,
+    now: float | None = None,
+    limit: int = 120,
+    window_seconds: float = 60.0,
+) -> bool:
+    """Atomically admit one internal call for a battle.
+
+    PostgreSQL is the distributed authority. Returns False when the rolling
+    window is already full. Does not record a rejected call. Raises on
+    datastore failure so the caller can fall back to the local window only.
+    """
+    if not using_postgres():
+        raise RuntimeError("rate_limit_admit requires PERSISTENCE_BACKEND=postgres")
+    ts = time.time() if now is None else now
+    with session_scope() as session:
+        return repositories.rate_limits.rate_limit_admit(
+            session,
+            battle_id,
+            now=ts,
+            limit=limit,
+            window_seconds=window_seconds,
+        )
+
 
 def round_create(
     battle_id: str,

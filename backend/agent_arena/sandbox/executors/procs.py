@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import threading
 import time
 from collections import deque
 from pathlib import Path
+
+from .tool_runtime import ProcessRunner, strip_secret_env
 
 _DEFAULT_MAX_LOG_BYTES = 64_000
 
@@ -82,6 +83,12 @@ class ManagedProcess:
             return "running"
         return f"exit {self.proc.returncode}"
 
+    def join_readers(self, timeout: float = 1.0) -> None:
+        deadline = time.time() + max(0.05, timeout)
+        for reader in self._readers:
+            remaining = max(0.0, deadline - time.time())
+            reader.join(remaining)
+
 
 class ProcessManager:
     def __init__(self, workdir: Path):
@@ -101,16 +108,13 @@ class ProcessManager:
             script = bg_dir / f"{name}.sh"
             script.write_text(command, encoding="utf-8")
             script.chmod(0o755)
-            env = dict(env) if env is not None else os.environ.copy()
+            env = strip_secret_env(env if env is not None else os.environ.copy())
             env["ARENA_BG_NAME"] = name
             try:
-                proc = subprocess.Popen(
+                proc = ProcessRunner.start(
                     ["bash", str(script)],
-                    cwd=str(self.workdir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
+                    cwd=self.workdir,
+                    env=env,
                 )
             except Exception as exc:
                 raise RuntimeError(f"failed to start bg {name}: {exc}") from exc
@@ -137,22 +141,8 @@ class ProcessManager:
         if not mp:
             return f"ERROR: no background process {name}"
         if mp.alive():
-            try:
-                os.killpg(os.getpgid(mp.proc.pid), signal.SIGTERM)
-            except Exception:
-                try:
-                    mp.proc.terminate()
-                except Exception:
-                    pass
-            for _ in range(10):
-                if not mp.alive():
-                    break
-                time.sleep(0.1)
-            if mp.alive():
-                try:
-                    os.killpg(os.getpgid(mp.proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+            ProcessRunner.terminate_background(mp.proc)
+        mp.join_readers()
         return f"KILLED {name} {mp.status()}"
 
     def logs(self, name: str, tail_chars: int = 8000) -> str:
@@ -165,9 +155,13 @@ class ProcessManager:
             return f"STDOUT:\n{out}\nSTDERR:\n{err}"
         return out or err or "(no logs yet)"
 
-    def killall(self) -> None:
+    def kill_all(self) -> None:
         for name in list(self._procs):
             try:
                 self.kill(name)
             except Exception:
                 pass
+
+    # Compatibility alias for callers that used the original spelling.
+    def killall(self) -> None:
+        self.kill_all()

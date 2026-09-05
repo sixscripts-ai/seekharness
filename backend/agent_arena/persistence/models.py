@@ -406,3 +406,54 @@ class Memory(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class BattleRateLimit(Base):
+    """Per-battle sliding-window admission state for internal callbacks.
+
+    battle_id is the lock key, not a foreign key: admission must work even when
+    a battle row is missing, and tests must not require a parent battle.
+    """
+
+    __tablename__ = "battle_rate_limits"
+
+    battle_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_ts: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class ScoreReconciliation(Base):
+    """Idempotent score-repair handoff. Elo is a separate operator step."""
+
+    __tablename__ = "score_reconciliations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('scores_repaired_elo_pending', 'elo_acknowledged')",
+            name="ck_score_reconciliations_status",
+        ),
+    )
+
+    battle_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("battles.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    judge_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    repaired_scores: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
