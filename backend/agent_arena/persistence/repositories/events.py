@@ -85,4 +85,3 @@ def event_count(
             since_created_at = datetime.fromtimestamp(since_created_at, tz=timezone.utc)
         stmt = stmt.where(BattleEvent.created_at >= since_created_at)
     return session.scalar(stmt) or 0
-
