@@ -464,4 +464,3 @@ def test_classify_deployment_failure():
     assert classify_deployment_failure("Error: address already in use 0.0.0.0:5173") == "ARENA_INFRA_FAILURE"
     assert classify_deployment_failure("Permission denied: cannot bind socket") == "ARENA_INFRA_FAILURE"
     assert classify_deployment_failure("Neon API unavailable: 503 Service Unavailable") == "ARENA_INFRA_FAILURE"
-

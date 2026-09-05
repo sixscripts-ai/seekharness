@@ -13,17 +13,15 @@ import json
 import os
 import re
 import shutil
-import signal
-import subprocess
+import subprocess  # compatibility export; ProcessRunner owns actual process calls
 import tempfile
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from .base import Executor
+from .base import Executor, judge_weights
 from .tool_result import ToolResult
 from agent_arena.first_token import (
     FAILURE_REASON,
@@ -41,6 +39,14 @@ from .battle_plan import (
     parse_services_spec,
     classify_deployment_failure,
 )
+from .battle_runtime import (
+    AdvancedRunConfig,
+    ArtifactStore,
+    BattleRunContext,
+    EventSink,
+    PhaseRequest,
+    PhaseRunner,
+)
 from .procs import ProcessManager
 from .preview import (
     StaticPreviewServer,
@@ -53,6 +59,7 @@ from .skill_pool import (
     resolve_prerequisites,
     filter_skills,
 )
+from .tool_runtime import ProcessRunner, SandboxPolicy, strip_secret_env
 from ...redact import sanitize_artifact
 
 SKILL_POOL: list[dict] = load_skill_pool()
@@ -77,34 +84,7 @@ from ._command_guard import (
 )
 
 
-def _strip_secret_env(env: dict) -> dict:
-    """Remove credential-bearing variables before handing env to child processes.
-
-    The Modal sandbox env only carries BATTLE_TOKEN/BACKEND_PUBLIC_URL, but
-    in-process runs inherit the full backend env (APPWRITE_API_KEY, HOST_* keys,
-    FERNET_KEY, ...). A fighter could otherwise `TOOL SHELL env` them back.
-    """
-    _EXACT = {
-        "FERNET_KEY",
-        "FERNET_KEY_OLD",
-        "INTERNAL_API_KEY",
-        "BATTLE_TOKEN",
-        "ARENA_EVALUATOR_DIR",
-        "ARENA_TRUSTED_TARGETS_DIR",
-        "BATTLE_BOOTSTRAP_JSON",
-    }
-    _SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
-    out = dict(env)
-    for name in list(out):
-        up = name.upper()
-        if up in _EXACT or up.endswith(_SUFFIXES):
-            out.pop(name, None)
-    return out
-
-
-def _shell_command_blocked(command: str, *, allow_network: bool) -> str | None:
-    """Reject shell/install commands that escape the workdir jail or bypass fetch SSRF."""
-    return command_block_reason(command, allow_network=allow_network)
+_strip_secret_env = strip_secret_env
 
 
 def _is_skill_body_file(path: Path, workdir: Path) -> bool:
@@ -210,188 +190,8 @@ def fighter_tool_lines() -> str:
     return fighter_tool_grammar()
 
 
-def _extract_arg(arg_str: str, key: str, default: str = "") -> str:
-    if not arg_str:
-        return default
-    m = re.search(rf"\b{re.escape(key)}\s*=\s*\"([^\"]+)\"", arg_str)
-    if m:
-        return m.group(1).strip()
-    m = re.search(rf"\b{re.escape(key)}\s*=\s*'([^']+)'", arg_str)
-    if m:
-        return m.group(1).strip()
-    m = re.search(rf"\b{re.escape(key)}\s*=\s*(\S+)", arg_str)
-    if m:
-        return m.group(1).strip()
-    return default
-
-
-def _first_positional(arg_str: str) -> str:
-    if not arg_str:
-        return ""
-    for tok in arg_str.split():
-        if "=" in tok:
-            continue
-        return tok.strip()
-    return ""
-
-
-def _extract_path(arg_str: str) -> str:
-    val = _extract_arg(arg_str, "path") or _extract_arg(arg_str, "p")
-    if val:
-        return val
-    return _first_positional(arg_str)
-
-
-_BODY_TOOLS = {"write", "run", "shell", "install", "bg"}
-_ARG_TOOLS = {
-    "read",
-    "ls",
-    "test",
-    "clean",
-    "grep",
-    "tree",
-    "cp",
-    "mv",
-    "rm",
-    "fetch",
-    "search",
-    "ps",
-    "kill",
-    "logs",
-    "use_skill",
-    "skills",
-}
-
-
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", re.I | re.S)
-_JSON_TOOL_KEYS = {
-    "cmd",
-    "command",
-    "content",
-    "code",
-    "name",
-    "id",
-    "path",
-    "pattern",
-    "query",
-    "q",
-    "url",
-    "src",
-    "source",
-    "from",
-    "dst",
-    "dest",
-    "to",
-    "tail",
-    "skills",
-    "chosen",
-    "list",
-    "index",
-    "idx",
-    "search",
-    "find",
-    "skill",
-}
-_ALL_JSON_TOOLS = _BODY_TOOLS | _ARG_TOOLS | {"skills", "done"}
-
-
-def _normalize_json_call(obj) -> dict | None:
-    """Validate one JSON tool object into the executor call shape, or None."""
-    if not isinstance(obj, dict):
-        return None
-    tool = str(obj.get("tool") or "").strip().lower()
-    if tool not in _ALL_JSON_TOOLS:
-        return None
-    args = obj.get("arguments") or obj.get("args") or {}
-    if not isinstance(args, dict):
-        return None
-    call: dict[str, Any] = {"tool": tool}
-    for key in _JSON_TOOL_KEYS:
-        if key in args and args[key] is not None:
-            call[key] = args[key]
-    if tool in ("cp", "mv"):
-        call["src"] = args.get("src") or args.get("from")
-        call["dst"] = args.get("dst") or args.get("to")
-    if tool in ("shell", "install"):
-        call["cmd"] = args.get("cmd") or args.get("command") or ""
-        call["content"] = call.get("content") or ""
-    if tool in ("write", "run", "bg"):
-        call["content"] = (
-            args.get("content")
-            if args.get("content") is not None
-            else args.get("code", "")
-        )
-        call["cmd"] = args.get("cmd") or args.get("command") or ""
-        call["name"] = args.get("name") or args.get("id") or ""
-    if tool == "fetch":
-        call["url"] = args.get("url") or ""
-    if tool == "grep":
-        call["pattern"] = args.get("pattern") or args.get("query") or ""
-        call["path"] = args.get("path") or "."
-    if tool == "skills":
-        if "chosen" in args or "skills" in args:
-            call["chosen"] = list(args.get("chosen") or args.get("skills") or [])
-        if args.get("list"):
-            call["list"] = True
-        for key in ("index", "search", "skill"):
-            if args.get(key) is not None:
-                call[key] = args[key]
-    if tool == "done":
-        call = {"tool": "done"}
-    return call
-
-
-def _parse_json_tools(text: str) -> list[dict[str, Any]] | None:
-    """Extract a JSON tool-call payload from model output.
-
-    Accepts a fenced JSON array/object or a bare JSON array. Returns None when
-    no valid JSON payload is present (caller falls back to the legacy TOOL
-    grammar); returns a list of calls (possibly with error entries) otherwise.
-    """
-    t = (text or "").strip()
-    if not t:
-        return None
-    candidates: list[str] = []
-    for m in _JSON_FENCE_RE.finditer(t):
-        candidates.append(m.group(1).strip())
-    if not candidates:
-        stripped = t
-        if (stripped.startswith("[") and stripped.endswith("]")) or (
-            stripped.startswith("{") and stripped.endswith("}")
-        ):
-            candidates.append(stripped)
-    if not candidates:
-        return None
-    for raw in candidates:
-        try:
-            payload = json.loads(raw)
-        except Exception:
-            continue
-        if isinstance(payload, dict):
-            payload = [payload]
-        if not isinstance(payload, list):
-            continue
-        calls: list[dict[str, Any]] = []
-        any_valid = False
-        for obj in payload:
-            call = _normalize_json_call(obj)
-            if call is not None:
-                calls.append(call)
-                any_valid = True
-            elif isinstance(obj, dict):
-                calls.append(
-                    {
-                        "tool": str(obj.get("tool") or "unknown").lower(),
-                        "error": "ERROR: invalid JSON tool arguments",
-                    }
-                )
-        if any_valid:
-            return calls
-    return None
-
-
 def parse_tool_calls(text_or_resp: Any) -> list[dict[str, Any]]:
-    """Parse tool calls using the universal multi-dialect normalizer with legacy fallback."""
+    """Return the legacy dictionary view of the canonical tool normalizer."""
     from ...tool_protocol import ModelResponse, normalize_response
 
     if isinstance(text_or_resp, dict):
@@ -407,163 +207,7 @@ def parse_tool_calls(text_or_resp: Any) -> list[dict[str, Any]]:
         resp = ModelResponse(text=str(text_or_resp or ""))
 
     norm = normalize_response(resp)
-    if norm.calls:
-        calls: list[dict[str, Any]] = []
-        for c in norm.calls:
-            call_dict = {"tool": c.name, **c.arguments}
-            calls.append(call_dict)
-        return calls
-
-    # Fallback to legacy string parser if text is present
-    text = resp.text
-    if not text:
-        return []
-    json_calls = _parse_json_tools(text)
-    if json_calls is not None:
-        return json_calls
-    calls = []
-    lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-        if not stripped:
-            i += 1
-            continue
-        if stripped == "DONE" or stripped.upper() == "DONE":
-            calls.append({"tool": "done"})
-            break
-        if not stripped.upper().startswith("TOOL "):
-            # line is not a TOOL, could be SKILLS: or prose
-            if stripped.upper().startswith("SKILLS:"):
-                # SKILLS: a,b,c,d,e
-                skills_part = stripped[7:].strip()
-                chosen = [s.strip() for s in skills_part.split(",") if s.strip()]
-                calls.append({"tool": "skills", "chosen": chosen})
-            i += 1
-            continue
-        remainder = stripped[5:].strip()
-        if not remainder:
-            calls.append({"tool": "unknown", "raw": line, "error": "ERROR: empty tool"})
-            i += 1
-            continue
-        parts = remainder.split(None, 1)
-        tool_name = parts[0].lower()
-        arg_str = parts[1] if len(parts) > 1 else ""
-        if tool_name in _BODY_TOOLS:
-            # shell/install take an inline cmd= and do not need a body block
-            if tool_name in ("shell", "install") and (
-                _extract_arg(arg_str, "cmd") or _extract_arg(arg_str, "command")
-            ):
-                calls.append(
-                    {
-                        "tool": tool_name,
-                        "cmd": _extract_arg(arg_str, "cmd")
-                        or _extract_arg(arg_str, "command"),
-                        "content": "",
-                    }
-                )
-                i += 1
-                continue
-            body_lines: list[str] = []
-            i += 1
-            found_end = False
-            while i < len(lines):
-                l = lines[i]
-                if l.strip() == "END_TOOL":
-                    found_end = True
-                    break
-                body_lines.append(l)
-                i += 1
-            base_call: dict[str, Any] = {
-                "cmd": _extract_arg(arg_str, "cmd") or _extract_arg(arg_str, "command"),
-                "name": _extract_arg(arg_str, "name") or _extract_arg(arg_str, "id"),
-                "content": "\n".join(body_lines),
-            }
-            if tool_name in ("write", "run"):
-                base_call["path"] = _extract_path(arg_str)
-            if not found_end:
-                calls.append(
-                    {
-                        **base_call,
-                        "tool": tool_name,
-                        "error": "ERROR: missing END_TOOL",
-                    }
-                )
-                break
-            calls.append({"tool": tool_name, **base_call})
-            i += 1
-            continue
-        if tool_name == "skills":
-            skills_part = _extract_arg(arg_str, "skills")
-            if not skills_part:
-                skills_part = remainder
-            if skills_part.lower() in ("", "list", "ls"):
-                calls.append({"tool": "skills", "list": True})
-            else:
-                chosen = [s.strip() for s in skills_part.split(",") if s.strip()]
-                calls.append({"tool": "skills", "chosen": chosen})
-            i += 1
-            continue
-
-        if tool_name in _ARG_TOOLS:
-            call: dict[str, Any] = {"tool": tool_name}
-            if tool_name in ("read", "ls", "clean", "rm", "tree"):
-                call["path"] = _extract_path(arg_str)
-                if not call["path"] and tool_name in ("ls", "tree"):
-                    call["path"] = "."
-            elif tool_name == "grep":
-                call["pattern"] = (
-                    _extract_arg(arg_str, "pattern")
-                    or _extract_arg(arg_str, "query")
-                    or _first_positional(arg_str)
-                )
-                call["path"] = _extract_path(arg_str) or "."
-            elif tool_name in ("cp", "mv"):
-                call["src"] = (
-                    _extract_arg(arg_str, "from")
-                    or _extract_arg(arg_str, "src")
-                    or _extract_arg(arg_str, "source")
-                )
-                call["dst"] = (
-                    _extract_arg(arg_str, "to")
-                    or _extract_arg(arg_str, "dst")
-                    or _extract_arg(arg_str, "dest")
-                )
-            elif tool_name == "fetch":
-                call["url"] = _extract_arg(arg_str, "url") or _first_positional(arg_str)
-            elif tool_name == "search":
-                call["query"] = (
-                    _extract_arg(arg_str, "query")
-                    or _extract_arg(arg_str, "q")
-                    or _first_positional(arg_str)
-                )
-            elif tool_name in ("kill", "logs"):
-                call["name"] = (
-                    _extract_arg(arg_str, "name")
-                    or _extract_arg(arg_str, "id")
-                    or _first_positional(arg_str)
-                )
-                call["tail"] = _extract_arg(arg_str, "tail") or "8000"
-            elif tool_name == "use_skill":
-                call["name"] = _extract_arg(arg_str, "name") or _first_positional(
-                    arg_str
-                )
-            elif tool_name == "test":
-                call["path"] = _extract_path(arg_str)
-            calls.append(call)
-            i += 1
-            continue
-
-        calls.append(
-            {
-                "tool": tool_name,
-                "raw": remainder,
-                "error": f"ERROR: unknown tool {tool_name}",
-            }
-        )
-        i += 1
-    return calls
+    return [{"tool": call.name, **call.arguments} for call in norm.calls]
 
 
 class ToolSession:
@@ -575,6 +219,7 @@ class ToolSession:
         output_cap: int | None = None,
         allow_network: bool = False,
         test_cmd: str | None = None,
+        allowed_origins: list[str] | tuple[str, ...] | None = None,
     ):
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -586,10 +231,24 @@ class ToolSession:
         self.seq = 0
         self.allow_network = bool(allow_network)
         self.test_cmd = str(test_cmd or "").strip() or None
+        self.policy = SandboxPolicy(
+            workdir=self.workdir,
+            root=self.root,
+            allow_network=self.allow_network,
+            allowed_origins=allowed_origins or (),
+            timeout=self.tool_timeout,
+            output_cap=self._max_output,
+        )
         self.procs = ProcessManager(self.workdir)
         self._pw = None
         self._browser = None
         self._page = None
+
+    def __enter__(self) -> "ToolSession":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
 
     def close(self) -> None:
         """Clean up background processes and headless browser sessions."""
@@ -612,33 +271,32 @@ class ToolSession:
             self._pw = None
 
     def _maybe_cap(self, data: str) -> tuple[str, bool]:
-        if self._max_output is None:
-            return data, False
-        encoded = data.encode("utf-8")
-        if len(encoded) <= self._max_output:
-            return data, False
-        capped = (
-            encoded[: self._max_output].decode("utf-8", errors="ignore")
-            + "\n[TRUNCATED]"
+        return self.policy.cap_output(data)
+
+    def _url_policy_error(
+        self, tool: str, url: str, t0: float, count_step: bool
+    ) -> ToolResult | None:
+        blocked = self.policy.check_url(url)
+        if not blocked:
+            return None
+        elapsed_ms = int((time.time() - t0) * 1000)
+        message = f"{tool} blocked ({blocked})"
+        return ToolResult(
+            tool=tool,
+            success=False,
+            output=f"ERROR: {message}",
+            error=blocked,
+            exit_code=1,
+            error_type="policy_rejection",
+            duration_ms=elapsed_ms,
+            policy_rejected=True,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
         )
-        return capped, True
 
     def _resolve(self, rel: str) -> Path:
-        if not rel or rel == ".":
-            return self.workdir
-        p = Path(rel)
-        if p.is_absolute():
-            raise ValueError(f"ERROR: absolute path rejected: {rel}")
-        if ".." in p.parts:
-            raise ValueError(f"ERROR: path escape '..' rejected: {rel}")
-        resolved = (self.workdir / p).resolve()
-        # Defense in depth: after symlink resolution the target must still live
-        # inside the workdir jail. Blocks symlink-based escapes that slip past
-        # the textual checks above.
-        work = self.workdir.resolve()
-        if resolved != work and work not in resolved.parents:
-            raise ValueError(f"ERROR: path escape rejected: {rel}")
-        return resolved
+        return self.policy.resolve_path(rel)
 
     def write(self, path: str, content: str, *, count_step: bool = True) -> ToolResult:
         t0 = time.time()
@@ -955,33 +613,15 @@ class ToolSession:
         if count_step:
             self.steps += 1
         try:
-            env = _strip_secret_env(os.environ.copy())
-            env["ARENA_ROOT"] = str(self.root)
-            env["ARENA_WORKDIR"] = str(self.workdir)
-            env["PYTHONDONTWRITEBYTECODE"] = "1"
-            env["PYTHONUNBUFFERED"] = "1"
-            work = str(self.workdir.resolve())
-            env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
+            env = self.policy.child_env()
             if path:
                 p = self._resolve(path)
-                proc = subprocess.Popen(
-                    ["python3", str(p)],
-                    cwd=str(self.workdir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                    env=env,
+                proc = ProcessRunner.start(
+                    ["python3", str(p)], cwd=self.workdir, env=env
                 )
             elif inline:
-                proc = subprocess.Popen(
-                    ["python3", "-c", inline],
-                    cwd=str(self.workdir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                    env=env,
+                proc = ProcessRunner.start(
+                    ["python3", "-c", inline], cwd=self.workdir, env=env
                 )
             else:
                 elapsed_ms = int((time.time() - t0) * 1000)
@@ -997,30 +637,11 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-            try:
-                out, err = proc.communicate(timeout=self.tool_timeout)
-                out, out_trunc = self._maybe_cap(out or "")
-                err, err_trunc = self._maybe_cap(err or "")
-                is_truncated = out_trunc or err_trunc
-                success = proc.returncode == 0
-                elapsed_ms = int((time.time() - t0) * 1000)
-                return ToolResult(
-                    tool="run",
-                    success=success,
-                    output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}",
-                    error=None if success else f"rc={proc.returncode}",
-                    exit_code=proc.returncode,
-                    error_type=None if success else "execution_error",
-                    duration_ms=elapsed_ms,
-                    truncated=is_truncated,
-                    mutated=True,
-                    step_charged=count_step,
-                )
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+            out, err, timed_out = ProcessRunner.communicate_with_timeout(
+                proc,
+                timeout=self.tool_timeout,
+            )
+            if timed_out:
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool="run",
@@ -1035,6 +656,23 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
+            out, out_trunc = self._maybe_cap(out or "")
+            err, err_trunc = self._maybe_cap(err or "")
+            is_truncated = out_trunc or err_trunc
+            success = proc.returncode == 0
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="run",
+                success=success,
+                output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}",
+                error=None if success else f"rc={proc.returncode}",
+                exit_code=proc.returncode,
+                error_type=None if success else "execution_error",
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=True,
+                step_charged=count_step,
+            )
         except ValueError as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -1189,7 +827,7 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
-        blocked = _shell_command_blocked(command, allow_network=self.allow_network)
+        blocked = self.policy.check_command(command)
         if blocked:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -1205,31 +843,17 @@ class ToolSession:
                 step_charged=count_step,
                 truncated=False,
             )
-        env = _strip_secret_env(os.environ.copy())
-        env["ARENA_ROOT"] = str(self.root)
-        env["ARENA_WORKDIR"] = str(self.workdir)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["PYTHONUNBUFFERED"] = "1"
-        work = str(self.workdir.resolve())
-        env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
+        env = self.policy.child_env()
         cmd_timeout = timeout or self.tool_timeout or 90
         try:
-            proc = subprocess.Popen(
-                ["bash", "-c", command],
-                cwd=str(self.workdir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-                env=env,
+            proc = ProcessRunner.start(
+                ["bash", "-c", command], cwd=self.workdir, env=env
             )
-            try:
-                out, err = proc.communicate(timeout=cmd_timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+            out, err, timed_out = ProcessRunner.communicate_with_timeout(
+                proc,
+                timeout=cmd_timeout,
+            )
+            if timed_out:
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool=tool_name,
@@ -1703,37 +1327,9 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
-        if not self.allow_network:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            return ToolResult(
-                tool="fetch",
-                success=False,
-                output="ERROR: network fetch blocked (target network is false)",
-                error="network fetch blocked (target network is false)",
-                exit_code=1,
-                error_type="policy_rejection",
-                duration_ms=elapsed_ms,
-                policy_rejected=True,
-                mutated=False,
-                step_charged=count_step,
-                truncated=False,
-            )
-        blocked = _fetch_url_blocked(url)
-        if blocked:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            return ToolResult(
-                tool="fetch",
-                success=False,
-                output=f"ERROR: fetch blocked ({blocked})",
-                error=blocked,
-                exit_code=1,
-                error_type="policy_rejection",
-                duration_ms=elapsed_ms,
-                policy_rejected=True,
-                mutated=False,
-                step_charged=count_step,
-                truncated=False,
-            )
+        policy_error = self._url_policy_error("fetch", url, t0, count_step)
+        if policy_error is not None:
+            return policy_error
         try:
             import httpx
 
@@ -1805,9 +1401,7 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
-        blocked = _shell_command_blocked(
-            content or "", allow_network=self.allow_network
-        )
+        blocked = self.policy.check_command(content or "")
         if blocked:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -1825,7 +1419,7 @@ class ToolSession:
             )
         try:
             mgr = self.procs.start(
-                name, content or "", env=_strip_secret_env(os.environ.copy())
+                name, content or "", env=self.policy.child_env()
             )
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -2154,9 +1748,25 @@ class ToolSession:
                 ],
             )
             self._page = self._browser.new_page()
+            self._page.route("**/*", self._guard_browser_request)
             return self._page
         except Exception:
             return None
+
+    def _guard_browser_request(self, route, request) -> None:
+        """Apply the session URL policy to every Playwright subrequest."""
+
+        from urllib.parse import urlsplit
+
+        scheme = urlsplit(str(getattr(request, "url", ""))).scheme.lower()
+        if scheme in {"about", "data", "blob"}:
+            route.continue_()
+            return
+        blocked = self.policy.check_url(str(getattr(request, "url", "")))
+        if blocked:
+            route.abort()
+            return
+        route.continue_()
 
     def _playwright_unavailable(
         self, tool: str, t0: float, *, count_step: bool
@@ -2180,6 +1790,11 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
+        policy_error = self._url_policy_error(
+            "playwright_navigate", url, t0, count_step
+        )
+        if policy_error is not None:
+            return policy_error
         page = self._ensure_page()
         if page is not None:
             try:
@@ -2214,8 +1829,23 @@ class ToolSession:
         try:
             import httpx
 
-            with httpx.Client(timeout=5.0) as client:
+            with httpx.Client(timeout=5.0, follow_redirects=False) as client:
                 res = client.get(url)
+                if getattr(res, "is_redirect", False):
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    return ToolResult(
+                        tool="playwright_navigate",
+                        success=False,
+                        output="ERROR: playwright_navigate blocked (redirect not followed)",
+                        error="redirect not followed",
+                        exit_code=1,
+                        error_type="policy_rejection",
+                        duration_ms=elapsed_ms,
+                        policy_rejected=True,
+                        mutated=False,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool="playwright_navigate",
@@ -2465,16 +2095,34 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
+        policy_error = self._url_policy_error("http_request", url, t0, count_step)
+        if policy_error is not None:
+            return policy_error
         try:
             import httpx
 
-            with httpx.Client(timeout=15.0) as client:
+            with httpx.Client(timeout=15.0, follow_redirects=False) as client:
                 res = client.request(
                     method=method.upper(),
                     url=url,
                     headers=headers,
                     content=body.encode("utf-8") if body else None,
                 )
+                if res.is_redirect:
+                    elapsed_ms = int((time.time() - t0) * 1000)
+                    return ToolResult(
+                        tool="http_request",
+                        success=False,
+                        output="ERROR: http_request blocked (redirect not followed)",
+                        error="redirect not followed",
+                        exit_code=1,
+                        error_type="policy_rejection",
+                        duration_ms=elapsed_ms,
+                        policy_rejected=True,
+                        mutated=False,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
                 elapsed_ms = int((time.time() - t0) * 1000)
                 resp_preview = res.text[:3000]
                 return ToolResult(
@@ -2837,6 +2485,30 @@ class AdvancedExecutor(Executor):
             and os.environ.get("ARENA_VERIFIER_ALLOW_INPROCESS") != "1"
         )
 
+    def _finish_with_event_sink(
+        self,
+        *,
+        client,
+        battle_id: str,
+        format_config: dict,
+        history: list[dict],
+        event_sink: EventSink,
+        on_status=None,
+    ) -> dict:
+        """Judge and persist the terminal event through the run's EventSink."""
+
+        rubric = format_config.get("judge_rubric") or "Score each model 0-100 fairly."
+        result = client.judge(
+            battle_id,
+            rubric,
+            history,
+            weights=judge_weights(format_config),
+        )
+        event_sink.emit("judge", "system", json.dumps(result), event_type="judge")
+        if on_status:
+            on_status("completed")
+        return result.get("scores") or {}
+
     def _emit_trusted_verification(
         self,
         client,
@@ -2848,6 +2520,7 @@ class AdvancedExecutor(Executor):
         role: str,
         model_id: str,
         payload: dict,
+        event_sink: EventSink | None = None,
     ) -> None:
         """Persist host-side in-process verify as TRUSTED_VERIFICATION (not EXECUTOR_RESULT)."""
         if client is None:
@@ -2892,12 +2565,16 @@ class AdvancedExecutor(Executor):
         if payload.get("visible_passed") is not None:
             record["visible_passed"] = bool(payload.get("visible_passed"))
         try:
-            client.round(
-                battle_id,
-                phase or "verify",
-                model_id,
-                TRUSTED_VERIFICATION_MARKER + " " + json.dumps(record),
-            )
+            artifact = TRUSTED_VERIFICATION_MARKER + " " + json.dumps(record)
+            if event_sink is not None:
+                event_sink.emit(phase or "verify", model_id, artifact)
+            else:
+                client.round(
+                    battle_id,
+                    phase or "verify",
+                    model_id,
+                    artifact,
+                )
         except Exception:
             return
 
@@ -2917,6 +2594,7 @@ class AdvancedExecutor(Executor):
         model_id: str = "",
         executor_outcome: str = "",
         terminal_reason: str = "",
+        event_sink: EventSink | None = None,
     ) -> tuple[dict | None, str | None]:
         """Run verification in the trusted host (backend) when in a fighter sandbox.
 
@@ -2990,6 +2668,7 @@ class AdvancedExecutor(Executor):
                 role=role,
                 model_id=model_id,
                 payload=public,
+                event_sink=event_sink,
             )
             return public, None
 
@@ -3053,6 +2732,7 @@ class AdvancedExecutor(Executor):
                 role=role,
                 model_id=model_id,
                 payload=public,
+                event_sink=event_sink,
             )
             return public, None
         except Exception:
@@ -3076,6 +2756,7 @@ class AdvancedExecutor(Executor):
                 role=role,
                 model_id=model_id,
                 payload=failed,
+                event_sink=event_sink,
             )
             return failed, "VERIFY_ERROR"
 
@@ -3094,6 +2775,9 @@ class AdvancedExecutor(Executor):
         history: list[dict],
         results: list[dict],
         seq: dict,
+        result_store: ArtifactStore | None = None,
+        emit_result=None,
+        defer_result: bool = False,
         last_test: str | None = None,
         budget_exceeded: bool = False,
         retest: bool = False,
@@ -3110,6 +2794,8 @@ class AdvancedExecutor(Executor):
         required_artifacts: list[str] | None = None,
         phase_type: str | None = None,
         emit_action=None,
+        emit_artifact=None,
+        event_sink: EventSink | None = None,
         context_mode: str = "strict",
         skills_telemetry: dict | None = None,
         memory_telemetry: dict | None = None,
@@ -3117,6 +2803,19 @@ class AdvancedExecutor(Executor):
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
         """
+
+        def _record_result(item: dict) -> None:
+            if result_store is None:
+                results.append(item)
+                return
+            identity = result_store.identity(item)
+            result_store.upsert(item)
+            for index, previous in enumerate(results):
+                if result_store.identity(previous) == identity:
+                    results[index] = item
+                    return
+            results.append(item)
+
         files, theory = self._collect_workspace(work)
         judge_only = _judge_only(format_config)
         spec_hash = str((format_config or {}).get("spec_hash") or "")
@@ -3192,33 +2891,44 @@ class AdvancedExecutor(Executor):
             )
 
             def _commit_judge_only():
-                line = self.emit_result(client, battle_id, phase, result)
-                seq["n"] += 1
-                client.round(
-                    battle_id,
-                    phase,
-                    model_id,
-                    sanitize_artifact(files_json),
-                    event_type="artifact",
-                    sequence=seq["n"],
-                )
+                line = None
+                if not defer_result:
+                    line = (
+                        emit_result(result)
+                        if emit_result is not None
+                        else self.emit_result(client, battle_id, phase, result)
+                    )
+                artifact = sanitize_artifact(files_json)
+                if emit_artifact is not None:
+                    emit_artifact(phase, model_id, artifact)
+                else:
+                    seq["n"] += 1
+                    client.round(
+                        battle_id,
+                        phase,
+                        model_id,
+                        artifact,
+                        event_type="artifact",
+                        sequence=seq["n"],
+                    )
                 history.append(
                     {
                         "phase": phase,
                         "model_id": model_id,
-                        "artifact": sanitize_artifact(files_json),
+                        "artifact": artifact,
                         "role": role,
                     }
                 )
-                history.append(
-                    {
-                        "phase": phase,
-                        "model_id": model_id,
-                        "artifact": line,
-                        "role": role,
-                    }
-                )
-                results.append(result)
+                if line:
+                    history.append(
+                        {
+                            "phase": phase,
+                            "model_id": model_id,
+                            "artifact": line,
+                            "role": role,
+                        }
+                    )
+                _record_result(result)
                 return result
 
             if lock is not None:
@@ -3284,6 +2994,7 @@ class AdvancedExecutor(Executor):
                 model_id=model_id,
                 executor_outcome=str(outcome_override or ""),
                 terminal_reason=str(terminal_reason or ""),
+                event_sink=event_sink,
             )
             if target_evidence and not target_verification_error:
                 passed = bool(target_evidence.get("passed"))
@@ -3422,33 +3133,44 @@ class AdvancedExecutor(Executor):
         )
 
         def _commit():
-            line = self.emit_result(client, battle_id, phase, result)
-            seq["n"] += 1
-            client.round(
-                battle_id,
-                phase,
-                model_id,
-                sanitize_artifact(files_json),
-                event_type="artifact",
-                sequence=seq["n"],
-            )
+            line = None
+            if not defer_result:
+                line = (
+                    emit_result(result)
+                    if emit_result is not None
+                    else self.emit_result(client, battle_id, phase, result)
+                )
+            artifact = sanitize_artifact(files_json)
+            if emit_artifact is not None:
+                emit_artifact(phase, model_id, artifact)
+            else:
+                seq["n"] += 1
+                client.round(
+                    battle_id,
+                    phase,
+                    model_id,
+                    artifact,
+                    event_type="artifact",
+                    sequence=seq["n"],
+                )
             history.append(
                 {
                     "phase": phase,
                     "model_id": model_id,
-                    "artifact": sanitize_artifact(files_json),
+                    "artifact": artifact,
                     "role": role,
                 }
             )
-            history.append(
-                {
-                    "phase": phase,
-                    "model_id": model_id,
-                    "artifact": line,
-                    "role": role,
-                }
-            )
-            results.append(result)
+            if line:
+                history.append(
+                    {
+                        "phase": phase,
+                        "model_id": model_id,
+                        "artifact": line,
+                        "role": role,
+                    }
+                )
+            _record_result(result)
             return result
 
         if lock is not None:
@@ -3470,6 +3192,8 @@ class AdvancedExecutor(Executor):
         on_status=None,
         deadline=None,
         stop=None,
+        _phase_results: list[dict] | None = None,
+        _history: list[dict] | None = None,
     ):
         # Sandbox gate — must run inside sandbox per business_rules.md
         if os.environ.get("ARENA_IN_SANDBOX") != "1":
@@ -3477,74 +3201,52 @@ class AdvancedExecutor(Executor):
                 "AdvancedExecutor must run inside sandbox (ARENA_IN_SANDBOX=1)"
             )
 
+        format_config = dict(format_config or {})
         if deadline is None:
             deadline = time.time() + (timeout_seconds or 600)
 
-        # Difficulty presets are applied once in run_battle_loop. Read budgets
-        # from top-level keys with a fallback to nested `limits.*`.
-        limits = format_config.get("limits") or {}
+        run_config = AdvancedRunConfig.from_format(
+            format_config,
+            default_test_code=DEFAULT_TEST_CODE,
+        )
 
-        def _budget(key, default, aliases=None):
-            keys = [key] + list(aliases or [])
-            for k in keys:
-                val = format_config.get(k)
-                if val is None:
-                    val = limits.get(k)
-                if val is not None:
-                    return val
-            return default
-
-        target_code = format_config.get("target_code") or (
+        target_code = run_config.target_code or (
             ""
             if _judge_only(format_config) or format_config.get("custom")
             else "# TASK: Fix is_palindrome\n"
         )
-        if _judge_only(format_config):
-            default_test_code = format_config.get("test_code") or ""
-        else:
-            default_test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
-        role_test_code = format_config.get("role_test_code") or {}
-        role_missions = format_config.get("role_missions") or {}
-        seed_solution_roles = set(format_config.get("seed_solution_roles") or [])
+        default_test_code = run_config.default_test_code
+        role_test_code = run_config.role_test_code
+        role_missions = run_config.role_missions
+        seed_solution_roles = set(run_config.seed_solution_roles)
         if format_config.get("seed_solution"):
             seed_solution_roles = seed_solution_roles | set(
                 fighter_roles(format_config)
             )
-        max_turns = min(20, max(1, int(_budget("max_tool_turns", 6, ["max_turns"]))))
-        max_steps = min(
-            50, max(1, int(_budget("max_tool_steps", 14, ["max_steps", "max_tool_steps"])))
-        )
-        raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
-        tool_timeout = int(raw_timeout) if raw_timeout else None
-        race_tokens = int(
-            _budget("race_max_tokens", RACE_MAX_TOKENS, ["max_tokens"])
-            or RACE_MAX_TOKENS
-        )
-        context_mode = (
-            str((format_config or {}).get("context_mode") or "strict").lower().strip()
-        )
+        max_turns = run_config.max_turns
+        max_steps = run_config.max_steps
+        tool_timeout = run_config.tool_timeout
+        race_tokens = run_config.race_max_tokens or RACE_MAX_TOKENS
+        context_mode = run_config.context_mode
         pool = (
             select_skills(format_config, context_mode=context_mode)
             or load_skill_pool()
             or SKILL_POOL
         )
-        seq = {"n": 0}
         phase_name = tool_phase_name(format_config)
         fighters = fighter_roles(format_config)
 
-        io_lock = threading.Lock()
+        io_lock = threading.RLock()
+        event_sink = EventSink(client, battle_id, lock=io_lock)
+        seq = event_sink.state
 
         def emit(phase, model_id, artifact, event_type="artifact"):
-            with io_lock:
-                seq["n"] += 1
-                client.round(
-                    battle_id,
-                    phase,
-                    model_id,
-                    artifact,
-                    event_type=event_type,
-                    sequence=seq["n"],
-                )
+            event_sink.emit(
+                phase,
+                model_id,
+                artifact,
+                event_type=event_type,
+            )
 
         def emit_action(
             model_id,
@@ -3567,14 +3269,13 @@ class AdvancedExecutor(Executor):
             repair_kind: str = "",
         ):
             action_phase = phase_id or phase_name
-            with io_lock:
-                seq["n"] += 1
+            def render(sequence: int) -> str:
                 payload = {
                     "battle_id": battle_id,
                     "fighter_id": model_id,
                     "phase_id": action_phase,
                     "turn_id": int(turn_id),
-                    "event_sequence": int(seq["n"]),
+                    "event_sequence": int(sequence),
                     "tool_step": int(tool_step),
                     "tool_call_id": tool_call_id,
                     "exec_id": exec_id,
@@ -3597,14 +3298,14 @@ class AdvancedExecutor(Executor):
                     payload["malformed_tool_call"] = True
                 if repair_kind:
                     payload["repair_kind"] = repair_kind
-                client.round(
-                    battle_id,
-                    action_phase,
-                    model_id,
-                    json.dumps(payload),
-                    event_type="action_log",
-                    sequence=seq["n"],
-                )
+                return json.dumps(payload)
+
+            event_sink.emit(
+                action_phase,
+                model_id,
+                render,
+                event_type="action_log",
+            )
 
         def emit_skill_activity(
             model_id,
@@ -3615,39 +3316,31 @@ class AdvancedExecutor(Executor):
             *,
             success=None,
         ):
-            with io_lock:
-                seq["n"] += 1
+            def render(sequence: int) -> str:
                 payload = {
                     "type": event_type,
                     "fighter_id": model_id,
                     "fighter_slot": role,
                     "role": role,
                     "phase_id": phase_id or phase_name,
-                    "event_sequence": int(seq["n"]),
+                    "event_sequence": int(sequence),
                     **fields,
                 }
                 if success is not None:
                     payload["success"] = bool(success)
-                client.round(
-                    battle_id,
-                    phase_id or phase_name,
-                    model_id,
-                    json.dumps(payload),
-                    event_type=event_type,
-                    sequence=seq["n"],
-                )
+                return json.dumps(payload)
+
+            event_sink.emit(
+                phase_id or phase_name,
+                model_id,
+                render,
+                event_type=event_type,
+            )
 
         def record_artifact(model_id, artifact, role, phase_id=""):
             art_phase = phase_id or phase_name
+            event_sink.emit(art_phase, model_id, artifact)
             with io_lock:
-                seq["n"] += 1
-                client.round(
-                    battle_id,
-                    art_phase,
-                    model_id,
-                    artifact,
-                    sequence=seq["n"],
-                )
                 history.append(
                     {
                         "phase": art_phase,
@@ -3657,8 +3350,43 @@ class AdvancedExecutor(Executor):
                     }
                 )
 
-        history: list[dict] = []
+        history: list[dict] = _history if _history is not None else []
         results: list[dict] = []
+        result_store = ArtifactStore()
+        run_context = BattleRunContext(
+            battle_id=str(battle_id),
+            client=client,
+            config=run_config,
+            role_to_model=role_to_model,
+            history=history,
+            artifact_store=result_store,
+            event_sink=event_sink,
+            deadline=deadline,
+            stop=stop,
+            status_check=status_check,
+        )
+        emitted_result_keys: set[tuple[str, str, str]] = set()
+        defer_builder_breaker_results = bool(
+            format_config.get("target_id") and is_builder_breaker(format_config)
+        )
+
+        def emit_result_record(result: dict) -> str:
+            key = result_store.identity(result)
+            if key in emitted_result_keys:
+                return f"EXECUTOR_RESULT: {json.dumps(result)}"
+            emitted_result_keys.add(key)
+            line = f"EXECUTOR_RESULT: {json.dumps(result)}"
+            event_sink.emit(result.get("phase") or phase_name, "system", line, event_type="result")
+            return line
+
+        def upsert_result_record(result: dict) -> None:
+            identity = result_store.identity(result)
+            result_store.upsert(result)
+            for result_index, previous in enumerate(results):
+                if result_store.identity(previous) == identity:
+                    results[result_index] = result
+                    return
+            results.append(result)
 
         halted_status: str | None = None
         halt_detail: str | None = None
@@ -3674,7 +3402,11 @@ class AdvancedExecutor(Executor):
                 seen = first_token_seen
             if not seen and time.time() > first_token_deadline:
                 return "failed"
-            return self.halted(status_check, deadline, stop)
+            return self.halted(
+                run_context.status_check,
+                run_context.deadline,
+                run_context.stop,
+            )
 
         def mark_halted(reason, detail=None):
             nonlocal halted_status, halt_detail
@@ -3691,11 +3423,27 @@ class AdvancedExecutor(Executor):
             with first_token_lock:
                 first_token_seen = True
 
-        def role_recorded(model_id, token=None):
+        def role_recorded(model_id, token=None, *, role=None, phase_id=None):
             with io_lock:
                 if token is not None:
                     return any(
-                        (r.get("phase"), r.get("role")) == token for r in results
+                        (
+                            r.get("phase"),
+                            r.get("role"),
+                            r.get("model_id"),
+                        )
+                        == (token[0], token[1], model_id)
+                        for r in results
+                    )
+                if role is not None:
+                    return any(
+                        (
+                            r.get("phase") or phase_name,
+                            r.get("role"),
+                            r.get("model_id"),
+                        )
+                        == (phase_id or phase_name, role, model_id)
+                        for r in results
                     )
                 return any(r["model_id"] == model_id for r in results)
 
@@ -3779,15 +3527,20 @@ class AdvancedExecutor(Executor):
                 encoding="utf-8",
             )
 
-            env_cfg = format_config.get("environment") or {}
-            ver_cfg = format_config.get("verification") or {}
-            test_cmd = ver_cfg.get("visible_command")
+            env_cfg = run_config.environment
+            test_cmd = run_config.verification.get("visible_command")
+            allowed_origins = list(run_config.allowed_origins)
+            if preview_enabled():
+                allowed_origins.append(
+                    f"http://localhost:{port_for_index(role_idx)}"
+                )
             sess = ToolSession(
                 work,
                 root=work,
                 tool_timeout=tool_timeout,
-                allow_network=bool(env_cfg.get("network")),
+                allow_network=run_config.allow_network,
                 test_cmd=test_cmd,
+                allowed_origins=allowed_origins,
             )
 
             preview_server = None
@@ -3825,7 +3578,7 @@ class AdvancedExecutor(Executor):
                         "role": role,
                         "phase_id": local_phase,
                         "workspace": work.name,
-                        "network_enabled": bool(env_cfg.get("network")),
+                        "network_enabled": run_config.allow_network,
                         "preview_url": preview_url or None,
                     }
                 ),
@@ -3940,6 +3693,9 @@ class AdvancedExecutor(Executor):
                     history=history,
                     results=results,
                     seq=seq,
+                    result_store=result_store,
+                    emit_result=emit_result_record,
+                    defer_result=defer_builder_breaker_results,
                     last_test=last_test or None,
                     phase=local_phase,
                     phase_type=local_phase_type,
@@ -3952,6 +3708,8 @@ class AdvancedExecutor(Executor):
                     canonical_test_code=test_code,
                     required_artifacts=required_outputs,
                     emit_action=emit_action,
+                    emit_artifact=event_sink.emit,
+                    event_sink=event_sink,
                     context_mode=context_mode,
                     skills_telemetry=tracker.to_telemetry(),
                     memory_telemetry=memory_telemetry,
@@ -3992,7 +3750,7 @@ class AdvancedExecutor(Executor):
                         role=role,
                         format_name=fmt_name,
                         mission=mission,
-                        network_allowed=bool(env_cfg.get("network")),
+                        network_allowed=run_config.allow_network,
                         max_steps=max_steps,
                         max_turns=max_turns,
                         judge_only=_judge_only(format_config),
@@ -4560,10 +4318,20 @@ class AdvancedExecutor(Executor):
                             }
                         )
 
-                    if is_finalized or role_recorded(model_id, record_token):
+                    if is_finalized or role_recorded(
+                        model_id,
+                        record_token,
+                        role=role,
+                        phase_id=local_phase,
+                    ):
                         break
 
-                if not is_finalized and not role_recorded(model_id, record_token):
+                if not is_finalized and not role_recorded(
+                    model_id,
+                    record_token,
+                    role=role,
+                    phase_id=local_phase,
+                ):
                     finalize(
                         outcome_override="TURN_BUDGET_EXCEEDED",
                         terminal_reason="turn_budget_exhausted",
@@ -4574,9 +4342,11 @@ class AdvancedExecutor(Executor):
                         preview_server.stop()
                     except Exception:
                         pass
+                sess.close()
 
         with tempfile.TemporaryDirectory(prefix="arena-adv-") as tmp:
             root = Path(tmp)
+            phase_runner = PhaseRunner(run_fighter)
             plan = parse_battle_plan(format_config)
             if plan is not None:
                 snapshots: dict = {}
@@ -4613,8 +4383,8 @@ class AdvancedExecutor(Executor):
                         "preview_url": "",
                     }
                     with io_lock:
-                        self.emit_result(client, battle_id, phase.phase_id, result)
-                        results.append(result)
+                        emit_result_record(result)
+                        upsert_result_record(result)
 
                 for idx, phase in enumerate(plan.phases):
                     halted = halted_now()
@@ -4752,6 +4522,7 @@ class AdvancedExecutor(Executor):
                         phase="verify",
                         role="",
                         model_id="",
+                        event_sink=event_sink,
                     )
 
                     # Re-emit the per-role results with the asymmetric verdict so
@@ -4801,30 +4572,19 @@ class AdvancedExecutor(Executor):
                             )
                             corrected["passed"] = role_passed
                         with io_lock:
-                            self.emit_result(
-                                client, battle_id, corrected["phase"], corrected
-                            )
-                            results.append(corrected)
+                            emit_result_record(corrected)
+                            upsert_result_record(corrected)
             else:
-                jobs = [
-                    (idx, role)
-                    for idx, role in enumerate(fighters)
-                    if role_to_model.get(role)
-                ]
-                if jobs:
-                    with ThreadPoolExecutor(max_workers=len(jobs)) as pool_exec:
-                        futs = [
-                            pool_exec.submit(run_fighter, idx, role)
-                            for idx, role in jobs
-                        ]
-                        errors = []
-                        for fut in futs:
-                            try:
-                                fut.result()
-                            except Exception as exc:
-                                errors.append(exc)
-                        if errors and not results:
-                            raise errors[0]
+                phase_runner.run(
+                    PhaseRequest(
+                        phase={"name": phase_name, "participants": fighters},
+                        role_to_model=role_to_model,
+                        parallel=True,
+                    )
+                )
+            if defer_builder_breaker_results:
+                for result in result_store.values():
+                    emit_result_record(result)
             late = halted_now()
             if late:
                 mark_halted(late)
@@ -4855,21 +4615,30 @@ class AdvancedExecutor(Executor):
                 if not seen and halt_detail is None:
                     halt_detail = FAILURE_REASON
             emit_status(on_status, halted_status, halt_detail)
+            if _phase_results is not None:
+                _phase_results.extend(result_store.values())
+                return {}
             if not results:
                 return {}
-            return self.finish(
+            return self._finish_with_event_sink(
                 client=client,
                 battle_id=battle_id,
                 format_config=format_config,
                 history=history,
+                event_sink=event_sink,
                 on_status=None,
             )
 
-        return self.finish(
+        if _phase_results is not None:
+            _phase_results.extend(result_store.values())
+            return {}
+
+        return self._finish_with_event_sink(
             client=client,
             battle_id=battle_id,
             format_config=format_config,
             history=history,
+            event_sink=event_sink,
             on_status=on_status,
         )
 
@@ -4884,5 +4653,34 @@ class AdvancedExecutor(Executor):
         format_config,
         round_visibility,
     ):
-        # Not used — run_battle overrides full loop
-        return []
+        if os.environ.get("ARENA_IN_SANDBOX") != "1":
+            raise RuntimeError(
+                "AdvancedExecutor must run inside sandbox (ARENA_IN_SANDBOX=1)"
+            )
+
+        phase_config = dict(format_config or {})
+        phase_config["phases"] = [dict(phase or {})]
+        participants = [
+            str(role)
+            for role in (phase_config["phases"][0].get("participants") or [])
+            if role and role != "judge"
+        ]
+        phase_config["roles"] = participants + ["judge"]
+        # A direct phase invocation is deliberately one phase. Handoff and
+        # deployment orchestration belong to run_battle's BattlePlan path.
+        phase_config["battle_plan"] = False
+        phase_config["phase_plans"] = []
+        collected: list[dict] = []
+        model_ids = [role_to_model[role] for role in participants if role in role_to_model]
+        self.run_battle(
+            battle_id=battle_id,
+            format_config=phase_config,
+            model_ids=model_ids,
+            round_visibility=round_visibility,
+            timeout_seconds=int(phase_config.get("timeout_seconds") or 600),
+            role_to_model=role_to_model,
+            client=client,
+            _history=history,
+            _phase_results=collected,
+        )
+        return collected

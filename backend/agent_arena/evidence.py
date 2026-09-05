@@ -10,12 +10,36 @@ after a scoring bug fix without rerunning them.
 
 from __future__ import annotations
 
+import json
+
+from .redact import redact
+
 EVIDENCE_SCHEMA_VERSION = 1
 SCORING_VERSION = "arena-score-v1"
 
 POLICY_CLEAN = "clean"
 POLICY_WARNING = "warning"
 POLICY_INVALID = "invalid"
+
+FINDINGS_ARTIFACT = "findings.v1.json"
+FINDINGS_SCHEMA = "arena-finding-v1"
+FINDINGS_INGEST_ABSENT = "absent"
+FINDINGS_INGEST_VALID = "valid"
+FINDINGS_INGEST_INVALID = "invalid"
+FINDING_DOMAINS = frozenset(
+    {"auth", "authz", "secrets", "http_api", "sandbox", "dependency"}
+)
+FINDING_SEVERITIES = frozenset({"critical", "high", "medium", "low", "info"})
+FINDING_PUBLIC_FIELDS = (
+    "id",
+    "domain",
+    "severity",
+    "title",
+    "witness",
+    "affected_files",
+    "confidence",
+    "remediation",
+)
 
 _DEFAULT_PHASE = "race"
 
@@ -32,6 +56,105 @@ def _as_float(value, default: float | None = None):
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _is_hidden_evaluator_path(path: str) -> bool:
+    """True when a path names Hidden Evaluator / reference overlay material."""
+    norm = str(path or "").replace("\\", "/").strip()
+    while norm.startswith("./"):
+        norm = norm[2:]
+    lowered = norm.lower()
+    parts = [p for p in lowered.split("/") if p]
+    if "tests/hidden" in lowered:
+        return True
+    if "evaluators" in parts:
+        return True
+    if "reference" in parts:
+        return True
+    if "hidden_eval" in lowered:
+        return True
+    return False
+
+
+def _parse_findings_raw(raw):
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="replace")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _validate_finding(item) -> bool:
+    if not isinstance(item, dict):
+        return False
+    ident = item.get("id")
+    if not isinstance(ident, str) or not ident.strip():
+        return False
+    if item.get("domain") not in FINDING_DOMAINS:
+        return False
+    if item.get("severity") not in FINDING_SEVERITIES:
+        return False
+    title = item.get("title")
+    if not isinstance(title, str) or not title.strip():
+        return False
+    witness = item.get("witness")
+    if not isinstance(witness, str) or not witness.strip():
+        return False
+    files = item.get("affected_files")
+    if not isinstance(files, list) or not all(isinstance(p, str) for p in files):
+        return False
+    confidence = item.get("confidence")
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)):
+        return False
+    if confidence < 0 or confidence > 1:
+        return False
+    if not isinstance(item.get("remediation"), str):
+        return False
+    return True
+
+
+def _project_finding(item: dict) -> dict:
+    affected = [
+        path
+        for path in item.get("affected_files") or []
+        if isinstance(path, str) and not _is_hidden_evaluator_path(path)
+    ]
+    return {
+        "id": str(item["id"]),
+        "domain": str(item["domain"]),
+        "severity": str(item["severity"]),
+        "title": redact(str(item["title"])),
+        "witness": redact(str(item["witness"])),
+        "affected_files": affected,
+        "confidence": float(item["confidence"]),
+        "remediation": redact(str(item["remediation"])),
+    }
+
+
+def _attach_findings(result: dict) -> tuple[str, list]:
+    """Parse/validate/project findings.v1.json from EXECUTOR_RESULT files."""
+    files = result.get("files")
+    if not isinstance(files, dict) or FINDINGS_ARTIFACT not in files:
+        return FINDINGS_INGEST_ABSENT, []
+    parsed = _parse_findings_raw(files.get(FINDINGS_ARTIFACT))
+    if not isinstance(parsed, dict):
+        return FINDINGS_INGEST_INVALID, []
+    if parsed.get("schema") != FINDINGS_SCHEMA:
+        return FINDINGS_INGEST_INVALID, []
+    items = parsed.get("findings")
+    if not isinstance(items, list):
+        return FINDINGS_INGEST_INVALID, []
+    projected: list[dict] = []
+    for item in items:
+        if not _validate_finding(item):
+            return FINDINGS_INGEST_INVALID, []
+        projected.append(_project_finding(item))
+    return FINDINGS_INGEST_VALID, projected
 
 
 def phase_status(outcome: str | None) -> str:
@@ -133,6 +256,8 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
     if deploy_ready is None:
         deploy_ready = True if outcome in ("TEST_PASS", "COMPLETED") else False
 
+    findings_ingest, findings = _attach_findings(result)
+
     return {
         "phase_id": str(result.get("phase") or _DEFAULT_PHASE),
         "phase_type": str(result.get("phase_type") or "race"),
@@ -184,6 +309,8 @@ def build_phase_result(result: dict | None, format_config: dict | None = None) -
                 | set(str(k) for k in ((result.get("files") or {}).keys()))
             ),
         },
+        "findings": findings,
+        "findings_ingest": findings_ingest,
     }
 
 

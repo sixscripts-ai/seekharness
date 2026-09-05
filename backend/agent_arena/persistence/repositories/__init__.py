@@ -13,6 +13,7 @@ from . import (  # noqa: F401
     leaderboard,
     memories,
     providers,
+    rate_limits,
     results,
     scores,
     skills,
@@ -29,4 +30,5 @@ __all__ = [
     "formats",
     "skills",
     "memories",
+    "rate_limits",
 ]

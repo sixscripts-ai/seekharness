@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, text
@@ -841,17 +841,41 @@ def battle_save(user_id: str, battle_id: str) -> dict:
 
 
 def battle_cancel(user_id: str, battle_id: str) -> dict:
-    battle = battle_get(user_id, battle_id)
-    if battle is None:
-        from fastapi import HTTPException
+    from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="Battle not found")
-    if battle.get("user_id") != user_id:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=403, detail="Forbidden")
-    battle_update(battle_id, {"status": "cancelled"})
-    return {"id": battle_id, "status": "cancelled"}
+    if using_postgres():
+        with session_scope() as session:
+            battle, err = repositories.battles.battle_cancel(
+                session, battle_id, user_id=user_id
+            )
+            if err == "not_found":
+                raise HTTPException(status_code=404, detail="Battle not found")
+            if err == "forbidden":
+                raise HTTPException(status_code=403, detail="Forbidden")
+            if err == "already_terminal":
+                if battle.status == "cancelled":
+                    return {"id": battle_id, "status": "cancelled", "already_terminal": True}
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Cannot cancel battle in terminal status '{battle.status}'",
+                )
+            return {"id": battle_id, "status": "cancelled"}
+    else:
+        battle = battle_get(user_id, battle_id)
+        if battle is None:
+            raise HTTPException(status_code=404, detail="Battle not found")
+        if battle.get("user_id") != user_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        current_status = battle.get("status")
+        if current_status in ("completed", "failed", "cancelled") or battle.get("finalized_at"):
+            if current_status == "cancelled":
+                return {"id": battle_id, "status": "cancelled", "already_terminal": True}
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot cancel battle in terminal status '{current_status}'",
+            )
+        battle_update(battle_id, {"status": "cancelled"})
+        return {"id": battle_id, "status": "cancelled"}
 
 
 # ---------------------------------------------------------------------------
@@ -891,11 +915,13 @@ def events_append(
     )
 
 
-def events_load(battle_id: str) -> list[dict]:
+def events_load(battle_id: str, since_created_at: float | None = None) -> list[dict]:
     """Durable events for SSE replay: [{type, data, event_id, created_at}]."""
     if using_postgres():
         with session_scope() as session:
-            rows = repositories.events.event_list(session, battle_id)
+            rows = repositories.events.event_list(
+                session, battle_id, since_created_at=since_created_at
+            )
             out = []
             for row in rows:
                 created = (
@@ -914,6 +940,8 @@ def events_load(battle_id: str) -> list[dict]:
     from agent_arena.event_bus import load_durable
 
     events = load_durable(battle_id)
+    if since_created_at is not None and events:
+        events = [e for e in events if (e.get("created_at") or 0.0) >= since_created_at]
     if events and using_postgres() and appwrite_read_fallback():
         for event in events:
             try:
@@ -928,6 +956,70 @@ def events_load(battle_id: str) -> list[dict]:
             except Exception as exc:
                 _sanitized_log("event read-through", exc)
     return events
+
+
+def event_count(
+    battle_id: str,
+    *,
+    event_type: str | None = None,
+    since_seconds: float | None = None,
+) -> int:
+    """Count events for battle within optional sliding window."""
+    if using_postgres():
+        with session_scope() as session:
+            since_dt = None
+            if since_seconds is not None:
+                since_dt = datetime.now(timezone.utc) - timedelta(seconds=since_seconds)
+            return repositories.events.event_count(
+                session, battle_id, event_type=event_type, since_created_at=since_dt
+            )
+    databases, database_id = _aw()
+    try:
+        from appwrite.query import Query
+
+        queries = [Query.equal("battle_id", battle_id)]
+        if event_type:
+            queries.append(Query.contains("payload", f'"type":"{event_type}"'))
+        queries.append(Query.limit(500))
+        res = databases.list_documents(database_id, "battle_events", queries=queries)
+        if since_seconds is not None:
+            cutoff = time.time() - since_seconds
+            count = 0
+            for doc in res.documents:
+                created = float(doc.data.get("created_at") or 0.0)
+                if created >= cutoff:
+                    count += 1
+            return count
+        return len(res.documents)
+    except Exception as exc:
+        _sanitized_log("event_count fallback", exc)
+        return 0
+
+
+def rate_limit_admit(
+    battle_id: str,
+    *,
+    now: float | None = None,
+    limit: int = 120,
+    window_seconds: float = 60.0,
+) -> bool:
+    """Atomically admit one internal call for a battle.
+
+    PostgreSQL is the distributed authority. Returns False when the rolling
+    window is already full. Does not record a rejected call. Raises on
+    datastore failure so the caller can fall back to the local window only.
+    """
+    if not using_postgres():
+        raise RuntimeError("rate_limit_admit requires PERSISTENCE_BACKEND=postgres")
+    ts = time.time() if now is None else now
+    with session_scope() as session:
+        return repositories.rate_limits.rate_limit_admit(
+            session,
+            battle_id,
+            now=ts,
+            limit=limit,
+            window_seconds=window_seconds,
+        )
 
 
 def round_create(
