@@ -249,19 +249,40 @@ def provider_upsert(
     masked_key: str,
     auth_style: str,
     model_name: str,
+    provider_id: str | None = None,
 ) -> dict:
-    """Create or replace a user provider (same-name upsert like Appwrite path)."""
+    """Create or replace a user provider."""
     if using_postgres():
         with session_scope() as session:
             existing = None
-            for row in repositories.providers.provider_list(session, user_id):
-                if row.name == name:
+            if provider_id is not None:
+                row = session.get(Provider, provider_id)
+                if row is not None and row.user_id == user_id:
                     existing = row
-                    break
+
+            if existing is None:
+                user_providers = repositories.providers.provider_list(session, user_id)
+                same_name = [p for p in user_providers if p.name == name]
+                if same_name:
+                    match = next((p for p in same_name if p.model_name == model_name), None)
+                    if match is not None:
+                        existing = match
+                    else:
+                        suffix = f" ({model_name})" if model_name and f"({model_name})" not in name else " (custom)"
+                        disambiguated = f"{name}{suffix}"
+                        counter = 2
+                        candidate = disambiguated
+                        existing_names = {p.name for p in user_providers}
+                        while candidate in existing_names:
+                            candidate = f"{disambiguated} #{counter}"
+                            counter += 1
+                        name = candidate
+
             if existing is not None:
                 row = repositories.providers.provider_update(
                     session,
                     existing.id,
+                    name=name,
                     base_url=base_url,
                     encrypted_key=encrypted_key,
                     masked_key=masked_key,
@@ -296,7 +317,7 @@ def provider_upsert(
             )
         return record
     return _aw_provider_upsert(
-        None, user_id, name, base_url, encrypted_key, masked_key, auth_style, model_name
+        provider_id, user_id, name, base_url, encrypted_key, masked_key, auth_style, model_name
     )
 
 

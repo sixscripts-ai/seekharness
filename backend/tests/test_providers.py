@@ -484,3 +484,168 @@ def test_provider_id_health_endpoint(client, authed_user):
         assert "latency_ms" in data
     finally:
         client.delete(f"/providers/{pid}")
+
+
+def test_unauthenticated_catalog_and_providers(client, monkeypatch):
+    """Catalog and host providers must be accessible without login."""
+    from agent_arena.config import settings
+    settings.cache_clear()
+    monkeypatch.setenv("HOST_OPENROUTER_KEY", "sk-or-test-key")
+    settings.cache_clear()
+    try:
+        cat_resp = client.get("/providers/catalog")
+        assert cat_resp.status_code == 200
+        catalog = cat_resp.json()
+        assert "models" in catalog
+        assert len(catalog["models"]) > 0
+
+        prov_resp = client.get("/providers")
+        assert prov_resp.status_code == 200
+        providers = prov_resp.json()
+        assert len(providers) > 0
+        assert all(p["id"].startswith("host:") for p in providers)
+    finally:
+        settings.cache_clear()
+
+
+def test_provider_upsert_disambiguation_and_key_preservation(monkeypatch):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from agent_arena.persistence.models import Provider
+    from agent_arena.persistence import service
+
+    engine = create_engine("sqlite:///:memory:")
+    Provider.__table__.create(engine)
+
+    @contextmanager
+    def mock_session_scope():
+        session = Session(engine)
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    monkeypatch.setattr(service, "using_postgres", lambda: True)
+    monkeypatch.setattr(service, "session_scope", mock_session_scope)
+    monkeypatch.setattr(service, "_dual_write", lambda name, fn: None)
+
+    # 1. Create first provider
+    p1 = service.provider_upsert(
+        user_id="user-1",
+        name="OpenRouter Gateway",
+        base_url="https://openrouter.ai/api/v1",
+        encrypted_key="enc-1",
+        masked_key="sk-...1",
+        auth_style="bearer",
+        model_name="anthropic/claude-3.7-sonnet",
+    )
+    assert p1["name"] == "OpenRouter Gateway"
+    assert p1["model_name"] == "anthropic/claude-3.7-sonnet"
+
+    # 2. Create second provider with SAME preset name, but different model
+    p2 = service.provider_upsert(
+        user_id="user-1",
+        name="OpenRouter Gateway",
+        base_url="https://openrouter.ai/api/v1",
+        encrypted_key="enc-2",
+        masked_key="sk-...2",
+        auth_style="bearer",
+        model_name="z-ai/glm-5",
+    )
+    assert p2["id"] != p1["id"]
+    assert p2["model_name"] == "z-ai/glm-5"
+    assert p2["name"] == "OpenRouter Gateway (z-ai/glm-5)"
+
+    # 3. Update first provider by ID
+    p1_updated = service.provider_upsert(
+        user_id="user-1",
+        name="OpenRouter Gateway Renamed",
+        base_url="https://openrouter.ai/api/v1",
+        encrypted_key="enc-1-kept",
+        masked_key="sk-...1",
+        auth_style="bearer",
+        model_name="anthropic/claude-3.7-sonnet",
+        provider_id=p1["id"],
+    )
+    assert p1_updated["id"] == p1["id"]
+    assert p1_updated["name"] == "OpenRouter Gateway Renamed"
+
+    # Both still exist
+    all_p = service.providers_list("user-1")
+    assert len(all_p) == 2
+
+
+def test_create_provider_route_key_preservation(client, authed_user, monkeypatch):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from agent_arena.persistence.models import Provider
+    from agent_arena.persistence import service
+
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine("sqlite:///:memory:", poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Provider.__table__.create(engine)
+
+    @contextmanager
+    def mock_session_scope():
+        session = Session(engine)
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    from cryptography.fernet import Fernet
+    from agent_arena.config import settings
+
+    settings.cache_clear()
+    monkeypatch.setenv("FERNET_KEY", Fernet.generate_key().decode())
+    settings.cache_clear()
+
+    monkeypatch.setattr(service, "using_postgres", lambda: True)
+    monkeypatch.setattr(service, "session_scope", mock_session_scope)
+    monkeypatch.setattr(service, "_dual_write", lambda name, fn: None)
+
+    # 1. Create provider via API
+    resp1 = client.post("/providers", json={
+        "name": "Custom Model 1",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "sk-real-secret-12345",
+        "auth_style": "bearer",
+        "model_name": "gpt-4o",
+    })
+    assert resp1.status_code == 200
+    p1 = resp1.json()
+    assert p1["name"] == "Custom Model 1"
+    pid = p1["id"]
+
+    # 2. Update without sending api_key (masked_key_reused)
+    resp2 = client.post("/providers", json={
+        "id": pid,
+        "name": "Custom Model 1 Renamed",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "masked_key_reused",
+        "auth_style": "bearer",
+        "model_name": "gpt-4o-mini",
+    })
+    assert resp2.status_code == 200
+    p2 = resp2.json()
+    assert p2["id"] == pid
+    assert p2["name"] == "Custom Model 1 Renamed"
+    assert p2["model_name"] == "gpt-4o-mini"
+    assert p2["masked_key"] == p1["masked_key"]
+
+    # Check that stored encrypted key decrypts to original secret, NOT "masked_key_reused"
+    from agent_arena import crypto, providers
+    doc = service.provider_get(authed_user, pid)
+    assert doc is not None
+    decrypted = crypto.decrypt_key(doc["encrypted_key"], providers._fernet_key())
+    assert decrypted == "sk-real-secret-12345"

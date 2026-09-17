@@ -476,12 +476,21 @@ export default function Providers() {
   function selectPreset(key: PresetKey) {
     setActivePreset(key);
     const cfg = PRESETS[key];
-    setName(cfg.name);
+    const initialLabel = cfg.model_name ? `${cfg.name} (${cfg.model_name})` : cfg.name;
+    setName(initialLabel);
     setBaseUrl(cfg.base_url);
     setAuthStyle(cfg.auth_style);
     setModelName(cfg.model_name);
     setApiKey("");
     setModalTestStatus(null);
+  }
+
+  function handleModelNameChange(newModel: string) {
+    setModelName(newModel);
+    const cfg = PRESETS[activePreset];
+    if (!editingProvider && cfg && (name === cfg.name || name.startsWith(`${cfg.name} (`))) {
+      setName(newModel.trim() ? `${cfg.name} (${newModel.trim()})` : cfg.name);
+    }
   }
 
   async function handleSaveProvider(e: React.FormEvent) {
@@ -502,6 +511,7 @@ export default function Providers() {
       if (!token) throw new Error("Not authenticated");
 
       const created = await api.createProvider(token, {
+        id: editingProvider?.id,
         name: name.trim(),
         base_url: baseUrl.trim(),
         api_key: apiKey.trim() || "masked_key_reused",
@@ -509,7 +519,12 @@ export default function Providers() {
         model_name: modelName.trim(),
       });
 
-      setMsg(`Provider "${created.name}" registered in encrypted vault.`);
+      unhide(created.id);
+      setMsg(
+        editingProvider
+          ? `Provider "${created.name}" updated in encrypted vault.`
+          : `Provider "${created.name}" registered in encrypted vault.`
+      );
       setModalOpen(false);
       await loadProviders();
     } catch (e) {
@@ -1265,7 +1280,7 @@ export default function Providers() {
                   <input
                     type="text"
                     value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
+                    onChange={(e) => handleModelNameChange(e.target.value)}
                     className="mono mt-1 w-full rounded-lg border border-[#1F1F22] bg-[#050508] px-3.5 py-2 text-xs text-white focus:border-accent focus:outline-none"
                     placeholder="e.g. claude-3-7-sonnet"
                   />

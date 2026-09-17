@@ -19,7 +19,7 @@ interface AuthResponse {
 
 function getStoredToken(): string | null {
   try {
-    return sessionStorage.getItem("arena_jwt");
+    return localStorage.getItem("arena_jwt") || sessionStorage.getItem("arena_jwt");
   } catch {
     return null;
   }
@@ -28,8 +28,10 @@ function getStoredToken(): string | null {
 function setStoredToken(token: string | null) {
   try {
     if (token) {
+      localStorage.setItem("arena_jwt", token);
       sessionStorage.setItem("arena_jwt", token);
     } else {
+      localStorage.removeItem("arena_jwt");
       sessionStorage.removeItem("arena_jwt");
     }
   } catch {}

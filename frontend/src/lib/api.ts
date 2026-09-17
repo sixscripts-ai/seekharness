@@ -39,7 +39,8 @@ export const api = {
   stats: () => request<StatsOut>("/stats"),
   formats: (token?: string | null) =>
     request<FormatOut[]>("/formats", { token }),
-  providers: (token: string) => request<ProviderOut[]>("/providers", { token }),
+  providers: (token?: string | null) =>
+    request<ProviderOut[]>("/providers", { token: token || undefined }),
   createProvider: (token: string, body: ProviderCreate) =>
     request<ProviderOut>("/providers", { method: "POST", body, token }),
   deleteProvider: (token: string, id: string) =>
@@ -157,6 +158,7 @@ export function splitProviders(providers: ProviderOut[]) {
 }
 
 export type ProviderCreate = {
+  id?: string;
   name: string;
   base_url: string;
   api_key: string;

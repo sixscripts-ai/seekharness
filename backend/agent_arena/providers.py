@@ -8,7 +8,7 @@ from appwrite.query import Query
 from fastapi import APIRouter, Depends, HTTPException
 
 from . import crypto, db
-from .auth import get_current_user
+from .auth import get_current_user, get_optional_user
 from .config import settings
 from .schemas import ProviderCreate, ProviderHealth, ProviderOut
 from .ssrf import validate_base_url
@@ -780,35 +780,59 @@ def _find_existing(databases, database_id, user_id, name):
 @router.post("", response_model=ProviderOut)
 def create_provider(body: ProviderCreate, user_id: str = Depends(get_current_user)):
     base_url = validate_base_url(body.base_url)
-    encrypted = crypto.encrypt_key(body.api_key, _fernet_key())
-    masked = crypto.mask_key(body.api_key)
     from .persistence import service
+
+    is_key_reused = body.api_key in ("masked_key_reused", "") and bool(body.id)
+    if is_key_reused and body.id:
+        existing_doc = service.provider_get(user_id, body.id)
+        if not existing_doc or existing_doc.get("user_id") != user_id:
+            raise HTTPException(status_code=404, detail="Provider not found to update")
+        encrypted = existing_doc["encrypted_key"]
+        masked = existing_doc.get("masked_key", "")
+    else:
+        if not body.api_key or body.api_key == "masked_key_reused":
+            raise HTTPException(status_code=400, detail="API Key is required")
+        encrypted = crypto.encrypt_key(body.api_key, _fernet_key())
+        masked = crypto.mask_key(body.api_key)
 
     try:
         record = service.provider_upsert(
-            user_id, body.name, base_url, encrypted, masked, body.auth_style, body.model_name
+            user_id,
+            body.name,
+            base_url,
+            encrypted,
+            masked,
+            body.auth_style,
+            body.model_name,
+            provider_id=body.id,
         )
     except AppwriteException as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     return ProviderOut(
         id=record["id"],
-        name=body.name,
-        base_url=body.base_url,
-        masked_key=masked,
-        auth_style=body.auth_style,
-        model_name=body.model_name,
+        name=record["name"],
+        base_url=record["base_url"],
+        masked_key=record["masked_key"],
+        auth_style=record["auth_style"],
+        model_name=record.get("model_name", ""),
     )
 
 
 @router.get("/catalog")
-def list_model_catalog(_user_id: str = Depends(get_current_user)):
+def list_model_catalog(_user_id: str | None = Depends(get_optional_user)):
     """Authoritative provider + model fleet. Credentials stay backend-only."""
     return public_catalog()
 
 
 @router.get("")
-def list_providers(user_id: str = Depends(get_current_user)):
+def list_providers(user_id: str | None = Depends(get_optional_user)):
     from .persistence import service
+
+    if not user_id:
+        return configured_host_providers()
 
     records = service.providers_list(user_id)
     items = [

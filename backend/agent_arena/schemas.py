@@ -4,11 +4,12 @@ from pydantic import BaseModel, Field
 
 
 class ProviderCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=100)
+    id: str | None = None
+    name: str = Field(min_length=1, max_length=128)
     base_url: str = Field(min_length=1)
-    api_key: str = Field(min_length=1)
+    api_key: str = Field(default="")
     auth_style: str = Field(default="bearer", pattern="^(bearer|modal_proxy|custom)$")
-    model_name: str = Field(min_length=1, max_length=100)
+    model_name: str = Field(default="", max_length=128)
 
 
 class ProviderOut(BaseModel):
