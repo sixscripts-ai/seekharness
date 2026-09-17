@@ -19,6 +19,7 @@ from .runtime_packaging import (
     canonical_skill_runtime_env,
     fighter_skill_directory,
     fighter_sandbox_pip_packages,
+    target_runtime_pip_packages,
 )
 from .sandbox.client import HttpTransport, InternalClient
 from .sandbox.runner import run_battle_loop
@@ -687,8 +688,11 @@ def try_spawn_modal_sandbox(
             "util-linux",
         )
         .pip_install(*fighter_sandbox_pip_packages())
-        .add_local_python_source("agent_arena")
     )
+    runtime_extra = target_runtime_pip_packages(cfg.get("runtime"))
+    if runtime_extra:
+        image = image.pip_install(*runtime_extra)
+    image = image.add_local_python_source("agent_arena")
     image = attach_canonical_skill_yaml(image)
     image = attach_fighter_skills(image)
     public_targets = None

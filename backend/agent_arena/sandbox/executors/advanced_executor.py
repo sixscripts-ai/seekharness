@@ -3618,6 +3618,7 @@ class AdvancedExecutor(Executor):
         context_mode: str = "strict",
         skills_telemetry: dict | None = None,
         memory_telemetry: dict | None = None,
+        starter_files: dict | None = None,
     ) -> dict:
         """Collect workspace + score the harness. Credits TEST_PASS even if the
         step budget was later burned by extra tool calls.
@@ -3735,33 +3736,75 @@ class AdvancedExecutor(Executor):
         # Before the final test we detect tampering (hash mismatch) and always
         # restore the canonical harness, so a fighter can never fake TEST_PASS
         # by editing its own tests. Tampering is recorded as policy evidence.
-        if canonical_test_code is None:
-            canonical_test_code = (
-                ((format_config or {}).get("role_test_code") or {}).get(role)
-                or (format_config or {}).get("test_code")
-                or ""
-            )
-        canonical_test_code = str(canonical_test_code or DEFAULT_TEST_CODE)
-        harness_path = work / "tests" / "test_target.py"
-        canonical_hash = hashlib.sha256(canonical_test_code.encode("utf-8")).hexdigest()
-        try:
-            harness_tampered = (
-                hashlib.sha256(harness_path.read_bytes()).hexdigest() != canonical_hash
-            )
-        except Exception:
-            harness_tampered = True
-        if harness_tampered:
-            harness_path.parent.mkdir(parents=True, exist_ok=True)
-            harness_path.write_text(canonical_test_code, encoding="utf-8")
+        target_id = (format_config or {}).get("target_id")
+        harness_tampered = False
+        if target_id:
+            starter_tests = {
+                k: v
+                for k, v in (starter_files or {}).items()
+                if (k.startswith("tests/") or k.startswith("test_"))
+                and not k.startswith("tests/hidden/")
+            }
+            if starter_tests:
+                for rel_path, expected_content in starter_tests.items():
+                    target_file = work / rel_path
+                    if not target_file.is_file():
+                        harness_tampered = True
+                        break
+                    expected_bytes = (
+                        expected_content
+                        if isinstance(expected_content, bytes)
+                        else str(expected_content).encode("utf-8")
+                    )
+                    if (
+                        hashlib.sha256(target_file.read_bytes()).hexdigest()
+                        != hashlib.sha256(expected_bytes).hexdigest()
+                    ):
+                        harness_tampered = True
+                        break
+                if harness_tampered:
+                    for rel_path, expected_content in starter_tests.items():
+                        target_file = work / rel_path
+                        target_file.parent.mkdir(parents=True, exist_ok=True)
+                        target_file.write_bytes(
+                            expected_content
+                            if isinstance(expected_content, bytes)
+                            else str(expected_content).encode("utf-8")
+                        )
+        else:
+            if canonical_test_code is None:
+                canonical_test_code = (
+                    ((format_config or {}).get("role_test_code") or {}).get(role)
+                    or (format_config or {}).get("test_code")
+                    or ""
+                )
+            canonical_test_code = str(canonical_test_code or DEFAULT_TEST_CODE)
+            harness_path = work / "tests" / "test_target.py"
+            canonical_hash = hashlib.sha256(canonical_test_code.encode("utf-8")).hexdigest()
+            try:
+                harness_tampered = (
+                    hashlib.sha256(harness_path.read_bytes()).hexdigest() != canonical_hash
+                )
+            except Exception:
+                harness_tampered = True
+            if harness_tampered:
+                harness_path.parent.mkdir(parents=True, exist_ok=True)
+                harness_path.write_text(canonical_test_code, encoding="utf-8")
         # The final verdict ALWAYS comes from a fresh run of the restored
         # canonical harness. A mid-battle TEST_PASS observed through a tampered
         # harness can never become the recorded outcome.
         test_res = sess.test("", count_step=False)
         if emit_action is not None:
+            emit_target = (
+                (format_config.get("verification") or {}).get("visible_command")
+                or (sess.test_cmd or "tests/test_target.py")
+                if target_id
+                else "tests/test_target.py"
+            )
             emit_action(
                 model_id,
                 "test",
-                target="tests/test_target.py",
+                target=emit_target,
                 state="done",
                 result=str(test_res or "")[:4000],
                 exec_id="exec_" + uuid.uuid4().hex[:12],
@@ -4612,6 +4655,7 @@ class AdvancedExecutor(Executor):
                     context_mode=role_context_mode,
                     skills_telemetry=tracker.to_telemetry(),
                     memory_telemetry=memory_telemetry,
+                    starter_files=starter_files,
                     **extra,
                 )
 

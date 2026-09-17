@@ -250,7 +250,7 @@ def _derive_verify_binding(battle: dict, fmt_cfg: dict, body: VerifyBody) -> tup
     if role and roles and role not in roles:
         raise HTTPException(status_code=400, detail="role does not match battle plan")
     phase = str(body.phase or "").strip()
-    if phase and plan_phases and phase not in plan_phases:
+    if phase and phase != "verify" and plan_phases and phase not in plan_phases:
         raise HTTPException(status_code=400, detail="phase does not match battle plan")
     return target_id, kind, phase, role, model_id
 

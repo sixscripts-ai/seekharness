@@ -50,6 +50,15 @@ def fighter_sandbox_pip_packages() -> tuple[str, ...]:
     return FIGHTER_SANDBOX_PIP
 
 
+def target_runtime_pip_packages(runtime: str | None) -> tuple[str, ...]:
+    """Additional pip packages required by specific target runtimes."""
+    r = str(runtime or "").lower()
+    extra: list[str] = []
+    if "fastapi" in r:
+        extra.extend(["fastapi", "uvicorn"])
+    return tuple(extra)
+
+
 def local_canonical_skill_dir() -> Path:
     package_dir = Path(__file__).resolve().parent / "skills"
     if all((package_dir / name).is_file() for name in CANONICAL_SKILL_YAML_NAMES):

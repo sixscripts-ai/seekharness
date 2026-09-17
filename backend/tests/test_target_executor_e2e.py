@@ -91,6 +91,11 @@ def test_executor_runs_target_bundle_with_trusted_verifier(tmp_path: Path, monke
     results = _executor_results(transport.rounds)
     assert all("target_verification_error" not in r for r in results)
     assert all("hidden_output" not in r for r in results)
+    assert all(r.get("policy", {}).get("status") == "clean" for r in results)
+    assert all(
+        "harness-tampered" not in r.get("policy", {}).get("violations", [])
+        for r in results
+    )
 
 
 def test_executor_fail_closed_on_missing_target(monkeypatch: pytest.MonkeyPatch):
