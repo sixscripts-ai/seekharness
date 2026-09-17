@@ -1331,7 +1331,7 @@ def test_initial_model_prompt_uses_compact_skill_discovery_context(monkeypatch):
     assert "skills()" in system
     assert 'skills(index="security")' in system
     assert "Skills are optional advisory expertise" in system
-    assert "Choose your own strategy" in system
+    assert "choose relevant knowledge" in system
     assert "Discovery Quality" not in system
     assert "Network access is not allowed" in system
 

@@ -62,3 +62,24 @@ def test_judge_battle_fails_after_retries(monkeypatch):
             rubric="x",
             call_spec=("https://example.invalid/v1", "bearer", "k", "m"),
         )
+
+
+def test_compact_artifacts_filters_and_truncates():
+    artifacts = [
+        {"phase": "p1", "model_id": "m1", "artifact": '{"files": {"a.py": "' + ("x" * 2000) + '"}}', "role": "builder"},
+        {"phase": "p2", "model_id": "m2", "artifact": "Normal artifact", "role": "breaker"},
+        {"phase": "p3", "model_id": "m1", "artifact": "Long text " * 200, "role": "builder"},
+    ]
+    compacted = judge._compact_artifacts(artifacts, max_art_len=100)
+    assert len(compacted) == 2
+    assert compacted[0]["artifact"] == "Normal artifact"
+    assert compacted[1]["artifact"].endswith("... [truncated]")
+    assert len(compacted[1]["artifact"]) == 100 + len("... [truncated]")
+
+
+def test_parse_json_object_rejects_empty():
+    with pytest.raises(ValueError, match="Empty response"):
+        judge._parse_json_object("")
+    with pytest.raises(ValueError, match="Empty response"):
+        judge._parse_json_object("   ")
+

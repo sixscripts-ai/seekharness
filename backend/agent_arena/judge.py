@@ -40,8 +40,30 @@ def _system_prompt(rubric: str, weights: dict[str, float] | None) -> str:
 """
 
 
+def _compact_artifacts(artifacts: list[dict], max_art_len: int = 1500) -> list[dict]:
+    compacted: list[dict] = []
+    for a in artifacts:
+        if not isinstance(a, dict):
+            continue
+        art_str = str(a.get("artifact", ""))
+        # Filter out verbose full-workspace snapshot file dumps
+        if '"files":' in art_str and len(art_str) > 1000:
+            continue
+        if len(art_str) > max_art_len:
+            art_str = art_str[:max_art_len] + "... [truncated]"
+        compacted.append({
+            "phase": a.get("phase", ""),
+            "model_id": a.get("model_id", ""),
+            "artifact": art_str,
+            "role": a.get("role", ""),
+        })
+    return compacted
+
+
 def _parse_json_object(raw: str) -> dict[str, Any]:
     text = (raw or "").strip()
+    if not text:
+        raise ValueError("Empty response from judge model")
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
@@ -85,7 +107,7 @@ def judge_battle(
 
     user_payload = {
         "model_ids": model_ids,
-        "artifacts": artifacts,
+        "artifacts": _compact_artifacts(artifacts),
     }
     messages = [
         {"role": "system", "content": _system_prompt(rubric, weights)},
