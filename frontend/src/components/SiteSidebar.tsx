@@ -29,7 +29,7 @@ export default function SiteSidebar({ mobileOpen = false, onCloseMobile }: SiteS
       active: location.pathname === "/" || location.pathname === "/battles" || location.pathname === "/history" || location.pathname.startsWith("/battles/")
     },
     { 
-      href: "/challenges", 
+      href: "/challenges/official",
       label: "Challenges", 
       icon: Shield, 
       active: location.pathname.startsWith("/challenges") || location.pathname.startsWith("/targets")

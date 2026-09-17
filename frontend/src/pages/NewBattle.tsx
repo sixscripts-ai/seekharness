@@ -16,7 +16,7 @@ export default function NewBattle() {
   if (params.get("custom") === "1" || params.get("source") === "custom") return <CustomBattle key={params.get("draft") || params.get("template") || "custom"} />;
   if (params.get("target") || params.get("format")) return <ConfiguredBattle key={params.toString()} />;
   return <div className="battle-workspace min-h-[calc(100vh-64px)] bg-[#08090D]/95"><div className="mx-auto max-w-[1280px] px-4 py-8 sm:px-8 sm:py-12">
-    <BattleSetupHeader step={1} /><h2 className="mb-2 text-xl text-white">What should your models solve?</h2><p className="mb-7 text-sm text-slate-400">Choose a challenge. Its rules determine the models and setup you need.</p><ChallengeLibrary picker />
+    <BattleSetupHeader step={1} /><h2 className="mb-2 text-xl text-white">What should your models solve?</h2><p className="mb-7 text-sm text-slate-400">Choose a challenge. Its rules determine the models and setup you need.</p><ChallengeLibrary picker section="all" />
   </div></div>;
 }
 

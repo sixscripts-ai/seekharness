@@ -64,6 +64,11 @@ function LegacyTargets() {
   return <Navigate replace to={legacyTargetUrl(location.pathname, location.search, location.hash)} />;
 }
 
+function DefaultChallenges() {
+  const location = useLocation();
+  return <Navigate replace to={`/challenges/official${location.search}${location.hash}`} />;
+}
+
 function AppShell() {
   const loc = useLocation();
   const fullWidth = isFullWidthPath(loc.pathname);
@@ -107,7 +112,9 @@ function AppShell() {
             <Route path="/leaderboard" element={<Leaderboard />} />
             <Route path="/targets" element={<LegacyTargets />} />
             <Route path="/targets/:id" element={<LegacyTargets />} />
-            <Route path="/challenges" element={<Targets />} />
+            <Route path="/challenges" element={<DefaultChallenges />} />
+            <Route path="/challenges/official" element={<Targets section="official" />} />
+            <Route path="/challenges/user" element={<Targets section="user" />} />
             <Route path="/challenges/:id" element={<TargetDetail />} />
             <Route path="*" element={<div className="p-8 text-center text-zinc-400">404 — Not found</div>} />
           </Routes>

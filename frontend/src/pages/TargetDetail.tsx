@@ -107,7 +107,7 @@ export default function TargetDetail() {
           </h3>
           <p className="mt-2 text-xs text-zinc-400">{error || "The requested target is not installed in the registry."}</p>
           <Link
-            to="/challenges"
+            to="/challenges/official"
             className="mono btn btn-primary mt-6 inline-flex h-9 items-center gap-2 px-5 text-xs font-bold"
           >
             <ArrowLeft className="h-3.5 w-3.5" /> Back to Challenges
@@ -135,7 +135,7 @@ export default function TargetDetail() {
         <div className="relative z-10 mx-auto max-w-[1560px]">
           {/* Breadcrumb */}
           <Link
-            to="/challenges"
+            to="/challenges/official"
             className="mono inline-flex items-center gap-2 text-xs font-semibold text-zinc-400 hover:text-white transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />

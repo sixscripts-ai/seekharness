@@ -25,7 +25,8 @@ export default function SiteHeader({ onToggleSidebar }: SiteHeaderProps) {
     e.preventDefault();
     if (!searchQuery.trim()) return;
     if (location.pathname.startsWith("/challenges")) {
-      navigate(`/challenges?q=${encodeURIComponent(searchQuery.trim())}`);
+      const section = location.pathname === "/challenges/user" ? "user" : "official";
+      navigate(`/challenges/${section}?q=${encodeURIComponent(searchQuery.trim())}`);
     } else {
       navigate(`/battles?q=${encodeURIComponent(searchQuery.trim())}`);
     }
@@ -61,7 +62,7 @@ export default function SiteHeader({ onToggleSidebar }: SiteHeaderProps) {
               <span>Battles</span>
             </Link>
             <Link
-              to="/challenges"
+              to="/challenges/official"
               aria-current={active("/challenges") ? "page" : undefined}
               className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
                 active("/challenges")
