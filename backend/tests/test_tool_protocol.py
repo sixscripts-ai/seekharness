@@ -566,6 +566,10 @@ def test_breaker_tools_exec_through_tool_session(tmp_path, monkeypatch):
     from agent_arena.sandbox.executors.advanced_executor import ToolSession
 
     monkeypatch.setenv("ARENA_HERMETIC", "1")
+    monkeypatch.setenv(
+        "BATTLE_RO_DATABASE_URL",
+        "postgresql://mock_reader:mock@battle.mock.invalid/battle",
+    )
     session = ToolSession(workdir=tmp_path)
     try:
         page = session._ensure_page()
@@ -626,4 +630,3 @@ def test_playwright_tools_fail_closed_when_page_unavailable(tmp_path, monkeypatc
         assert not any(tmp_path.rglob("*.png"))
     finally:
         session.close()
-

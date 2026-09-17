@@ -40,6 +40,10 @@ REASONING_OFF_HIGH = (REASONING_OFF, REASONING_HIGH)
 REASONING_FULL = (REASONING_OFF, REASONING_HIGH, REASONING_MAX)
 
 _FIGHTER_JUDGE = ("fighter", "judge")
+# Canonical configuration roles that execute code through the same normal
+# tool-using runtime. These are model-catalog admissions only: provider
+# credentials and requests still resolve through ``get_model_call_spec``.
+_CODING_AGENT_ROLES = ("builder", "breaker", "fighter", "reviewer")
 _FIGHTER_ONLY = ("fighter",)
 
 
@@ -364,6 +368,7 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
         OPENROUTER_PROVIDER_ID,
         "qwen/qwen3-coder",
         "OpenRouter (Qwen3 Coder)",
+        roles=_CODING_AGENT_ROLES,
         tier="value",
         context=256_000,
         context_class="long",
@@ -418,6 +423,7 @@ MODEL_SPECS: tuple[ModelSpec, ...] = (
         "deepseek",
         "deepseek-v4-flash",
         "DeepSeek (Chat)",
+        roles=_CODING_AGENT_ROLES,
         tier="value",
         context=64_000,
         context_class="medium",

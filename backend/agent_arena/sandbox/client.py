@@ -140,6 +140,9 @@ class FakeTransport:
     def __init__(self):
         self.calls: list[tuple[str, dict]] = []
         self.model_replies: dict[str, Any] = {}
+        # Backward-compatible default used by executor integration fixtures.
+        # Per-model replies remain authoritative when both are configured.
+        self.model_canned: Any | None = None
         self.judge_result: dict[str, Any] = {
             "scores": {},
             "justifications": {},
@@ -160,7 +163,12 @@ class FakeTransport:
         self.calls.append((path, json))
         if path == "/internal/model":
             mid = json.get("model_id", "")
-            reply = self.model_replies.get(mid, f"[reply:{mid}]")
+            fallback = (
+                self.model_canned
+                if self.model_canned is not None
+                else f"[reply:{mid}]"
+            )
+            reply = self.model_replies.get(mid, fallback)
             if isinstance(reply, list):
                 content = reply.pop(0) if reply else f"[reply:{mid}]"
             else:
@@ -207,6 +215,8 @@ class InternalClient:
         messages: list[dict],
         phase: str = "",
         max_tokens: int | None = None,
+        temperature: float | None = None,
+        reasoning_effort: str | None = None,
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
         return_raw: bool = False,
@@ -220,6 +230,10 @@ class InternalClient:
         }
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if reasoning_effort is not None:
+            payload["reasoning_effort"] = reasoning_effort
         if tools is not None:
             payload["tools"] = tools
         if tool_choice is not None:

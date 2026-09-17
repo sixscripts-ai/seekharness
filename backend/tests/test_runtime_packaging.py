@@ -34,10 +34,11 @@ def _source_order(path: Path, first: str, second: str) -> None:
     assert text.rindex(first) < text.rindex(second)
 
 
-def test_fighter_sandbox_pip_includes_pyyaml_only():
+def test_fighter_sandbox_pip_includes_runtime_dependencies():
     packages = fighter_sandbox_pip_packages()
-    assert packages == ("httpx", "pytest", "pyyaml")
+    assert packages == ("httpx", "pytest", "pyyaml", "pydantic")
     assert FIGHTER_SANDBOX_PIP == packages
+    assert "appwrite" not in packages
     assert yaml.__name__ == "yaml"
 
 

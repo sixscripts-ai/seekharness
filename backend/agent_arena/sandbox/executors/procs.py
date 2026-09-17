@@ -111,6 +111,7 @@ class ProcessManager:
                     stderr=subprocess.PIPE,
                     text=True,
                     start_new_session=True,
+                    env=env,
                 )
             except Exception as exc:
                 raise RuntimeError(f"failed to start bg {name}: {exc}") from exc

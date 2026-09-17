@@ -16,10 +16,20 @@ EVALUATOR_PRIVATE_KEYS = frozenset(
     {
         "hidden_command",
         "hidden_hash",
+        "evaluator_hash",
+        "breaker_evaluator",
         "hidden_test_files",
         "hidden_output",
         "hidden_passed",
         "hidden_exit_code",
+        # Verifier process output is trusted-host diagnostic material.  The
+        # builder aggregate includes hidden-test stdout, so neither it nor the
+        # individual visible/breaker streams may enter SSE, replay, or public
+        # battle payloads.
+        "builder_output",
+        "breaker_output",
+        "visible_output",
+        "verification_log",
         "reference_files",
         "private_fixture_files",
     }
@@ -202,9 +212,18 @@ def public_battle_payload(
     """Owner/browser GET view: sanitized config plus authoritative result fields."""
     payload = scrub_evaluator_private(copy.deepcopy(battle or {}))
     payload.pop("encrypted_key", None)
+    # The branch handle is control-plane cleanup state, not owner/Fighter
+    # evidence. The URL is never stored here, but the non-secret handle must
+    # also remain private.
+    payload.pop("battle_db_branch_id", None)
     cfg = payload.get("battle_config")
     if isinstance(cfg, dict):
         payload["battle_config"] = owner_visible_battle_config(cfg)
+    payload["context_mode"] = str(
+        payload.get("context_mode")
+        or (cfg if isinstance(cfg, dict) else {}).get("context_mode")
+        or "strict"
+    ).lower()
 
     result_rows = list(results or [])
     scores = public_scores(score_rows, result_rows)

@@ -5,7 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from . import event_bus, mock_runner, sandbox_launcher
-from .auth import get_current_user, require_owner
+from .auth import get_current_user, get_optional_user, require_owner
 from .providers import is_host_model
 from .schemas import BattleCreate
 
@@ -60,6 +60,15 @@ def _require_owned_battle(user_id: str, battle_id: str) -> dict:
     return battle
 
 
+def _require_viewable_battle(user_id: str | None, battle_id: str) -> dict:
+    from .persistence import service
+
+    battle = service.battle_get(user_id or "", battle_id)
+    if battle is None:
+        raise HTTPException(status_code=404, detail="Battle not found")
+    return battle
+
+
 @router.post("", status_code=201)
 def create_battle(
     body: BattleCreate,
@@ -95,6 +104,7 @@ def create_battle(
         difficulty=body.difficulty,
         target_id=body.target_id,
         target_version=body.target_version,
+        context_mode=body.context_mode,
     )
     battle_id = battle["id"]
     # Prefer real sandbox runner; mock_runner remains for ARENA_USE_MOCK=1
@@ -115,11 +125,11 @@ def list_battles(saved: bool = False, user_id: str = Depends(get_current_user)):
 
 
 @router.get("/{battle_id}")
-def get_battle(battle_id: str, user_id: str = Depends(get_current_user)):
+def get_battle(battle_id: str, user_id: str | None = Depends(get_optional_user)):
     from .battle_public import public_battle_payload
     from .persistence import service
 
-    data = _require_owned_battle(user_id, battle_id)
+    data = _require_viewable_battle(user_id, battle_id)
     results: list = []
     score_rows: list = []
     try:
@@ -135,10 +145,10 @@ def get_battle(battle_id: str, user_id: str = Depends(get_current_user)):
 
 
 @router.get("/{battle_id}/artifacts")
-def get_artifacts(battle_id: str, user_id: str = Depends(get_current_user)):
+def get_artifacts(battle_id: str, user_id: str | None = Depends(get_optional_user)):
     from .persistence import service
 
-    battle = _require_owned_battle(user_id, battle_id)
+    battle = _require_viewable_battle(user_id, battle_id)
     if not battle.get("saved"):
         raise HTTPException(
             status_code=404, detail="Battle was not saved; artifacts are gone"
@@ -154,10 +164,10 @@ def get_artifacts(battle_id: str, user_id: str = Depends(get_current_user)):
 
 
 @router.get("/{battle_id}/stream")
-def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
+def stream_battle(battle_id: str, user_id: str | None = Depends(get_optional_user)):
     from .persistence import service
 
-    _require_owned_battle(user_id, battle_id)
+    _require_viewable_battle(user_id, battle_id)
 
     def event_generator():
         from .battle_public import public_sse_payload
@@ -194,7 +204,7 @@ def stream_battle(battle_id: str, user_id: str = Depends(get_current_user)):
                     "event": ev["type"],
                     "data": json.dumps(public_sse_payload(ev)),
                 }
-            battle = service.battle_get(user_id, battle_id) or {}
+            battle = service.battle_get(user_id or "", battle_id) or {}
             if battle.get("status") in ("completed", "failed", "cancelled"):
                 yield {
                     "event": "done",
@@ -218,6 +228,10 @@ def cancel_battle(battle_id: str, user_id: str = Depends(get_current_user)):
     sandbox_id = battle.get("sandbox_id")
     if sandbox_id:
         sandbox_launcher.stop_sandbox(sandbox_id)
+    sandbox_launcher.cleanup_battle_database(
+        battle_id,
+        branch_id=battle.get("battle_db_branch_id"),
+    )
     event_bus.publish(
         battle_id, {"type": "battle_status", "data": {"status": "cancelled", "authoritative": True}}
     )

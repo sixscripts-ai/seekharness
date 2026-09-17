@@ -1,0 +1,19 @@
+#!/bin/bash
+# Resolve symlink to get real directory
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+    DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+REPO_ROOT="$(cd "$DIR/.." && pwd)"
+
+if [ -f "$REPO_ROOT/backend/.venv/bin/python" ]; then
+    PY="$REPO_ROOT/backend/.venv/bin/python"
+else
+    PY="python3"
+fi
+
+export PYTHONPATH="$DIR:$PYTHONPATH"
+exec "$PY" -m seekharness_dev.cli "$@"

@@ -189,6 +189,19 @@ def test_scrub_evaluator_private_drops_nested_hidden_fields():
     assert cleaned["data"]["visible_command"] == "pytest tests/visible"
 
 
+def test_scrub_evaluator_private_drops_all_verifier_process_output():
+    cleaned = scrub_evaluator_private(
+        {
+            "builder_output": "Visible: ok\nHidden: SECRET_ASSERTION",
+            "breaker_output": "FLAG{private}",
+            "visible_output": "pytest collection details",
+            "verification_log": "trusted host traceback",
+            "verification_status": "verified_fail",
+        }
+    )
+    assert cleaned == {"verification_status": "verified_fail"}
+
+
 def test_public_sse_payload_keeps_envelope_ids_without_hidden_fields():
     from agent_arena.battle_public import public_sse_payload
 

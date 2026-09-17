@@ -6,6 +6,7 @@ via the Neon Management API v2.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -77,8 +78,7 @@ class NeonBranchManager:
         )
         self.base_url = base_url or os.environ.get("NEON_API_BASE", NEON_API_BASE)
         self.use_mock = (
-            not self.api_key
-            or os.environ.get("ARENA_HERMETIC") == "1"
+            os.environ.get("ARENA_HERMETIC") == "1"
             or os.environ.get("ARENA_USE_MOCK", "0").lower() in ("1", "true")
         )
 
@@ -95,9 +95,17 @@ class NeonBranchManager:
         parent_branch_id: str = "main",
         ttl: str = "1d",
     ) -> BranchResult:
-        clean_id = battle_id.removeprefix("battle-")
-        branch_name = f"battle-{clean_id[:16]}"
-        if self.use_mock or not httpx:
+        clean_id = re.sub(r"[^A-Za-z0-9_-]+", "-", battle_id.removeprefix("battle-")).strip(
+            "-"
+        ) or "unknown"
+        if len(clean_id) <= 16:
+            branch_name = f"battle-{clean_id}"
+        else:
+            # Keep the readable prefix while preventing two Battle IDs with
+            # the same prefix from sharing a provider resource name.
+            suffix = hashlib.sha256(battle_id.encode("utf-8")).hexdigest()[:12]
+            branch_name = f"battle-{clean_id[:16]}-{suffix}"
+        if self.use_mock:
             mock_rw = f"postgresql://mock_user:mock_pass@ep-{branch_name}.mock.neon.tech/neondb?sslmode=require"
             mock_ro = f"postgresql://mock_ro:mock_pass@ep-{branch_name}.mock.neon.tech/neondb?sslmode=require&options=-cdefault_transaction_read_only%3Don"
             return BranchResult(
@@ -107,6 +115,14 @@ class NeonBranchManager:
                 read_only_database_url=mock_ro,
                 parent_id=parent_branch_id,
                 is_mock=True,
+            )
+        if not self.api_key:
+            raise NeonProvisioningError(
+                "ARENA_INFRA_FAILURE: Battle Neon credentials unavailable"
+            )
+        if not httpx:
+            raise NeonProvisioningError(
+                "ARENA_INFRA_FAILURE: Neon HTTP client unavailable"
             )
 
         url = f"{self.base_url}/projects/{self.project_id}/branches"
@@ -128,14 +144,10 @@ class NeonBranchManager:
             with httpx.Client(timeout=30.0) as client:
                 res = client.post(url, headers=self._headers(), json=payload)
                 if res.status_code not in (200, 201):
-                    logger.error(
-                        "Neon API branch creation failed (%s): %s",
-                        res.status_code,
-                        res.text,
-                    )
+                    logger.error("Neon API branch creation failed status=%s", res.status_code)
                     # FAIL CLOSED: Never fall back to control-plane DATABASE_URL
                     raise NeonProvisioningError(
-                        f"ARENA_INFRA_FAILURE: Neon branch creation failed ({res.status_code}): {res.text}"
+                        f"ARENA_INFRA_FAILURE: Neon branch creation failed ({res.status_code})"
                     )
 
                 data = res.json()
@@ -162,11 +174,38 @@ class NeonBranchManager:
         except NeonProvisioningError:
             raise
         except Exception as exc:
-            logger.error("Exception creating Neon ephemeral branch: %s", exc)
+            logger.error(
+                "Exception creating Neon ephemeral branch: %s",
+                exc.__class__.__name__,
+            )
             # FAIL CLOSED: Never fall back to control-plane DATABASE_URL
             raise NeonProvisioningError(
-                f"ARENA_INFRA_FAILURE: Exception communicating with Neon API: {exc}"
+                "ARENA_INFRA_FAILURE: Exception communicating with Neon API"
             ) from exc
+
+    def initialize_battle_database(
+        self,
+        branch: BranchResult,
+        *,
+        database_config: Optional[dict[str, Any]] = None,
+    ) -> dict[str, str]:
+        """Validate the newly-created Battle database before execution.
+
+        The current Target contract has no trusted schema/migration command;
+        application-owned initialization belongs to the later service-launch
+        seam. If a future contract supplies an initialization directive, fail
+        closed until Arena owns and validates its execution path.
+        """
+        if not branch.database_url or not branch.read_only_database_url:
+            raise NeonProvisioningError(
+                "ARENA_INFRA_FAILURE: Battle database initialization capability unavailable"
+            )
+        config = database_config or {}
+        if config.get("initialization"):
+            raise NeonProvisioningError(
+                "ARENA_INFRA_FAILURE: Battle database initialization is not configured"
+            )
+        return {"status": "ready", "schema": "not_required_by_target"}
 
     def create_builder_baseline_snapshot(
         self,
@@ -207,9 +246,15 @@ class NeonBranchManager:
                         "source_branch_id": source_branch_id,
                         "is_mock": False,
                     }
-                logger.warning("Failed to create builder baseline snapshot in Neon: %s", res.text)
+                logger.warning(
+                    "Failed to create builder baseline snapshot in Neon status=%s",
+                    res.status_code,
+                )
         except Exception as exc:
-            logger.error("Exception creating Neon builder baseline snapshot: %s", exc)
+            logger.error(
+                "Exception creating Neon builder baseline snapshot: %s",
+                exc.__class__.__name__,
+            )
 
         return {
             "snapshot_id": f"br-{snapshot_name}",
@@ -246,9 +291,15 @@ class NeonBranchManager:
                 res = client.post(url, headers=self._headers(), json=payload)
                 if res.status_code in (200, 201):
                     return res.json().get("branch", {"name": snapshot_name, "id": f"br-{snapshot_name}"})
-                logger.warning("Failed to create exploit snapshot in Neon: %s", res.text)
+                logger.warning(
+                    "Failed to create exploit snapshot in Neon status=%s",
+                    res.status_code,
+                )
         except Exception as exc:
-            logger.error("Exception creating Neon snapshot: %s", exc)
+            logger.error(
+                "Exception creating Neon snapshot: %s",
+                exc.__class__.__name__,
+            )
 
         return {"name": snapshot_name, "id": f"br-{snapshot_name}", "status": "simulated"}
 
@@ -269,16 +320,25 @@ class NeonBranchManager:
 
     def delete_branch(self, branch_id: str) -> bool:
         """Teardown branch upon battle cleanup."""
-        if self.use_mock or not httpx:
+        if self.use_mock:
             return True
+        if not self.api_key or not httpx:
+            logger.error("Neon branch cleanup unavailable: scoped credentials/client missing")
+            return False
 
         url = f"{self.base_url}/projects/{self.project_id}/branches/{branch_id}"
         try:
             with httpx.Client(timeout=15.0) as client:
                 res = client.delete(url, headers=self._headers())
-                return res.status_code in (200, 204)
+                if res.status_code in (200, 204, 404):
+                    # 404 is already-cleaned state and therefore idempotent.
+                    return True
+                logger.warning(
+                    "Neon branch cleanup failed status=%s", res.status_code
+                )
+                return False
         except Exception as exc:
-            logger.warning("Error deleting branch %s: %s", branch_id, exc)
+            logger.warning(
+                "Error deleting Neon branch: %s", exc.__class__.__name__
+            )
             return False
-
-

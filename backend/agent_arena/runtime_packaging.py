@@ -8,12 +8,16 @@ must be attached explicitly. The fighter sandbox image is a small pip set
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 # Smallest third-party set required to import and run the current executor
-# stack inside a fighter Modal Sandbox. Do not expand to the backend extras.
-FIGHTER_SANDBOX_PIP: tuple[str, ...] = ("httpx", "pytest", "pyyaml")
+# stack inside a fighter Modal Sandbox. AgentConfig is loaded during executor
+# bootstrap, so its explicit Pydantic dependency belongs in this image.
+# Never add Appwrite, FastAPI, SQLAlchemy, or other control-plane packages:
+# SANDBOX_BOOT_FAILURE is what happens when the fighter process imports them.
+FIGHTER_SANDBOX_PIP: tuple[str, ...] = ("httpx", "pytest", "pyyaml", "pydantic")
 
 CANONICAL_SKILL_YAML_NAMES: tuple[str, ...] = (
     "catalog.v0.3.yaml",
@@ -21,6 +25,25 @@ CANONICAL_SKILL_YAML_NAMES: tuple[str, ...] = (
 )
 CANONICAL_SKILL_REMOTE_DIR = "/opt/arena-canonical"
 PACKAGE_SKILLS_REMOTE_DIR = "/root/agent_arena/skills"
+FIGHTER_SKILLS_REMOTE_DIR = "/opt/arena-skills"
+
+
+def fighter_skill_directory() -> Path:
+    """Resolve battle skill bodies, never the host-agent .agents/skills tree."""
+    configured = os.environ.get("ARENA_SKILLS_ROOT", "").strip()
+    if configured:
+        return Path(configured)
+    mounted = Path(FIGHTER_SKILLS_REMOTE_DIR)
+    if mounted.is_dir():
+        return mounted
+    return Path(__file__).resolve().parents[2] / "arena-fighter-skills"
+
+
+def attach_fighter_skills(image: Any) -> Any:
+    root = fighter_skill_directory()
+    if not root.is_dir() or not any(root.glob("*/SKILL.md")):
+        raise FileNotFoundError(f"Fighter skill directory is missing or empty: {root}")
+    return image.add_local_dir(str(root), remote_path=FIGHTER_SKILLS_REMOTE_DIR)
 
 
 def fighter_sandbox_pip_packages() -> tuple[str, ...]:

@@ -10,6 +10,8 @@ Security guarantees:
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import pathlib
 import re
 import subprocess
@@ -20,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from .sandbox.executors._command_guard import command_block_reason
-from .target_library import TargetBundle
+from .target_library import TargetBundle, compute_bundle_hash, validate_safe_relative_path
 
 # Fighter-authored pytest/Python config must never become the verifier harness.
 _HARNESS_BASENAMES = frozenset(
@@ -194,7 +196,178 @@ class BuilderBreakerVerificationEvidence:
     deployment_ready: bool = True
     deployment_repaired: bool = False
     deployment_status: str = "DEPLOY_SUCCESS"
+    verification_status: str = "verified_fail"
+    breaker_semantic_evidence: dict[str, Any] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TrustedBreakerSemanticEvidence:
+    """A verifier/runtime-owned postcondition, never Fighter wire data."""
+
+    condition_checked: bool = False
+    condition_passed: bool = False
+    evidence_ids: tuple[str, ...] = ()
+    findings: tuple[str, ...] = ()
+    verifier_error: str = ""
+
+
+_TRUSTED_BREAKER_FINDINGS = frozenset(
+    {
+        "server_crashed",
+        "availability_degraded",
+        "unauthorized_mutation",
+        "flag_captured",
+    }
+)
+
+
+def _breaker_entrypoint(
+    breaker_files: dict[str, bytes | str],
+) -> tuple[str, str | None]:
+    """Classify a Fighter executable without interpreting it as proof."""
+    if not breaker_files:
+        return "no_breaker_artifact", None
+    for rel, command in (("exploit.py", "python3 exploit.py"), ("exploit.sh", "bash exploit.sh")):
+        if rel not in breaker_files:
+            continue
+        payload = breaker_files[rel]
+        try:
+            raw = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return "malformed_breaker_artifact", None
+        if not text.strip():
+            return "malformed_breaker_artifact", None
+        return "valid_breaker_artifact", command
+    return "missing_exploit_entrypoint", None
+
+
+def _semantic_record(
+    *,
+    artifact_status: str,
+    execution_started: bool,
+    execution_completed: bool,
+    process_return_code: int | None,
+    fighter_claim_present: bool,
+    trusted: TrustedBreakerSemanticEvidence | None,
+) -> dict[str, Any]:
+    """Keep process telemetry distinct from a trusted semantic postcondition."""
+    if trusted is None:
+        trusted = TrustedBreakerSemanticEvidence()
+    elif not isinstance(trusted, TrustedBreakerSemanticEvidence):
+        trusted = TrustedBreakerSemanticEvidence(
+            verifier_error="invalid trusted semantic evidence"
+        )
+    evidence_ids = tuple(str(item) for item in trusted.evidence_ids if str(item))
+    findings = tuple(
+        item for item in trusted.findings if item in _TRUSTED_BREAKER_FINDINGS
+    )
+    verifier_error = str(trusted.verifier_error or "")
+    condition_checked = bool(trusted.condition_checked) and not bool(verifier_error)
+    condition_passed = bool(
+        artifact_status == "valid_breaker_artifact"
+        and execution_started
+        and execution_completed
+        and condition_checked
+        and trusted.condition_passed
+        and evidence_ids
+        and findings
+    )
+    return {
+        "artifact_status": artifact_status,
+        "execution_started": execution_started,
+        "execution_completed": execution_completed,
+        "process_return_code": process_return_code,
+        "fighter_claim_present": fighter_claim_present,
+        "trusted_condition_checked": condition_checked,
+        "trusted_condition_passed": condition_passed,
+        "verifier_error": verifier_error or None,
+        "evidence_ids": list(evidence_ids),
+        "findings": list(findings if condition_passed else ()),
+    }
+
+
+def _submission_text(files: dict[str, bytes | str]) -> dict[str, str]:
+    return {
+        str(path): data.decode("utf-8") if isinstance(data, bytes) else str(data)
+        for path, data in files.items()
+        if not _blocked_submission_path(path)
+    }
+
+
+def _run_breaker_evaluator(
+    bundle: TargetBundle,
+    builder_files: dict[str, bytes | str],
+    breaker_files: dict[str, bytes | str],
+    *,
+    timeout_seconds: int = 10,
+    builder_hidden_passed: bool = False,
+) -> TrustedBreakerSemanticEvidence | None:
+    """Run target-owned breaker evaluator script if present in private fixtures."""
+    entrypoint = bundle.verification.breaker_evaluator
+    if not (bundle.private_fixture_files and entrypoint in bundle.private_fixture_files):
+        return None
+
+    request = {
+        "schema_version": 1,
+        "target_id": bundle.id,
+        "manifest_hash": bundle.manifest_hash,
+        "evaluator_hash": bundle.evaluator_hash,
+        "builder_files": _submission_text({**bundle.starter_files, **builder_files}),
+        "breaker_files": _submission_text(breaker_files),
+    }
+    encoded = json.dumps(request, sort_keys=True, separators=(",", ":"))
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="arena-private-breaker-eval-") as temp:
+            private_root = pathlib.Path(temp).resolve()
+            for rel, data in bundle.private_fixture_files.items():
+                safe = validate_safe_relative_path(rel, context="private breaker evaluator")
+                dest = private_root / safe
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(data)
+            env = _build_hardened_env(private_root)
+            env["HOME"] = str(private_root)
+            env["TMPDIR"] = str(private_root)
+            env.pop("ARENA_FLAG", None)
+            # -I excludes submission cwd, user site and ambient Python config.
+            result = subprocess.run(
+                [sys.executable, "-I", str(private_root / entrypoint)],
+                input=encoded, cwd=private_root, env=env,
+                text=True, capture_output=True, timeout=timeout_seconds,
+            )
+        if result.returncode != 0:
+            return TrustedBreakerSemanticEvidence(verifier_error="breaker_evaluator_execution_failed")
+        if len(result.stdout) > 32768:
+            raise ValueError("oversized evaluator result")
+        value = json.loads(result.stdout)
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema_version", "condition_checked", "condition_passed", "findings"}
+            or type(value["schema_version"]) is not int
+            or value["schema_version"] != 1
+            or value["condition_checked"] is not True
+            or type(value["condition_passed"]) is not bool
+            or not isinstance(value["findings"], list)
+            or not all(isinstance(x, str) and x in _TRUSTED_BREAKER_FINDINGS for x in value["findings"])
+            or (value["condition_passed"] and not value["findings"])
+            or (not value["condition_passed"] and value["findings"])
+        ):
+            raise ValueError("invalid evaluator result")
+        evidence_id = "trusted:breaker:" + hashlib.sha256(encoded.encode()).hexdigest()
+        return TrustedBreakerSemanticEvidence(
+            condition_checked=True,
+            condition_passed=value["condition_passed"],
+            evidence_ids=(evidence_id,),
+            findings=tuple(value["findings"]),
+        )
+    except subprocess.TimeoutExpired:
+        return TrustedBreakerSemanticEvidence(verifier_error="breaker_evaluator_timeout")
+    except (ValueError, UnicodeError, TypeError):
+        return TrustedBreakerSemanticEvidence(verifier_error="breaker_evaluator_invalid_result")
+    except OSError:
+        return TrustedBreakerSemanticEvidence(verifier_error="breaker_evaluator_unavailable")
 
 
 def verify_target_submission(
@@ -401,6 +574,7 @@ def verify_builder_breaker_submission(
     extra_env: dict[str, str] | None = None,
     timeout_seconds: int = 20,
     trusted_host: bool = False,
+    trusted_semantic_evidence: TrustedBreakerSemanticEvidence | None = None,
 ) -> BuilderBreakerVerificationEvidence:
     """Asymmetrically evaluate a Builder vs Breaker match.
 
@@ -421,8 +595,11 @@ def verify_builder_breaker_submission(
     )
 
     # Step 2: Evaluate Breaker against Builder output
-    breaker_exploit_passed = False
+    artifact_status, breaker_cmd = _breaker_entrypoint(breaker_files)
     breaker_out = ""
+    execution_started = False
+    execution_completed = False
+    process_return_code: int | None = None
 
     with tempfile.TemporaryDirectory(prefix=f"arena-breaker-{bundle.id}-") as tmp_dir:
         work = pathlib.Path(tmp_dir).resolve()
@@ -453,17 +630,8 @@ def verify_builder_breaker_submission(
             raw_bytes = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
             dest.write_bytes(raw_bytes)
 
-        for rel_path, data in (bundle.private_fixture_files or {}).items():
-            clean_rel = str(rel_path).replace("\\", "/").strip()
-            if not clean_rel or ".." in clean_rel.split("/"):
-                continue
-            dest = (work / clean_rel).resolve()
-            try:
-                dest.relative_to(work)
-            except ValueError:
-                continue
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data)
+        # Evaluator files must be absent from the submitted exploit's tree.
+        # Dispatch later in a fresh private directory using original snapshots.
 
         for script in work.rglob("*.sh"):
             script.chmod(0o755)
@@ -471,30 +639,23 @@ def verify_builder_breaker_submission(
         ini_path = _write_arena_pytest_harness(work)
         env = _build_hardened_env(work, extra_env)
 
-        # Fighter-submitted exploits win. Trusted breaker_harness.py is a
-        # private fixture/contract, not automatically the runner.
-        breaker_cmd = ""
-        if (work / "exploit.py").is_file():
-            breaker_cmd = "python3 exploit.py"
-        elif (work / "exploit.sh").is_file():
-            breaker_cmd = "bash exploit.sh"
-        elif (work / "tests" / "test_exploit.py").is_file():
-            breaker_cmd = "pytest tests/test_exploit.py"
-        elif (work / "tests" / "breaker_harness.py").is_file():
-            breaker_cmd = "pytest tests/breaker_harness.py"
-        else:
-            breaker_cmd = bundle.verification.visible_command
-
-        if breaker_cmd:
+        # This execution is Fighter telemetry only. A return code or output
+        # marker is never a trusted exploit fact; a target-owned runtime or
+        # evaluator must separately provide TrustedBreakerSemanticEvidence.
+        if builder_ev.details.get("blocked"):
+            trusted_semantic_evidence = TrustedBreakerSemanticEvidence(
+                verifier_error="verifier_execution_refused"
+            )
+        elif breaker_cmd:
             breaker_cmd = _harden_pytest_command(
                 breaker_cmd, ini_path=ini_path, root=work
             )
             block_reason = command_block_reason(breaker_cmd, allow_network=bundle.network)
             if block_reason:
                 breaker_out = f"Breaker command blocked: {block_reason}"
-                breaker_exploit_passed = False
             else:
                 try:
+                    execution_started = True
                     r_brk = subprocess.run(
                         breaker_cmd,
                         cwd=work,
@@ -505,11 +666,23 @@ def verify_builder_breaker_submission(
                         env=env,
                     )
                     breaker_out = (r_brk.stdout or "") + (r_brk.stderr or "")
-                    # Exploit succeeded if the breaker harness passed or exploit exit code == 0
-                    breaker_exploit_passed = (r_brk.returncode == 0)
+                    execution_completed = True
+                    process_return_code = int(r_brk.returncode)
                 except Exception as exc:
                     breaker_out = f"Breaker exploit execution error: {exc}"
-                    breaker_exploit_passed = False
+
+    if (
+        trusted_semantic_evidence is None
+        and execution_completed
+        and process_return_code == 0
+    ):
+        trusted_semantic_evidence = _run_breaker_evaluator(
+            bundle,
+            builder_files,
+            breaker_files,
+            timeout_seconds=timeout_seconds,
+            builder_hidden_passed=builder_ev.hidden_passed,
+        )
 
     duration = time.time() - start_time
 
@@ -518,16 +691,25 @@ def verify_builder_breaker_submission(
     builder_functional = builder_ev.visible_passed
     builder_hidden = builder_ev.hidden_passed
 
-    server_crashed = "SERVER_CRASHED" in breaker_out or "process terminated" in breaker_out.lower()
-    availability_degraded = "AVAILABILITY_DEGRADED" in breaker_out or "health check failed" in breaker_out.lower()
-    unauthorized_mutation = "UNAUTHORIZED_MUTATION" in breaker_out or "mutation detected" in breaker_out.lower()
-    flag_captured = "FLAG{" in breaker_out or "CANARY_EXFILTRATED" in breaker_out or "flag_captured" in breaker_out.lower()
+    semantic = _semantic_record(
+        artifact_status=artifact_status,
+        execution_started=execution_started,
+        execution_completed=execution_completed,
+        process_return_code=process_return_code,
+        fighter_claim_present=bool(breaker_out.strip()),
+        trusted=trusted_semantic_evidence,
+    )
+    breaker_exploit_passed = bool(semantic["trusted_condition_passed"])
+    findings = set(semantic["findings"])
+    verifier_error = str(semantic.get("verifier_error") or "")
 
-    if server_crashed or unauthorized_mutation or flag_captured:
-        breaker_exploit_passed = True
-
-    builder_passed = builder_functional and builder_hidden and (not breaker_exploit_passed)
-    breaker_passed = breaker_exploit_passed
+    builder_passed = (
+        builder_functional
+        and builder_hidden
+        and not breaker_exploit_passed
+        and not verifier_error
+    )
+    breaker_passed = breaker_exploit_passed and not verifier_error
 
     return BuilderBreakerVerificationEvidence(
         target_id=bundle.id,
@@ -542,13 +724,17 @@ def verify_builder_breaker_submission(
         breaker_output=breaker_out[:8000],
         duration_seconds=round(duration, 3),
         timestamp=time.time(),
-        server_crashed=server_crashed,
-        availability_degraded=availability_degraded,
-        unauthorized_mutation=unauthorized_mutation,
-        flag_captured=flag_captured,
+        server_crashed="server_crashed" in findings,
+        availability_degraded="availability_degraded" in findings,
+        unauthorized_mutation="unauthorized_mutation" in findings,
+        flag_captured="flag_captured" in findings,
         deployment_ready=builder_functional,
         deployment_repaired=False,
         deployment_status="DEPLOY_SUCCESS" if builder_functional else "DEPLOY_FAILED",
+        verification_status="infra_failure" if verifier_error else (
+            "verified_pass" if builder_passed else "verified_fail"
+        ),
+        breaker_semantic_evidence=semantic,
         details={
             "builder_evidence": builder_ev.details,
             "breaker_command": breaker_cmd,

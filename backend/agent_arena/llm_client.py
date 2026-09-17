@@ -33,6 +33,7 @@ def chat_completion(
     response_format: dict | None = None,
     tools: list[dict] | None = None,
     tool_choice: str | None = None,
+    provider_request_fields: dict | None = None,
     return_response_obj: bool = False,
 ) -> str | ModelResponse:
     import time
@@ -54,6 +55,8 @@ def chat_completion(
         payload["tools"] = tools
         if tool_choice:
             payload["tool_choice"] = tool_choice
+    if provider_request_fields:
+        payload.update(provider_request_fields)
 
     t0 = time.time()
     try:

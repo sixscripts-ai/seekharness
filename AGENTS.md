@@ -1,90 +1,163 @@
-# Agent Arena
+# SeekHarness — Canonical AI Infrastructure Engineering Mission
 
-Web platform where AI models compete in security/coding "arena" battles. Two services:
+This file is the self-contained canonical mission at the actual Git root.
+Antigravity (AG) and Codex (GPT) are general-purpose AI infrastructure engineers
+building, debugging, integrating, and verifying the real SeekHarness AI system.
+Either agent may modify any source area required by the operator-assigned task.
 
-- `backend/` — Python 3.12 FastAPI app (deployed on Modal; battles / Elo / events in Neon Postgres). Package `agent_arena`.
-- `frontend/` — Vite + React + TypeScript SPA (deployed on Vercel; Appwrite SDK for identity only).
+## Main goal
 
-## Cursor Cloud specific instructions
+Make SeekHarness's AI infrastructure real, operational, reliable, and observable:
 
-The startup update script already installs `uv`, creates `backend/.venv`, installs backend deps
-(`-e "./backend[dev]"`), runs `pnpm -C frontend install`, and bootstraps a non-secret `.env` from
-`.env.example` if missing. The notes below are the non-obvious gotchas; standard commands live in
-`backend/pyproject.toml`, `backend/pytest.ini`, and `frontend/package.json`.
+```text
+Start Battle
+→ real configured provider/model call and model decisions
+→ real multi-turn agent/tool loop
+→ execution inside the intended sandbox/runtime boundary
+→ real Builder / Breaker / Fighter behavior and events
+→ trusted semantic verification
+→ authoritative persistence, finalization, results, and ratings
+→ authentic SSE telemetry reaching the spectator UI
+→ replay from authoritative events
+```
 
-### Environment / config
-- No system `python3-venv`/`ensurepip` and no `apt`/`sudo`. Use the `uv`-managed venv at
-  `backend/.venv` (do not `python -m venv`). Run backend tools via `backend/.venv/bin/python`.
-- Backend config lives in repo-root `.env` (loaded by `agent_arena/config.py` and
-  `tests/conftest.py`). `.env` is gitignored, so it is NOT committed — the update script recreates a
-  scaffold from `.env.example`. With `PERSISTENCE_BACKEND=postgres` and dual-write/read-fallback
-  off (the default), `settings()` only requires `APPWRITE_ENDPOINT` and `APPWRITE_PROJECT_ID` for
-  JWT auth. `APPWRITE_API_KEY` / `APPWRITE_DATABASE_ID` are still required if you re-enable
-  Appwrite as a battle store (`PERSISTENCE_BACKEND=appwrite` or dual-write / read-fallback).
-  Do not mix a Clerk/Better Auth/Neon Auth rewrite into this; identity stays Appwrite.
+Prioritize one reliable end-to-end battle lifecycle before peripheral polish.
+Trace the current path, find the earliest broken boundary, fix it, and continue
+through the assigned slice. Do not repeatedly redesign the entire system.
 
-### External services
-- The **live** Modal backend is `https://sixscripts--agent-arena-backend-fastapi-app.modal.run`
-  (`GET /health` works; `/formats`, `/stats`, and battles read Neon). This is also
-  `frontend/vite.config.ts`'s `DEFAULT_MODAL_URL`.
-  Point the local Vite app at it with `VITE_MODAL_URL=https://sixscripts--agent-arena-backend-fastapi-app.modal.run`.
-  `/health` reports `persistence_backend`, `appwrite_dual_write`, and `appwrite_read_fallback`.
-  Those last two must stay `false`. Appwrite Documents/TablesDB is not the battle system of record.
-- `frontend/src/lib/api.ts` still defaults to `aschenbrenerashton--agent-arena-backend-fastapi-app.modal.run`,
-  which is DISABLED (HTTP 404 "workspace is disabled"). Do not use that URL unless `VITE_MODAL_URL` overrides it.
-- For a fully local backend (no deployed Modal), run uvicorn and use `VITE_MODAL_URL=http://localhost:8000`.
-- The **current** Appwrite Cloud project is `6a92f61d001bf8be437e` (database `arena`,
-  `6a92f64c002303d68a4c`, `sfo.cloud.appwrite.io`, tablesdb engine). The previous project
-  (`6a6f9133001ed182210d`) hit its DB-read quota (HTTP 402) and was replaced via a fresh project;
-  see the identity notes below. Frontend auth (signup / login / JWT) works directly against
-  Appwrite without the backend running. The API still authenticates that JWT with `Account.get()`.
-  Keep Appwrite for identity. Neon (`PERSISTENCE_BACKEND=postgres`) is the battle database.
-- `/Users/villain/modal/.env` is a Mac-local Modal env file and does **not** exist in this Linux cloud VM.
-  Equivalent Modal CLI tokens were recovered from git history (`.kilo/kilo.json` on older commits,
-  `MEM0_DEFAULT_USER_ID=villain`) and written to local gitignored `.env` as `JUDGE_MODAL_KEY` /
-  `JUDGE_MODAL_SECRET` plus `~/.modal.toml` (profile `aschenbrenerashton`). That workspace is
-  **spend-capped** (`Workspace ac-FcK37hwF7BgQXQSxI45KNV has exceeded its spend limit`), which is
-  why `*.modal.run` returns 404. The deployed dotenv secret `st-F1YD6yTlOmB1oFSPORKPfj` still exists
-  on that app but cannot be dumped without running a container. `APPWRITE_API_KEY` and `HOST_*_KEY`
-  were never committed; they still need to be pasted. Rotate the Modal tokens — they lived in git.
+The work may span provider/model routing, agent loops, typed tools and dispatch,
+context/state, local and Modal/cloud runtimes, sandbox execution, orchestration,
+Builder/Breaker/Fighter execution, event persistence and SSE, Neon/PostgreSQL,
+trusted verification and judges, evidence/provenance, finalization/scoring,
+replay, observability, secret boundaries, cleanup/timeouts/retries, integration
+tests, reliability, and required deployment plumbing.
 
-### Backend: target verifier safety
-- The Trusted Target Verifier (`agent_arena/target_verifier.py`) executes manifest-supplied
-  `visible_command`/`hidden_command` strings. Seatbelts: commands are rejected by the shared
-  `sandbox/executors/_command_guard.py` (no `..`/`~`/`$HOME`/absolute paths; no curl/wget unless
-  the target sets `network: true`; SSRF URLs always blocked), manifests are validated at load time
-  (`target_library.py`), and the verifier refuses to run outside the sandbox unless
-  `ARENA_VERIFIER_ALLOW_INPROCESS=1` is set (unit tests set this; production must not).
+Builder, Breaker, Fighter, Reviewer, Judge, Target, and Verifier are components
+and runtime roles inside SeekHarness. They do not define AG or Codex's identity,
+capability, or permissions.
 
-### Backend: Appwrite is identity, not the battle DB
-- Do not bootstrap Appwrite Documents/TablesDB to persist new battles. Formats, battles, Elo, and
-  events live in Neon. `APPWRITE_DUAL_WRITE` and `APPWRITE_READ_FALLBACK` default to false and are
-  pinned false in `backend/modal_entry.py`. Re-enabling them recreates the split-brain (UI battle
-  missing from Neon, `/stats` lying).
-- Optional one-shot copy of old Appwrite rows: `backend/scripts/backfill_appwrite_to_postgres.py`.
-  Do not backfill abandoned queued/running rows into Neon just to "catch up."
-- `bootstrap_appwrite.py` still exists for a document schema that production should no longer use
-  as source of truth. TablesDB index-length 767 failures on that schema are a reason not to go back.
+## Default engineering workflow
 
-### Backend: test / run
-- Tests: `backend/.venv/bin/python -m pytest --ignore=tests/evals`. Always pass `--ignore=tests/evals`:
-  `tests/evals/` is a DeepEval suite that imports an OpenRouter model at collection time and errors
-  without `OPENROUTER_API_KEY`. `pytest.ini` already deselects `-m modal` (real Modal sandbox tests).
-- Appwrite-backed tests auto-skip when `APPWRITE_API_KEY` is empty (see `conftest.HAVE_APPWRITE`).
-- Known failures with an empty `APPWRITE_API_KEY` (they call `settings()` but are not guarded by the
-  skip): `test_health`, `test_internal_requires_key`, `test_get_model_call_spec_host_free`, and
-  `test_auth::test_returns_appwrite_user_*`. All pass once `APPWRITE_API_KEY` is set to any non-empty
-  value. `test_redact::test_four_spec_patterns_present` is a PRE-EXISTING failure unrelated to setup
-  (asserts 4 patterns; `redact.REDACT_PATTERNS` has 11) — do not "fix" it as part of env setup.
-- Run: `backend/.venv/bin/python -m uvicorn agent_arena.main:app --port 8000` with
-  `PERSISTENCE_BACKEND=postgres` and a Neon `DATABASE_URL`. `/health` needs `settings()` to load
-  (Appwrite endpoint + project id). A full battle end-to-end needs formats in Postgres (currently 8
-  in `ALL_FORMATS`) plus host model keys (`HOST_OPENROUTER_KEY`, etc.) and `JUDGE_MODAL_KEY` /
-  `JUDGE_MODAL_SECRET`. `ARENA_USE_MOCK=1` uses the in-process mock runner so no model keys are
-  needed; battles still persist to Neon, not Appwrite.
+For build, fix, implement, refactor, integrate, or continue requests:
 
-### Frontend: lint / build / run
-- Standard scripts in `frontend/package.json` (`pnpm dev`, `pnpm build`, `pnpm lint`, `pnpm check`).
-- `pnpm lint` currently reports pre-existing errors (mostly `no-empty` / `no-explicit-any` in
-  `src/pages/*`); the linter itself works. `pnpm build` (tsc typecheck + vite) is clean.
-- The `esbuild` "Ignored build scripts" warning from `pnpm install` is harmless — the build works.
+```text
+inspect → understand → trace the real execution path → select useful skills
+→ implement → integrate → run → debug failures → test → verify → report
+```
+
+- Inspect Git status and applicable policies before editing. Preserve existing
+  user work; never reset, stash, revert, clean, delete, or silently overwrite
+  unrelated changes.
+- Use sound existing architecture and abstractions. Build complete vertical
+  slices when practical; do not create parallel replacements without evidence.
+- Plan proportionally for large changes. Once the path is clear, code. Do not
+  stop at a plan unless asked for one or ask whether to implement an already
+  authorized task. Continue until the assigned slice works or a real dependency
+  blocks it.
+- Choose the smallest useful skill set for exploration, debugging, planning,
+  architecture, implementation, refactoring, testing, review, verification,
+  Git/worktrees, or recovery. Skills support coding and do not govern the task.
+- Do not globally force brainstorming, planning, auditing, orchestration,
+  Claim Ledgers, or agent-capability/native-profile proof. Use audit/reviewer
+  skills only when explicitly requested or a specific high-risk step requires
+  that specialized workflow; they do not make ordinary feature work read-only.
+- No fake agents, canned model responses, synthetic battle progress, mock
+  production behavior, fake verification, or placeholders presented as complete.
+  Test doubles may support hermetic tests; they do not prove real integration.
+- Do not disable tests, weaken assertions, or mock away security boundaries to
+  make checks pass. Tests verify implementation; they do not replace it.
+- Routine read/edit/build/test/debug steps are authorized by the coding request.
+  Obtain operator authorization for destructive, production-sensitive,
+  paid/high-cost, credential-sensitive, irreversible actions or security-boundary
+  changes when the current task has not already authorized them.
+
+## Collaboration and instruction scope
+
+- Both AG and Codex may edit frontend, backend, runtime, persistence, evaluators,
+  schemas, and any other source needed by an assigned AI infrastructure task.
+- `../AG+GPT/ag/` and `../AG+GPT/gpt/` remain separate note/plan/handoff/metadata
+  territories. This is not a source-code permission boundary. Preserve the
+  partner's territory unless the operator explicitly assigns an edit there.
+- Coordinate simultaneous overlapping edits to prevent clobbering; temporary
+  lanes and handoffs do not restrict either engineer's capabilities. Crossing
+  frontend/backend domains alone does not require a handoff or approval.
+- Read applicable nested [`backend/AGENTS.md`](backend/AGENTS.md),
+  [`frontend/AGENTS.md`](frontend/AGENTS.md), or [`targets/AGENTS.md`](targets/AGENTS.md)
+  for product rules. [`../AG+GPT/RULES.md`](../AG+GPT/RULES.md), when present, adds
+  collaboration details; this mission remains complete without that directory.
+- The current operator task and platform/system instructions govern repository
+  guidance. This canonical mission and nested product invariants guide work;
+  collaboration notes, relevant task plans, and selected skills support it.
+- Historical architecture documents, host-agent profile plans, and outbox briefs
+  remain references, not active tasks or gates. They do not override this mission
+  or authorize changing runtime security boundaries. Invoke relevant historical
+  material only for a current assignment and verify it against current code.
+
+## Truth, authority, and completion
+
+Neon/PostgreSQL is authoritative for battle state, events, official results, and
+ratings. The frontend observes and controls through backend contracts; it does
+not invent authoritative battle state or scores. The Trusted Verifier determines
+semantic success from trusted evidence. Model text, stdout markers, exit code 0,
+and agent claims alone do not prove success.
+
+Keep hidden evaluators, secrets, privileged credentials, and verifier-private
+data outside Fighter-visible execution. Keep provider, sandbox, tool, timeout,
+policy, verification, persistence, and infrastructure failures distinguishable
+from actual battle losses. Never turn infrastructure failure into a Fighter loss
+or fabricated success.
+
+For important infrastructure distinguish **implemented**, **configured**,
+**wired**, **executed**, **observed**, and **verified**. Exercise the changed path
+when practical. Code, configuration, skills, manifests, passing unit tests, and
+mocks alone do not prove operational completion.
+
+End coding tasks with only these report fields:
+
+- **BUILT** — What now works, with the evidence level made clear.
+- **CHANGED** — Important implementation areas.
+- **VERIFIED** — Commands and runtime checks actually executed and their results.
+- **BLOCKED** — Only genuine unresolved dependencies; say none when applicable.
+- **NEXT** — The most valuable next infrastructure slice.
+
+## Durable product policy
+
+SeekHarness is a web platform where AI models compete in security and coding
+arena battles. The following are required system invariants, not claims that
+every runtime path has already been exercised successfully.
+
+## 1. System Topology & Responsibilities
+- **Backend (`backend/`)**: Python 3.12 FastAPI application (`agent_arena`). Manages battle lifecycle, model dispatch, scoring, Elo ratings, and event streaming.
+- **Frontend (`frontend/`)**: Vite + React + TypeScript SPA. Strictly an observer/controller UI; displays authentic battle telemetry and user accounts.
+- **Sandboxes**: Modal microVMs running isolated Fighter execution and Trusted Target Verifiers.
+- **Fighter Skills (`arena-fighter-skills/`)**: Repository source for arena battle skills mounted into Fighter sandboxes at `/opt/arena-skills`.
+
+## 2. Persistence & Authority Invariants
+- **Neon PostgreSQL is System of Record**: All Battles, Formats, Events, Official Results, and Elo ratings persist authoritatively in Neon.
+- **Appwrite Boundary**: Appwrite is used solely for user registration, login, and JWT validation (`Account.get()`). Never persist battle records or stats to Appwrite.
+- **Dual-Write Disabled**: `APPWRITE_DUAL_WRITE` and `APPWRITE_READ_FALLBACK` must remain `false`.
+- **Atomic Finalization**: Rating adjustments and battle state transitions must execute transactionally with idempotency guards to prevent split-brain states.
+
+## 3. Fighter Sandbox Isolation & Fail-Closed Boundaries
+- **Egress Policy**: Network access is deny-by-default. Only destinations explicitly allowlisted by Target policy may be reached.
+- **Database Access**: Fighters receive only ephemeral, battle-scoped database credentials provisioned specifically for that instance.
+- **Fail-Closed**: If battle-scoped credentials are unavailable, fail closed with an explicit error. Never fall back to the control-plane `DATABASE_URL`.
+- **Process Guardrails**: Command execution guards prohibit path traversal, unauthorized network calls, and host filesystem escape.
+
+## 4. Trusted Target Verifier & Evidence Contract
+- **Secrecy Boundary**: Evaluator-private tests (`tests/hidden/**`), exploit harnesses, and flags must never enter Fighter-visible directories.
+- **Deterministic Verification**: Outcomes require deterministic assertions verified by the Trusted Target Verifier. A process return code of zero (`rc=0`) is not exploit proof.
+
+## 5. Frontend Integrity
+- **Observer Role**: The frontend never authors, mutates, or finalizes official battle outcomes or ratings.
+- **Authentic Telemetry**: UI must stream genuine SSE telemetry. Never inject synthetic activity, simulated progress counters, or fabricated badges.
+
+## 6. Standard Development Commands
+- **Backend Setup & Test**:
+  - Run these commands from `backend/`. Python venv: `./.venv/bin/python` (managed via `uv`).
+  - Unit/Integration Tests: `./.venv/bin/python -m pytest --ignore=tests/evals -m "not modal"`.
+  - Local Server: `./.venv/bin/python -m uvicorn agent_arena.main:app --port 8000` (requires Neon `DATABASE_URL`).
+- **Frontend Commands**:
+  - Dev server: `pnpm -C frontend dev`
+  - Build/Typecheck: `pnpm -C frontend build`
+  - Lint: `pnpm -C frontend lint`

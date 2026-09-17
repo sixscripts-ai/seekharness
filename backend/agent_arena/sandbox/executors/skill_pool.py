@@ -1,4 +1,4 @@
-"""Load battle skill bodies from .agents/skills (or ARENA_SKILLS_ROOT).
+"""Load battle skill bodies from arena-fighter-skills (or ARENA_SKILLS_ROOT).
 
 Richer frontmatter (C8): name, description, version, tier, category, tags,
 prerequisites, capabilities, allowed_environments. Exposes load_skill,
@@ -30,13 +30,9 @@ _LIST_RE = re.compile(r"[,\n]")
 
 
 def skills_root() -> Path:
-    env = os.environ.get("ARENA_SKILLS_ROOT", "").strip()
-    if env:
-        return Path(env)
-    mounted = Path("/opt/arena-skills")
-    if mounted.is_dir():
-        return mounted
-    return Path(__file__).resolve().parents[4] / ".agents" / "skills"
+    from ...runtime_packaging import fighter_skill_directory
+
+    return fighter_skill_directory()
 
 
 def _parse_frontmatter(text: str) -> dict[str, object]:

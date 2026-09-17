@@ -20,7 +20,11 @@ from agent_arena.target_library import (
     get_target_library,
     load_target_bundle,
 )
-from agent_arena.target_verifier import verify_builder_breaker_submission, verify_target_submission
+from agent_arena.target_verifier import (
+    TrustedBreakerSemanticEvidence,
+    verify_builder_breaker_submission,
+    verify_target_submission,
+)
 from tests.eval_fixtures import (
     BB_REFERENCE_SOURCE,
     SOLO_REFERENCE_SOURCE,
@@ -58,7 +62,7 @@ def test_executor_runs_target_bundle_with_trusted_verifier(tmp_path: Path, monke
         'THOUGHT: Fixing the ledger total\n'
         'SKILL: test-skill\n'
         'THEORY: total() ignores its items and always returns 0\n'
-        f'TOOL write ledger.py\n{SOLO_REFERENCE_SOURCE}\n'
+        f'TOOL write path=ledger.py\n{SOLO_REFERENCE_SOURCE}\nEND_TOOL\n'
         'TOOL test\n'
     )
 
@@ -190,6 +194,12 @@ def test_builder_breaker_asymmetric_scoring(
         bundle,
         builder_files=builder_vulnerable_files,
         breaker_files=breaker_valid_exploit,
+        trusted_semantic_evidence=TrustedBreakerSemanticEvidence(
+            condition_checked=True,
+            condition_passed=True,
+            evidence_ids=("trusted:synthetic-bb-reference:auth-bypass",),
+            findings=("unauthorized_mutation",),
+        ),
     )
     assert ev_b.breaker_passed is True
     assert ev_b.breaker_exploit_passed is True

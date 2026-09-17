@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, field_validator
 from . import db, event_bus, judge, llm_client
 from .battle_token import issue_battle_token, verify_battle_token
 from .config import settings
-from .providers import get_model_call_spec
+from .providers import get_model_call_spec, reasoning_request_fields
 from .redact import sanitize_artifact
 from .results import TRUSTED_VERIFICATION_MARKER
 
@@ -129,6 +129,8 @@ class ModelBody(BaseModel):
     phase: str = ""
     messages: list[dict] = Field(default_factory=list)
     max_tokens: int = 1024
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    reasoning_effort: str | None = Field(default=None, max_length=16)
     tools: list[dict] | None = None
     tool_choice: str | None = None
 
@@ -337,6 +339,10 @@ def _persist_trusted_verification(
         record["terminal_reason"] = term_hint
     if payload.get("visible_passed") is not None:
         record["visible_passed"] = bool(payload.get("visible_passed"))
+    if isinstance(payload.get("breaker_semantic_evidence"), dict):
+        record["breaker_semantic_evidence"] = dict(
+            payload["breaker_semantic_evidence"]
+        )
     artifact = TRUSTED_VERIFICATION_MARKER + " " + json.dumps(record)
     from .persistence import service as persist
 
@@ -390,7 +396,11 @@ def _apply_self_learning(
     """
     if not results:
         return
-    context_mode = str(battle.get("context_mode") or "strict").lower().strip()
+    context_mode = str(
+        battle.get("context_mode")
+        or (battle.get("battle_config") or {}).get("context_mode")
+        or "strict"
+    ).lower().strip()
     if context_mode not in ("adaptive", "assisted"):
         # Strict mode: strictly zero historical persistence or learning mutation
         return
@@ -500,6 +510,7 @@ def internal_finalize(
     _rate_limit(body.battle_id)
 
     from .finalization import sandbox_end_finalize
+    from . import sandbox_launcher
 
     result = sandbox_end_finalize(
         body.battle_id,
@@ -508,7 +519,12 @@ def internal_finalize(
         judge_model=body.judge_model,
     )
     if result.get("status") == "not_found":
+        sandbox_launcher.cleanup_battle_database(body.battle_id)
         raise HTTPException(status_code=404, detail="Battle not found")
+    if result.get("status") in ("completed", "failed", "cancelled"):
+        # Cleanup is a separate host-owned side effect. It must not alter the
+        # already-finalized result or award/rank anything on its behalf.
+        sandbox_launcher.cleanup_battle_database(body.battle_id)
     return result
 
 
@@ -567,6 +583,9 @@ def internal_verify(
         raise HTTPException(status_code=409, detail="target manifest hash mismatch")
     if frozen_hidden and bundle.hidden_hash != frozen_hidden:
         raise HTTPException(status_code=409, detail="target hidden hash mismatch")
+    frozen_evaluator = str(fmt_cfg.get("evaluator_hash") or "")
+    if frozen_evaluator and bundle.evaluator_hash != frozen_evaluator:
+        raise HTTPException(status_code=409, detail="target evaluator hash mismatch")
 
     hint_payload = {
         "executor_outcome": body.executor_outcome,
@@ -646,9 +665,7 @@ def internal_verify(
             "builder_passed": ev.builder_passed,
             "breaker_passed": ev.breaker_passed,
             "attempted": True,
-            "verification_status": (
-                "verified_pass" if ev.builder_passed else "verified_fail"
-            ),
+            "verification_status": ev.verification_status,
         }
         _persist_trusted_verification(
             body.battle_id,
@@ -663,6 +680,9 @@ def internal_verify(
                 "breaker_passed": ev.breaker_passed,
                 "manifest_hash": ev.manifest_hash,
                 "verification_status": public["verification_status"],
+                "breaker_semantic_evidence": dict(
+                    ev.breaker_semantic_evidence or {}
+                ),
                 **hint_payload,
             },
         )
@@ -765,6 +785,9 @@ def internal_model(
     if body.model_id not in battle.get("model_ids", []):
         raise HTTPException(status_code=400, detail="model not in battle")
     base, style, key, model = get_model_call_spec(body.model_id, battle["user_id"])
+    provider_request_fields = reasoning_request_fields(
+        body.model_id, body.reasoning_effort
+    )
     try:
         resp = llm_client.chat_completion(
             base_url=base,
@@ -773,8 +796,10 @@ def internal_model(
             model=model,
             messages=body.messages,
             max_tokens=body.max_tokens,
+            temperature=body.temperature if body.temperature is not None else 0.7,
             tools=body.tools,
             tool_choice=body.tool_choice,
+            provider_request_fields=provider_request_fields,
             return_response_obj=True,
         )
     except HTTPException as exc:

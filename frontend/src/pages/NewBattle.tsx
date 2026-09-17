@@ -125,6 +125,7 @@ export default function NewBattle() {
     useState<Difficulty>("general");
 
   const [save, setSave] = useState(false);
+  const [contextMode, setContextMode] = useState<"strict" | "adaptive">("strict");
 
   const [err, setErr] = useState<
     string | null
@@ -476,6 +477,7 @@ export default function NewBattle() {
               target?.version ||
               undefined,
             save,
+            context_mode: contextMode,
 
             judge_provider_id:
               judgeId || null,
@@ -1319,6 +1321,65 @@ export default function NewBattle() {
             </ControlCell>
           </div>
 
+          {/* LEARNING & MEMORY MODE */}
+          <div className="mt-px border-b border-border bg-surface p-5">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <span className="font-mono text-[9px] uppercase tracking-[0.15em] text-foreground font-semibold">
+                    Learning & Memory Mode
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 font-mono text-[8px] uppercase tracking-wider rounded border ${
+                      contextMode === "adaptive"
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 font-semibold"
+                        : "border-cyan-500/30 bg-cyan-500/10 text-cyan-400"
+                    }`}
+                  >
+                    {contextMode === "adaptive" ? "Continuous Learning" : "Neutral Benchmark"}
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[10px] leading-4 text-muted max-w-xl">
+                  {contextMode === "adaptive"
+                    ? "Models retrieve winning lessons from prior matches on this target and commit verified new strategies to episodic memory."
+                    : "Zero historical memory is retrieved or recorded. Guarantees 100% clean, uncontaminated benchmark evaluation."}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 border border-border">
+                <button
+                  type="button"
+                  onClick={() => setContextMode("strict")}
+                  className={`px-4 py-2.5 text-left transition ${
+                    contextMode === "strict"
+                      ? "bg-accent text-white"
+                      : "bg-background text-muted hover:text-foreground"
+                  }`}
+                >
+                  <div className="font-mono text-[9px] font-bold uppercase tracking-[0.08em]">
+                    Neutral Benchmark
+                  </div>
+                  <div className="text-[8px] opacity-80">Zero memory · strict</div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setContextMode("adaptive")}
+                  className={`px-4 py-2.5 text-left transition ${
+                    contextMode === "adaptive"
+                      ? "bg-accent text-white"
+                      : "bg-background text-muted hover:text-foreground"
+                  }`}
+                >
+                  <div className="font-mono text-[9px] font-bold uppercase tracking-[0.08em]">
+                    Continuous Learning
+                  </div>
+                  <div className="text-[8px] opacity-80">Mem0 + Skill Elo</div>
+                </button>
+              </div>
+            </div>
+          </div>
+
           {/* ARTIFACTS + SUMMARY */}
           <div className="mt-px grid gap-px bg-border md:grid-cols-[1fr_1.4fr]">
             <button
@@ -1403,6 +1464,15 @@ export default function NewBattle() {
                     save
                       ? "Artifacts preserved"
                       : "Artifacts ephemeral"
+                  }
+                />
+
+                <SummaryPill
+                  ok
+                  text={
+                    contextMode === "adaptive"
+                      ? "Continuous learning active"
+                      : "Neutral benchmark (zero memory)"
                   }
                 />
               </div>

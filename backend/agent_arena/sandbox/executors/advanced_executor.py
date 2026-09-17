@@ -18,10 +18,12 @@ import subprocess
 import tempfile
 import threading
 import time
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 from .base import Executor
 from .tool_result import ToolResult
@@ -41,19 +43,32 @@ from .battle_plan import (
     parse_services_spec,
     classify_deployment_failure,
 )
-from .procs import ProcessManager
+from ..fighter_runtime import (
+    FighterRuntimeClient,
+    FighterRuntimeError,
+    FighterRuntimeUnavailable,
+)
+from .fighter_network_policy import (
+    FighterHttpTransport,
+    FighterNetworkPolicy,
+    FighterNetworkPolicyError,
+    control_plane_urls_from_env,
+    protected_secret_values_from_env,
+)
 from .preview import (
     StaticPreviewServer,
     port_for_index,
     preview_enabled,
 )
 from .skill_pool import (
+    load_skill,
     load_skill_pool,
     mount_skills,
     resolve_prerequisites,
     filter_skills,
 )
 from ...redact import sanitize_artifact
+from ..agent_runtime import resolve_role_runtime_bindings
 
 SKILL_POOL: list[dict] = load_skill_pool()
 
@@ -77,6 +92,45 @@ from ._command_guard import (
 )
 
 
+_DATABASE_AUTHORITY_ENV_EXACT = {
+    "BATTLE_DATABASE_URL",
+    "BATTLE_RO_DATABASE_URL",
+    "DATABASE_URL",
+    "DATABASE_URL_UNPOOLED",
+    "PGDATABASE",
+    "PGHOST",
+    "PGPASSFILE",
+    "PGPASSWORD",
+    "PGPORT",
+    "PGSERVICE",
+    "PGSERVICEFILE",
+    "PGUSER",
+    "POSTGRES_PRISMA_URL",
+    "POSTGRES_URL",
+    "POSTGRES_URL_NON_POOLING",
+}
+_DATABASE_AUTHORITY_ENV_SUFFIXES = ("_DATABASE_URL", "_DATABASE_URI", "_DB_URL")
+
+
+def _is_database_authority_env(name: str) -> bool:
+    upper = str(name).upper()
+    return upper in _DATABASE_AUTHORITY_ENV_EXACT or upper.endswith(
+        _DATABASE_AUTHORITY_ENV_SUFFIXES
+    )
+
+
+def _other_database_authority_values(env: dict) -> frozenset[str]:
+    """Return configured DB authorities other than the Fighter read-only DSN."""
+
+    return frozenset(
+        str(value).strip()
+        for name, value in env.items()
+        if str(name).upper() != "BATTLE_RO_DATABASE_URL"
+        and _is_database_authority_env(str(name))
+        and str(value).strip()
+    )
+
+
 def _strip_secret_env(env: dict) -> dict:
     """Remove credential-bearing variables before handing env to child processes.
 
@@ -92,13 +146,42 @@ def _strip_secret_env(env: dict) -> dict:
         "ARENA_EVALUATOR_DIR",
         "ARENA_TRUSTED_TARGETS_DIR",
         "BATTLE_BOOTSTRAP_JSON",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
     }
-    _SUFFIXES = ("_KEY", "_SECRET", "_TOKEN", "_PASSWORD")
+    _SUFFIXES = (
+        "_KEY",
+        "_SECRET",
+        "_TOKEN",
+        "_PASSWORD",
+        "_TOKEN_ID",
+        "_TOKEN_SECRET",
+    )
     out = dict(env)
     for name in list(out):
         up = name.upper()
-        if up in _EXACT or up.endswith(_SUFFIXES):
+        if (
+            up in _EXACT
+            or _is_database_authority_env(up)
+            or up.endswith(_SUFFIXES)
+        ):
             out.pop(name, None)
+    return out
+
+
+def _fighter_capability_env(env: dict, battle_ro_database_url: str) -> dict:
+    """Build the Fighter tool boundary env with one explicit DB capability.
+
+    Raw Fighter child processes use ``_strip_secret_env`` directly and never
+    inherit this capability. SQL access consumes this boundary env instead.
+    """
+    out = _strip_secret_env(env)
+    url = str(battle_ro_database_url or "").strip()
+    if url:
+        out["BATTLE_RO_DATABASE_URL"] = url
     return out
 
 
@@ -575,6 +658,11 @@ class ToolSession:
         output_cap: int | None = None,
         allow_network: bool = False,
         test_cmd: str | None = None,
+        network_policy: FighterNetworkPolicy | None = None,
+        http_transport=None,
+        battle_ro_database_url: str | None = None,
+        allowed_tools: set[str] | None = None,
+        allowed_skill_names: set[str] | None = None,
     ):
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -583,10 +671,38 @@ class ToolSession:
         self.steps = 0
         self._max_output = int(output_cap) if output_cap else None
         self.skill_reads: set[str] = set()
+        self.allowed_tools = (
+            {str(tool).strip().lower() for tool in allowed_tools if str(tool).strip()}
+            if allowed_tools is not None
+            else None
+        )
+        self.allowed_skill_names = (
+            {str(name).strip().lower() for name in allowed_skill_names if str(name).strip()}
+            if allowed_skill_names is not None
+            else None
+        )
         self.seq = 0
         self.allow_network = bool(allow_network)
         self.test_cmd = str(test_cmd or "").strip() or None
-        self.procs = ProcessManager(self.workdir)
+        self.network_policy = network_policy or FighterNetworkPolicy(
+            allow_external=self.allow_network,
+            control_plane_urls=control_plane_urls_from_env(),
+        )
+        self._http_transport = http_transport
+        self._battle_ro_database_url = str(
+            battle_ro_database_url
+            if battle_ro_database_url is not None
+            else os.environ.get("BATTLE_RO_DATABASE_URL", "")
+        ).strip()
+        self._fighter_environment = _fighter_capability_env(
+            os.environ.copy(), self._battle_ro_database_url
+        )
+        self._other_database_authorities = _other_database_authority_values(
+            os.environ
+        )
+        self._browser_policy_error: FighterNetworkPolicyError | None = None
+        self._fighter_runtime: FighterRuntimeClient | None = None
+        self._fighter_runtime_error: str | None = None
         self._pw = None
         self._browser = None
         self._page = None
@@ -594,7 +710,8 @@ class ToolSession:
     def close(self) -> None:
         """Clean up background processes and headless browser sessions."""
         try:
-            self.procs.kill_all()
+            if self._fighter_runtime is not None:
+                self._fighter_runtime.close()
         except Exception:
             pass
         if self._browser:
@@ -611,6 +728,80 @@ class ToolSession:
                 pass
             self._pw = None
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    @property
+    def runtime_available(self) -> bool:
+        try:
+            self._fighter_runtime_or_raise()
+        except FighterRuntimeUnavailable:
+            return False
+        return True
+
+    @property
+    def fighter_environment(self) -> dict:
+        """Return the tool-boundary environment, never the child environment."""
+        return dict(self._fighter_environment)
+
+    def _fighter_runtime_or_raise(self) -> FighterRuntimeClient:
+        if self._fighter_runtime is None and self._fighter_runtime_error is None:
+            try:
+                runtime = FighterRuntimeClient(
+                    self.workdir, _strip_secret_env(os.environ.copy())
+                )
+                runtime.start()
+                self._fighter_runtime = runtime
+            except FighterRuntimeError as exc:
+                self._fighter_runtime_error = str(exc)
+        if self._fighter_runtime is None:
+            raise FighterRuntimeUnavailable(
+                self._fighter_runtime_error or "Fighter runtime is unavailable"
+            )
+        return self._fighter_runtime
+
+    def _fighter_process_env(self) -> dict:
+        env = _strip_secret_env(os.environ.copy())
+        env["ARENA_ROOT"] = str(self.root)
+        env["ARENA_WORKDIR"] = str(self.workdir)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
+        bin_dir = os.path.dirname(sys.executable)
+        if bin_dir:
+            current_path = env.get("PATH") or ""
+            parts = [p for p in current_path.split(os.pathsep) if p]
+            if bin_dir not in parts:
+                parts.insert(0, bin_dir)
+            env["PATH"] = os.pathsep.join(parts)
+        work = str(self.workdir.resolve())
+        env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
+        env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+        existing_addopts = env.get("PYTEST_ADDOPTS", "")
+        if "-p no:rerunfailures" not in existing_addopts:
+            env["PYTEST_ADDOPTS"] = (existing_addopts + " -p no:rerunfailures").strip()
+        return env
+
+    @staticmethod
+    def _runtime_unavailable_result(
+        tool: str, exc: Exception, started_at: float, *, count_step: bool
+    ) -> ToolResult:
+        return ToolResult(
+            tool=tool,
+            success=False,
+            output="ERROR: Fighter process runtime unavailable",
+            error="Fighter process runtime unavailable",
+            exit_code=1,
+            error_type="infrastructure_failure",
+            duration_ms=int((time.time() - started_at) * 1000),
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+            metadata={"reason": "fighter_runtime_unavailable"},
+        )
+
     def _maybe_cap(self, data: str) -> tuple[str, bool]:
         if self._max_output is None:
             return data, False
@@ -622,6 +813,162 @@ class ToolSession:
             + "\n[TRUNCATED]"
         )
         return capped, True
+
+    def authorize_battle_local_http_origin(self, origin: str) -> None:
+        """Register one Arena-provisioned exact origin for this Fighter session."""
+
+        self.network_policy.authorize_battle_local(origin)
+
+    @staticmethod
+    def _network_policy_result(
+        tool: str,
+        exc: FighterNetworkPolicyError,
+        *,
+        started_at: float,
+        count_step: bool,
+        redirect: bool = False,
+    ) -> ToolResult:
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        prefix = "redirect blocked" if redirect else "request blocked"
+        message = f"{prefix} by Fighter network policy: {exc}"
+        return ToolResult(
+            tool=tool,
+            success=False,
+            output=f"ERROR: {message}",
+            error=message,
+            exit_code=1,
+            error_type="network_policy_rejection",
+            duration_ms=elapsed_ms,
+            policy_rejected=True,
+            mutated=False,
+            step_charged=count_step,
+            truncated=False,
+            metadata={"policy_code": exc.code},
+        )
+
+    def _bounded_http_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict | None = None,
+        body: str = "",
+        timeout_seconds: float,
+        max_response_bytes: int = 1024 * 1024,
+        max_redirects: int = 5,
+    ) -> dict[str, Any]:
+        """Execute one policy-authorized request with per-hop redirect checks."""
+
+        import httpx
+
+        protected_values = protected_secret_values_from_env()
+        self.network_policy.reject_protected_values(
+            url,
+            body,
+            protected_values=protected_values,
+        )
+        request_headers = self.network_policy.sanitize_headers(
+            headers,
+            protected_values=protected_values,
+        )
+        current_url = url
+        current_method = str(method or "GET").upper()
+        if current_method not in {
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "HEAD",
+            "OPTIONS",
+        }:
+            raise FighterNetworkPolicyError(
+                "HTTP method is not allowed", code="method_not_allowed"
+            )
+        current_body = body.encode("utf-8") if body else None
+        previous_origin: str | None = None
+        redirects = 0
+        client_kwargs: dict[str, Any] = {
+            "timeout": httpx.Timeout(timeout_seconds),
+            "follow_redirects": False,
+            "trust_env": False,
+        }
+        if self._http_transport is not None:
+            client_kwargs["transport"] = self._http_transport
+        else:
+            client_kwargs["transport"] = FighterHttpTransport(self.network_policy)
+
+        with httpx.Client(**client_kwargs) as client:
+            while True:
+                self.network_policy.reject_protected_values(
+                    current_url,
+                    protected_values=protected_values,
+                )
+                try:
+                    destination = self.network_policy.validate_url(current_url)
+                except FighterNetworkPolicyError as exc:
+                    if redirects:
+                        raise FighterNetworkPolicyError(
+                            f"redirect destination rejected: {exc}",
+                            code=exc.code,
+                        ) from exc
+                    raise
+                hop_headers = dict(request_headers)
+                if previous_origin and previous_origin != destination.origin:
+                    for name in list(hop_headers):
+                        if name.lower() in {"authorization", "cookie"}:
+                            hop_headers.pop(name, None)
+                    client.cookies.clear()
+                with client.stream(
+                    current_method,
+                    destination.url,
+                    headers=hop_headers,
+                    content=current_body,
+                ) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            raise FighterNetworkPolicyError(
+                                "redirect response omitted Location",
+                                code="invalid_redirect",
+                            )
+                        redirects += 1
+                        if redirects > max_redirects:
+                            raise FighterNetworkPolicyError(
+                                "redirect limit exceeded",
+                                code="redirect_limit_exceeded",
+                            )
+                        next_url = urljoin(destination.url, location)
+                        previous_origin = destination.origin
+                        if response.status_code == 303 or (
+                            response.status_code in (301, 302)
+                            and current_method == "POST"
+                        ):
+                            current_method = "GET"
+                            current_body = None
+                        current_url = next_url
+                        continue
+
+                    payload = bytearray()
+                    truncated = False
+                    for chunk in response.iter_bytes():
+                        remaining = max_response_bytes - len(payload)
+                        if remaining <= 0:
+                            truncated = True
+                            break
+                        if len(chunk) > remaining:
+                            payload.extend(chunk[:remaining])
+                            truncated = True
+                            break
+                        payload.extend(chunk)
+                    text = bytes(payload).decode("utf-8", errors="replace")
+                    return {
+                        "status_code": response.status_code,
+                        "reason_phrase": response.reason_phrase,
+                        "text": text,
+                        "truncated": truncated,
+                        "final_url": destination.url,
+                    }
 
     def _resolve(self, rel: str) -> Path:
         if not rel or rel == ".":
@@ -955,34 +1302,12 @@ class ToolSession:
         if count_step:
             self.steps += 1
         try:
-            env = _strip_secret_env(os.environ.copy())
-            env["ARENA_ROOT"] = str(self.root)
-            env["ARENA_WORKDIR"] = str(self.workdir)
-            env["PYTHONDONTWRITEBYTECODE"] = "1"
-            env["PYTHONUNBUFFERED"] = "1"
-            work = str(self.workdir.resolve())
-            env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
+            env = self._fighter_process_env()
             if path:
                 p = self._resolve(path)
-                proc = subprocess.Popen(
-                    ["python3", str(p)],
-                    cwd=str(self.workdir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                    env=env,
-                )
+                argv = ["python3", str(p)]
             elif inline:
-                proc = subprocess.Popen(
-                    ["python3", "-c", inline],
-                    cwd=str(self.workdir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    start_new_session=True,
-                    env=env,
-                )
+                argv = ["python3", "-c", inline]
             else:
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
@@ -997,30 +1322,10 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-            try:
-                out, err = proc.communicate(timeout=self.tool_timeout)
-                out, out_trunc = self._maybe_cap(out or "")
-                err, err_trunc = self._maybe_cap(err or "")
-                is_truncated = out_trunc or err_trunc
-                success = proc.returncode == 0
-                elapsed_ms = int((time.time() - t0) * 1000)
-                return ToolResult(
-                    tool="run",
-                    success=success,
-                    output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}",
-                    error=None if success else f"rc={proc.returncode}",
-                    exit_code=proc.returncode,
-                    error_type=None if success else "execution_error",
-                    duration_ms=elapsed_ms,
-                    truncated=is_truncated,
-                    mutated=True,
-                    step_charged=count_step,
-                )
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+            raw = self._fighter_runtime_or_raise().exec(
+                argv, env=env, timeout=self.tool_timeout
+            )
+            if raw.get("timed_out"):
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool="run",
@@ -1035,6 +1340,24 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
+            out, out_trunc = self._maybe_cap(str(raw.get("stdout") or ""))
+            err, err_trunc = self._maybe_cap(str(raw.get("stderr") or ""))
+            is_truncated = out_trunc or err_trunc
+            rc = int(raw.get("exit_code") or 0)
+            success = rc == 0
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="run",
+                success=success,
+                output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={rc}",
+                error=None if success else f"rc={rc}",
+                exit_code=rc,
+                error_type=None if success else "execution_error",
+                duration_ms=elapsed_ms,
+                truncated=is_truncated,
+                mutated=True,
+                step_charged=count_step,
+            )
         except ValueError as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -1049,6 +1372,10 @@ class ToolSession:
                 mutated=False,
                 step_charged=count_step,
                 truncated=False,
+            )
+        except FighterRuntimeUnavailable as exc:
+            return self._runtime_unavailable_result(
+                "run", exc, t0, count_step=count_step
             )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -1205,31 +1532,13 @@ class ToolSession:
                 step_charged=count_step,
                 truncated=False,
             )
-        env = _strip_secret_env(os.environ.copy())
-        env["ARENA_ROOT"] = str(self.root)
-        env["ARENA_WORKDIR"] = str(self.workdir)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        env["PYTHONUNBUFFERED"] = "1"
-        work = str(self.workdir.resolve())
-        env["PYTHONPATH"] = work + os.pathsep + env.get("PYTHONPATH", "")
+        env = self._fighter_process_env()
         cmd_timeout = timeout or self.tool_timeout or 90
         try:
-            proc = subprocess.Popen(
-                ["bash", "-c", command],
-                cwd=str(self.workdir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                start_new_session=True,
-                env=env,
+            raw = self._fighter_runtime_or_raise().exec(
+                ["bash", "-c", command], env=env, timeout=cmd_timeout
             )
-            try:
-                out, err = proc.communicate(timeout=cmd_timeout)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
-                    pass
+            if raw.get("timed_out"):
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool=tool_name,
@@ -1244,22 +1553,27 @@ class ToolSession:
                     step_charged=count_step,
                     truncated=False,
                 )
-            out, out_trunc = self._maybe_cap(out or "")
-            err, err_trunc = self._maybe_cap(err or "")
+            out, out_trunc = self._maybe_cap(str(raw.get("stdout") or ""))
+            err, err_trunc = self._maybe_cap(str(raw.get("stderr") or ""))
             is_truncated = out_trunc or err_trunc
-            success = proc.returncode == 0
+            rc = int(raw.get("exit_code") or 0)
+            success = rc == 0
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
                 tool=tool_name,
                 success=success,
-                output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={proc.returncode}",
-                error=None if success else f"rc={proc.returncode}",
-                exit_code=proc.returncode,
+                output=f"STDOUT:\n{out}\nSTDERR:\n{err}\nrc={rc}",
+                error=None if success else f"rc={rc}",
+                exit_code=rc,
                 error_type=None if success else "execution_error",
                 duration_ms=elapsed_ms,
                 truncated=is_truncated,
                 mutated=True,
                 step_charged=count_step,
+            )
+        except FighterRuntimeUnavailable as exc:
+            return self._runtime_unavailable_result(
+                tool_name, exc, t0, count_step=count_step
             )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -1703,70 +2017,34 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
-        if not self.allow_network:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            return ToolResult(
-                tool="fetch",
-                success=False,
-                output="ERROR: network fetch blocked (target network is false)",
-                error="network fetch blocked (target network is false)",
-                exit_code=1,
-                error_type="policy_rejection",
-                duration_ms=elapsed_ms,
-                policy_rejected=True,
-                mutated=False,
-                step_charged=count_step,
-                truncated=False,
-            )
-        blocked = _fetch_url_blocked(url)
-        if blocked:
-            elapsed_ms = int((time.time() - t0) * 1000)
-            return ToolResult(
-                tool="fetch",
-                success=False,
-                output=f"ERROR: fetch blocked ({blocked})",
-                error=blocked,
-                exit_code=1,
-                error_type="policy_rejection",
-                duration_ms=elapsed_ms,
-                policy_rejected=True,
-                mutated=False,
-                step_charged=count_step,
-                truncated=False,
-            )
         try:
-            import httpx
-
-            resp = httpx.get(url, timeout=20, follow_redirects=False)
-            if resp.is_redirect:
-                elapsed_ms = int((time.time() - t0) * 1000)
-                return ToolResult(
-                    tool="fetch",
-                    success=False,
-                    output="ERROR: fetch blocked (redirect not followed)",
-                    error="redirect not followed",
-                    exit_code=1,
-                    error_type="policy_rejection",
-                    duration_ms=elapsed_ms,
-                    policy_rejected=True,
-                    mutated=False,
-                    step_charged=count_step,
-                    truncated=False,
-                )
-            body, is_truncated = self._maybe_cap(resp.text[:20000])
-            success = resp.status_code == 200
+            response = self._bounded_http_request(
+                "GET",
+                url,
+                timeout_seconds=20.0,
+                max_response_bytes=20000,
+            )
+            body, output_capped = self._maybe_cap(response["text"])
+            is_truncated = bool(response["truncated"] or output_capped)
+            status_code = int(response["status_code"])
+            success = status_code == 200
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
                 tool="fetch",
                 success=success,
-                output=f"STATUS {resp.status_code}\n{body}",
-                error=None if success else f"status {resp.status_code}",
+                output=f"STATUS {status_code}\n{body}",
+                error=None if success else f"status {status_code}",
                 exit_code=0 if success else 1,
                 error_type=None if success else "execution_error",
                 duration_ms=elapsed_ms,
                 truncated=is_truncated,
                 mutated=False,
                 step_charged=count_step,
+            )
+        except FighterNetworkPolicyError as exc:
+            return self._network_policy_result(
+                "fetch", exc, started_at=t0, count_step=count_step,
+                redirect="redirect" in str(exc).lower(),
             )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -1824,19 +2102,23 @@ class ToolSession:
                 truncated=False,
             )
         try:
-            mgr = self.procs.start(
-                name, content or "", env=_strip_secret_env(os.environ.copy())
+            managed = self._fighter_runtime_or_raise().bg(
+                name, content or "", env=self._fighter_process_env()
             )
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
                 tool="bg",
                 success=True,
-                output=f"BG STARTED {mgr.name} pid={mgr.proc.pid}",
+                output=f"BG STARTED {managed['name']} pid={managed['pid']}",
                 exit_code=0,
                 duration_ms=elapsed_ms,
                 mutated=True,
                 step_charged=count_step,
                 truncated=False,
+            )
+        except FighterRuntimeUnavailable as exc:
+            return self._runtime_unavailable_result(
+                "bg", exc, t0, count_step=count_step
             )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -1854,9 +2136,17 @@ class ToolSession:
             )
 
     def ps(self, *, count_step: bool = True) -> ToolResult:
+        t0 = time.time()
         if count_step:
             self.steps += 1
-        out_str, is_truncated = self._maybe_cap(self.procs.list())
+        try:
+            out_str, is_truncated = self._maybe_cap(
+                self._fighter_runtime_or_raise().ps()
+            )
+        except FighterRuntimeUnavailable as exc:
+            return self._runtime_unavailable_result(
+                "ps", exc, t0, count_step=count_step
+            )
         return ToolResult(
             tool="ps",
             success=True,
@@ -1872,7 +2162,12 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
-        res = self.procs.kill(name)
+        try:
+            res = self._fighter_runtime_or_raise().kill(name)
+        except FighterRuntimeUnavailable as exc:
+            return self._runtime_unavailable_result(
+                "kill", exc, t0, count_step=count_step
+            )
         success = not res.startswith("ERROR")
         elapsed_ms = int((time.time() - t0) * 1000)
         return ToolResult(
@@ -1898,7 +2193,12 @@ class ToolSession:
             n = int(tail)
         except Exception:
             n = 8000
-        res = self.procs.logs(name, n)
+        try:
+            res = self._fighter_runtime_or_raise().logs(name, n)
+        except FighterRuntimeUnavailable as exc:
+            return self._runtime_unavailable_result(
+                "logs", exc, t0, count_step=count_step
+            )
         res_capped, is_truncated = self._maybe_cap(res)
         success = not res.startswith("ERROR")
         elapsed_ms = int((time.time() - t0) * 1000)
@@ -1920,6 +2220,23 @@ class ToolSession:
         try:
             if count_step:
                 self.steps += 1
+            normalized_name = str(name or "").strip().lower()
+            if (
+                self.allowed_skill_names is not None
+                and normalized_name not in self.allowed_skill_names
+            ):
+                return ToolResult(
+                    tool="use_skill",
+                    success=False,
+                    output=f"ERROR: permission denied: skill not configured: {name}",
+                    error=f"permission_denied: skill {name}",
+                    exit_code=1,
+                    error_type="permission_denied",
+                    duration_ms=int((time.time() - t0) * 1000),
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
             if name in self.skill_reads:
                 return ToolResult(
                     tool="use_skill",
@@ -1948,6 +2265,21 @@ class ToolSession:
                     mutated=False,
                     step_charged=count_step,
                 )
+            if self.allowed_skill_names is not None:
+                elapsed_ms = int((time.time() - t0) * 1000)
+                return ToolResult(
+                    tool="use_skill",
+                    success=False,
+                    output=f"ERROR: configured skill not mounted: {name}",
+                    error=f"configured skill not mounted: {name}",
+                    exit_code=1,
+                    error_type="not_found",
+                    duration_ms=elapsed_ms,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+
             from .skill_pool import skills_root
 
             source_path = skills_root() / name / "SKILL.md"
@@ -2070,6 +2402,75 @@ class ToolSession:
             return self.list_skills(count_step=count_step)
         if count_step:
             self.steps += 1
+        if self.allowed_skill_names is not None:
+            mounted = sorted(
+                d.name
+                for d in (self.workdir / ".agents" / "skills").iterdir()
+                if d.is_dir()
+                and (d / "SKILL.md").is_file()
+                and d.name.lower() in self.allowed_skill_names
+            ) if (self.workdir / ".agents" / "skills").is_dir() else []
+            if chosen is not None:
+                requested = [str(item).strip() for item in chosen if str(item).strip()]
+                denied = [item for item in requested if item.lower() not in self.allowed_skill_names]
+                if denied:
+                    return ToolResult(
+                        tool="skills",
+                        success=False,
+                        output=f"ERROR: permission denied: skill not configured: {denied[0]}",
+                        error=f"permission_denied: skill {denied[0]}",
+                        error_type="permission_denied",
+                        exit_code=1,
+                        duration_ms=0,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
+                return ToolResult(
+                    tool="skills",
+                    success=True,
+                    output=f"SKILLS_CHOSEN {','.join(requested)}",
+                    exit_code=0,
+                    duration_ms=0,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            if skill is not None:
+                requested = str(skill).strip()
+                if requested.lower() not in self.allowed_skill_names or requested not in mounted:
+                    return ToolResult(
+                        tool="skills",
+                        success=False,
+                        output=f"ERROR [unknown_skill]: {requested}",
+                        error=f"unknown skill: {requested}",
+                        error_type="unknown_skill",
+                        exit_code=1,
+                        duration_ms=0,
+                        step_charged=count_step,
+                        truncated=False,
+                    )
+                return ToolResult(
+                    tool="skills",
+                    success=True,
+                    output=f"SKILL_AVAILABLE {requested}; use use_skill to load it.",
+                    exit_code=0,
+                    duration_ms=0,
+                    mutated=False,
+                    step_charged=count_step,
+                    truncated=False,
+                )
+            query = str(search or index or "").strip().lower()
+            visible = [name for name in mounted if not query or query in name.lower()]
+            return ToolResult(
+                tool="skills",
+                success=True,
+                output="\n".join(visible) if visible else "(no configured skills match)",
+                exit_code=0,
+                duration_ms=0,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         if (
             index is not None
             or search is not None
@@ -2154,6 +2555,17 @@ class ToolSession:
                 ],
             )
             self._page = self._browser.new_page()
+
+            def enforce_request_policy(route, request) -> None:
+                try:
+                    self.network_policy.validate_url(request.url)
+                except FighterNetworkPolicyError as exc:
+                    self._browser_policy_error = exc
+                    route.abort("blockedbyclient")
+                    return
+                route.continue_()
+
+            self._page.route("**/*", enforce_request_policy)
             return self._page
         except Exception:
             return None
@@ -2180,6 +2592,16 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
+        try:
+            self.network_policy.validate_url(url)
+        except FighterNetworkPolicyError as exc:
+            return self._network_policy_result(
+                "playwright_navigate",
+                exc,
+                started_at=t0,
+                count_step=count_step,
+            )
+        self._browser_policy_error = None
         page = self._ensure_page()
         if page is not None:
             try:
@@ -2198,6 +2620,14 @@ class ToolSession:
                     truncated=False,
                 )
             except Exception as exc:
+                if self._browser_policy_error is not None:
+                    return self._network_policy_result(
+                        "playwright_navigate",
+                        self._browser_policy_error,
+                        started_at=t0,
+                        count_step=count_step,
+                        redirect=True,
+                    )
                 elapsed_ms = int((time.time() - t0) * 1000)
                 return ToolResult(
                     tool="playwright_navigate",
@@ -2212,21 +2642,29 @@ class ToolSession:
                     truncated=False,
                 )
         try:
-            import httpx
-
-            with httpx.Client(timeout=5.0) as client:
-                res = client.get(url)
-                elapsed_ms = int((time.time() - t0) * 1000)
-                return ToolResult(
-                    tool="playwright_navigate",
-                    success=res.status_code < 400,
-                    output=f"NAVIGATED (HTTP probe) to {url} [status: {res.status_code}]",
-                    exit_code=0 if res.status_code < 400 else 1,
-                    duration_ms=elapsed_ms,
-                    mutated=False,
-                    step_charged=count_step,
-                    truncated=False,
-                )
+            response = self._bounded_http_request(
+                "GET", url, timeout_seconds=5.0, max_response_bytes=3000
+            )
+            status_code = int(response["status_code"])
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return ToolResult(
+                tool="playwright_navigate",
+                success=status_code < 400,
+                output=f"NAVIGATED (HTTP probe) to {url} [status: {status_code}]",
+                exit_code=0 if status_code < 400 else 1,
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=bool(response["truncated"]),
+            )
+        except FighterNetworkPolicyError as exc:
+            return self._network_policy_result(
+                "playwright_navigate",
+                exc,
+                started_at=t0,
+                count_step=count_step,
+                redirect="redirect" in str(exc).lower(),
+            )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -2466,27 +2904,36 @@ class ToolSession:
         if count_step:
             self.steps += 1
         try:
-            import httpx
-
-            with httpx.Client(timeout=15.0) as client:
-                res = client.request(
-                    method=method.upper(),
-                    url=url,
-                    headers=headers,
-                    content=body.encode("utf-8") if body else None,
-                )
-                elapsed_ms = int((time.time() - t0) * 1000)
-                resp_preview = res.text[:3000]
-                return ToolResult(
-                    tool="http_request",
-                    success=res.status_code < 400,
-                    output=f"HTTP {res.status_code} {res.reason_phrase}\n{resp_preview}",
-                    exit_code=0 if res.status_code < 400 else 1,
-                    duration_ms=elapsed_ms,
-                    mutated=False,
-                    step_charged=count_step,
-                    truncated=len(res.text) > 3000,
-                )
+            response = self._bounded_http_request(
+                method,
+                url,
+                headers=headers,
+                body=body,
+                timeout_seconds=15.0,
+            )
+            elapsed_ms = int((time.time() - t0) * 1000)
+            resp_preview = response["text"][:3000]
+            status_code = int(response["status_code"])
+            return ToolResult(
+                tool="http_request",
+                success=status_code < 400,
+                output=f"HTTP {status_code} {response['reason_phrase']}\n{resp_preview}",
+                error=None if status_code < 400 else f"status {status_code}",
+                exit_code=0 if status_code < 400 else 1,
+                error_type=None if status_code < 400 else "execution_error",
+                duration_ms=elapsed_ms,
+                mutated=False,
+                step_charged=count_step,
+                truncated=bool(response["truncated"] or len(response["text"]) > 3000),
+            )
+        except FighterNetworkPolicyError as exc:
+            return self._network_policy_result(
+                "http_request",
+                exc,
+                started_at=t0,
+                count_step=count_step,
+                redirect="redirect" in str(exc).lower(),
+            )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
@@ -2506,6 +2953,41 @@ class ToolSession:
         t0 = time.time()
         if count_step:
             self.steps += 1
+        ro_url = self._fighter_environment.get("BATTLE_RO_DATABASE_URL", "")
+        if not ro_url:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            message = "Battle-scoped read-only database credential unavailable"
+            return ToolResult(
+                tool="sql_query",
+                success=False,
+                output=f"ERROR: {message}; SQL access failed closed",
+                error=message,
+                exit_code=1,
+                error_type="infrastructure_failure",
+                duration_ms=elapsed_ms,
+                policy_rejected=False,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+                metadata={"reason": "battle_database_unavailable"},
+            )
+        if ro_url in self._other_database_authorities:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            message = "Battle read-only database credential aliases another database authority"
+            return ToolResult(
+                tool="sql_query",
+                success=False,
+                output=f"ERROR: {message}; SQL access failed closed",
+                error=message,
+                exit_code=1,
+                error_type="infrastructure_failure",
+                duration_ms=elapsed_ms,
+                policy_rejected=False,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+                metadata={"reason": "battle_database_authority_collision"},
+            )
         # Explicitly reject attempts to query evaluator/trusted schemas directly
         if "arena_trusted" in query.lower():
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -2521,10 +3003,7 @@ class ToolSession:
                 step_charged=count_step,
                 truncated=False,
             )
-        ro_url = os.environ.get("BATTLE_RO_DATABASE_URL") or os.environ.get(
-            "DATABASE_URL"
-        )
-        if not ro_url or "mock" in ro_url or os.environ.get("ARENA_HERMETIC") == "1":
+        if os.environ.get("ARENA_HERMETIC") == "1":
             elapsed_ms = int((time.time() - t0) * 1000)
             return ToolResult(
                 tool="sql_query",
@@ -2539,18 +3018,17 @@ class ToolSession:
         try:
             import psycopg
 
-            # Enforce read-only AND app_public search path
-            options = "-cdefault_transaction_read_only=on -csearch_path=app_public"
-            conn_url = (
-                ro_url
-                if "default_transaction_read_only" in ro_url
-                else (
-                    f"{ro_url}&options={options}"
-                    if "?" in ro_url
-                    else f"{ro_url}?options={options}"
-                )
+            # Enforce read-only, a restricted schema, and a bounded statement.
+            options = (
+                "-cdefault_transaction_read_only=on "
+                "-csearch_path=app_public "
+                "-cstatement_timeout=10000"
             )
-            with psycopg.connect(conn_url, autocommit=True) as conn:
+            with psycopg.connect(
+                ro_url,
+                autocommit=True,
+                options=options,
+            ) as conn:
                 with conn.cursor() as cur:
                     cur.execute(query)
                     if cur.description:
@@ -2580,11 +3058,12 @@ class ToolSession:
                     )
         except Exception as exc:
             elapsed_ms = int((time.time() - t0) * 1000)
+            del exc
             return ToolResult(
                 tool="sql_query",
                 success=False,
-                output=f"ERROR: SQL query failed (read-only enforced): {exc}",
-                error=str(exc),
+                output="ERROR: Battle-scoped SQL query failed (read-only enforced)",
+                error="battle-scoped SQL query failed",
                 exit_code=1,
                 error_type="database_error",
                 duration_ms=elapsed_ms,
@@ -2595,6 +3074,21 @@ class ToolSession:
 
     def exec_tool(self, call: dict, *, count_step: bool = True) -> ToolResult:
         tool = str(call.get("tool") or "").strip().lower()
+        if self.allowed_tools is not None and tool not in self.allowed_tools:
+            if count_step:
+                self.steps += 1
+            return ToolResult(
+                tool=tool or "unknown",
+                success=False,
+                output=f"ERROR: permission denied: tool '{tool}' is not authorized",
+                error=f"permission_denied: {tool}",
+                exit_code=1,
+                error_type="permission_denied",
+                duration_ms=0,
+                mutated=False,
+                step_charged=count_step,
+                truncated=False,
+            )
         if tool == "write":
             return self.write(
                 call.get("path", ""), call.get("content", ""), count_step=count_step
@@ -2891,6 +3385,13 @@ class AdvancedExecutor(Executor):
             record["terminal_reason"] = payload.get("terminal_reason")
         if payload.get("visible_passed") is not None:
             record["visible_passed"] = bool(payload.get("visible_passed"))
+        # Verifier stdout/stderr is trusted-host diagnostic material.  In
+        # particular builder_output contains the hidden verifier stream.  Do
+        # not place any verifier output in the generic round/event channel.
+        if isinstance(payload.get("breaker_semantic_evidence"), dict):
+            record["breaker_semantic_evidence"] = dict(
+                payload["breaker_semantic_evidence"]
+            )
         try:
             client.round(
                 battle_id,
@@ -3002,6 +3503,9 @@ class AdvancedExecutor(Executor):
             return None, "VERIFY_ERROR"
         if frozen_hidden and bundle.hidden_hash != frozen_hidden:
             return None, "VERIFY_ERROR"
+        frozen_evaluator = (format_config or {}).get("evaluator_hash")
+        if frozen_evaluator and bundle.evaluator_hash != frozen_evaluator:
+            return None, "VERIFY_ERROR"
         try:
             if builder_breaker:
                 ev = verify_builder_breaker_submission(
@@ -3013,9 +3517,7 @@ class AdvancedExecutor(Executor):
                     "builder_passed": ev.builder_passed,
                     "breaker_passed": ev.breaker_passed,
                     "attempted": True,
-                    "verification_status": (
-                        "verified_pass" if ev.builder_passed else "verified_fail"
-                    ),
+                    "verification_status": ev.verification_status,
                     "server_crashed": getattr(ev, "server_crashed", False),
                     "availability_degraded": getattr(ev, "availability_degraded", False),
                     "unauthorized_mutation": getattr(ev, "unauthorized_mutation", False),
@@ -3023,6 +3525,9 @@ class AdvancedExecutor(Executor):
                     "deployment_ready": getattr(ev, "deployment_ready", True),
                     "deployment_repaired": getattr(ev, "deployment_repaired", False),
                     "deployment_status": getattr(ev, "deployment_status", "DEPLOY_SUCCESS"),
+                    "breaker_semantic_evidence": dict(
+                        getattr(ev, "breaker_semantic_evidence", {}) or {}
+                    ),
                 }
             else:
                 ev = verify_target_submission(
@@ -3293,7 +3798,19 @@ class AdvancedExecutor(Executor):
             evidence_status = str(
                 (target_evidence or {}).get("verification_status") or ""
             )
-            if target_verification_error:
+            # An infrastructure outcome is Arena-owned terminal state. Trusted
+            # target evidence may be recorded alongside it, but must never turn
+            # an unavailable/failed runtime into TEST_PASS or TEST_FAIL.
+            infrastructure_outcome = str(outcome_override or "").upper() in {
+                "INFRASTRUCTURE_FAILURE",
+                "SANDBOX_BOOT_FAILURE",
+                "PROVIDER_ERROR",
+                "PROVIDER_TIMEOUT",
+            }
+            if infrastructure_outcome:
+                outcome = str(outcome_override)
+                passed = False
+            elif target_verification_error:
                 outcome = "VERIFY_ERROR"
                 passed = False
             elif evidence_status == "not_attempted":
@@ -3470,6 +3987,7 @@ class AdvancedExecutor(Executor):
         on_status=None,
         deadline=None,
         stop=None,
+        battle_ro_database_url=None,
     ):
         # Sandbox gate — must run inside sandbox per business_rules.md
         if os.environ.get("ARENA_IN_SANDBOX") != "1":
@@ -3499,7 +4017,11 @@ class AdvancedExecutor(Executor):
             if _judge_only(format_config) or format_config.get("custom")
             else "# TASK: Fix is_palindrome\n"
         )
-        if _judge_only(format_config):
+        if (
+            _judge_only(format_config)
+            or format_config.get("verification")
+            or format_config.get("starter_files")
+        ):
             default_test_code = format_config.get("test_code") or ""
         else:
             default_test_code = format_config.get("test_code") or DEFAULT_TEST_CODE
@@ -3510,9 +4032,17 @@ class AdvancedExecutor(Executor):
             seed_solution_roles = seed_solution_roles | set(
                 fighter_roles(format_config)
             )
-        max_turns = min(20, max(1, int(_budget("max_tool_turns", 6, ["max_turns"]))))
+        from ...agents import get_agent, get_agent_for_role
+        default_turns = 6
+        default_steps = 14
+        active_aid = (format_config.get("role_to_agent_id") or {}).get("builder") or format_config.get("agent_id")
+        active_agent_candidate = (get_agent(active_aid) if active_aid else None) or get_agent_for_role("builder")
+        if active_agent_candidate and active_agent_candidate.budgets:
+            default_turns = active_agent_candidate.budgets.max_turns
+            default_steps = active_agent_candidate.budgets.max_steps
+        max_turns = min(20, max(1, int(_budget("max_tool_turns", default_turns, ["max_turns"]))))
         max_steps = min(
-            50, max(1, int(_budget("max_tool_steps", 14, ["max_steps", "max_tool_steps"])))
+            50, max(1, int(_budget("max_tool_steps", default_steps, ["max_steps", "max_tool_steps"])))
         )
         raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
         tool_timeout = int(raw_timeout) if raw_timeout else None
@@ -3528,6 +4058,15 @@ class AdvancedExecutor(Executor):
             or load_skill_pool()
             or SKILL_POOL
         )
+        runtime_bindings = resolve_role_runtime_bindings(
+            role_to_model, format_config
+        )
+        # All model calls still go through InternalClient -> /internal/model.
+        # This only changes a role assignment when an explicitly selected
+        # AgentConfig prefers a model that the persisted battle already admits.
+        role_to_model = {
+            role: binding.model_id for role, binding in runtime_bindings.items()
+        }
         seq = {"n": 0}
         phase_name = tool_phase_name(format_config)
         fighters = fighter_roles(format_config)
@@ -3747,7 +4286,51 @@ class AdvancedExecutor(Executor):
             if work.exists() and record_token is not None:
                 shutil.rmtree(work, ignore_errors=True)
             work.mkdir(exist_ok=True)
-            mount_skills(work, pool)
+            binding = runtime_bindings.get(role)
+            if binding is None:
+                return
+            agent_cfg = binding.agent
+
+            from ...tool_protocol import REGISTRY
+
+            if agent_cfg is not None:
+                # Load every configured skill directly from the canonical skill
+                # root. A shortlist may not substitute unrelated skills and an
+                # absent configured skill fails closed instead of widening access.
+                try:
+                    role_pool = [load_skill(name) for name in agent_cfg.skill_bundle]
+                except FileNotFoundError as exc:
+                    raise RuntimeError(
+                        f"agent {agent_cfg.agent_id} references a missing configured skill"
+                    ) from exc
+                allowed_tool_names = agent_cfg.tool_permissions.resolved_allowed_tools(
+                    REGISTRY.all_names()
+                )
+                allowed_skill_names = {
+                    str(skill.get("name") or skill.get("id") or "").strip().lower()
+                    for skill in role_pool
+                    if str(skill.get("name") or skill.get("id") or "").strip()
+                }
+                role_max_turns = min(max_turns, agent_cfg.budgets.max_turns)
+                role_max_steps = min(max_steps, agent_cfg.budgets.max_steps)
+                role_tool_timeout = min(
+                    tool_timeout or agent_cfg.budgets.tool_timeout_seconds,
+                    agent_cfg.budgets.tool_timeout_seconds,
+                )
+                role_max_tokens = min(race_tokens, agent_cfg.model.max_tokens)
+                role_context_mode = agent_cfg.context_strategy
+                role_total_timeout = agent_cfg.budgets.total_timeout_seconds
+            else:
+                role_pool = pool
+                allowed_tool_names = REGISTRY.all_names()
+                allowed_skill_names = None
+                role_max_turns = max_turns
+                role_max_steps = max_steps
+                role_tool_timeout = tool_timeout
+                role_max_tokens = race_tokens
+                role_context_mode = context_mode
+                role_total_timeout = timeout_seconds or 600
+            mount_skills(work, role_pool)
             (work / "TARGET.md").write_text(target_code, encoding="utf-8")
             tests_dir = work / "tests"
             test_code = (
@@ -3785,9 +4368,12 @@ class AdvancedExecutor(Executor):
             sess = ToolSession(
                 work,
                 root=work,
-                tool_timeout=tool_timeout,
+                tool_timeout=role_tool_timeout,
                 allow_network=bool(env_cfg.get("network")),
                 test_cmd=test_cmd,
+                battle_ro_database_url=battle_ro_database_url,
+                allowed_tools=allowed_tool_names,
+                allowed_skill_names=allowed_skill_names,
             )
 
             preview_server = None
@@ -3799,7 +4385,11 @@ class AdvancedExecutor(Executor):
                         port=port_for_index(role_idx),
                     )
                     preview_server.start()
-                    preview_url = f"http://localhost:{port_for_index(role_idx)}"
+                    candidate_preview_url = (
+                        f"http://localhost:{port_for_index(role_idx)}"
+                    )
+                    sess.authorize_battle_local_http_origin(candidate_preview_url)
+                    preview_url = candidate_preview_url
                     emit_action(
                         model_id,
                         "preview",
@@ -3808,6 +4398,10 @@ class AdvancedExecutor(Executor):
                         result="Static preview server up for fighter artifacts",
                     )
                 except Exception as exc:
+                    if preview_server is not None:
+                        preview_server.stop()
+                        preview_server = None
+                    preview_url = ""
                     emit_action(
                         model_id,
                         "preview",
@@ -3823,6 +4417,10 @@ class AdvancedExecutor(Executor):
                         "schema_version": 1,
                         "fighter_id": model_id,
                         "role": role,
+                        "agent_id": agent_cfg.agent_id if agent_cfg else None,
+                        "agent_source": binding.agent_source,
+                        "model_selection": binding.model_source,
+                        "configured_model": agent_cfg.model.preferred if agent_cfg else None,
                         "phase_id": local_phase,
                         "workspace": work.name,
                         "network_enabled": bool(env_cfg.get("network")),
@@ -3836,20 +4434,20 @@ class AdvancedExecutor(Executor):
             last_test = ""
 
             skill_resolver = CanonicalSkillResolver(
-                [SkillRecord.from_dict(s) for s in pool]
+                [SkillRecord.from_dict(s) for s in role_pool]
             )
             tracker = SkillLifecycleTracker(role=role, model_id=model_id)
-            for s in pool:
+            for s in role_pool:
                 cid = skill_resolver.canonical_id(s.get("name") or s.get("id") or "")
                 if cid:
                     tracker.record_eligible(cid)
                     tracker.record_offered(cid)
 
-            records = [SkillRecord.from_dict(s) for s in pool]
+            records = [SkillRecord.from_dict(s) for s in role_pool]
             from agent_arena.skills.ranking import rank_skills_detailed
 
             ranked_candidates = rank_skills_detailed(
-                records, format_config, context_mode=context_mode, limit=len(records)
+                records, format_config, context_mode=role_context_mode, limit=len(records)
             )
             for item in ranked_candidates:
                 tracker.record_ranked(
@@ -3863,27 +4461,72 @@ class AdvancedExecutor(Executor):
             memory_candidates = 0
             memory_supplied_ids = []
             memory_prompt_text = ""
-            if context_mode in ("adaptive", "assisted"):
-                from agent_arena.memory import retrieve
+            if role_context_mode in ("adaptive", "assisted"):
+                from agent_arena.persistence.service import using_postgres
+                from agent_arena.memory import retrieve, retrieve_pg
 
-                try:
-                    retrieved_mems = retrieve(
-                        databases=getattr(self, "databases", None),
-                        database_id=getattr(self, "database_id", ""),
-                        query=f"{format_config.get('name', '')} {mission}",
-                        context_mode=context_mode,
-                        user_id=str(format_config.get("user_id") or "villain"),
-                        model_id=model_id,
-                        role=role,
-                        target_id=str(
-                            format_config.get("target_id")
-                            or format_config.get("name")
-                            or ""
-                        ),
-                        limit=3,
-                    )
-                except Exception:
-                    retrieved_mems = []
+                query_str = f"{format_config.get('name', '')} {mission}"
+                target_id_str = str(
+                    format_config.get("target_id")
+                    or format_config.get("name")
+                    or ""
+                )
+                user_id_str = str(format_config.get("user_id") or "villain")
+                pool_skills = [
+                    str(s.get("name") or s.get("id") or "")
+                    for s in role_pool
+                    if (s.get("name") or s.get("id"))
+                ]
+
+                retrieved_mems = []
+                if using_postgres() or getattr(self, "databases", None) is None:
+                    try:
+                        active_session = getattr(self, "session", None) or getattr(self, "db_session", None)
+                        if active_session is not None:
+                            retrieved_mems = retrieve_pg(
+                                active_session,
+                                query=query_str,
+                                context_mode=role_context_mode,
+                                user_id=user_id_str,
+                                model_id=model_id,
+                                role=role,
+                                target_id=target_id_str,
+                                skills=pool_skills,
+                                limit=3,
+                            )
+                        else:
+                            from agent_arena.persistence.session import session_scope
+
+                            with session_scope() as session:
+                                retrieved_mems = retrieve_pg(
+                                    session,
+                                    query=query_str,
+                                    context_mode=role_context_mode,
+                                    user_id=user_id_str,
+                                    model_id=model_id,
+                                    role=role,
+                                    target_id=target_id_str,
+                                    skills=pool_skills,
+                                    limit=3,
+                                )
+                    except Exception:
+                        retrieved_mems = []
+                else:
+                    try:
+                        retrieved_mems = retrieve(
+                            databases=getattr(self, "databases", None),
+                            database_id=getattr(self, "database_id", ""),
+                            query=query_str,
+                            context_mode=role_context_mode,
+                            user_id=user_id_str,
+                            model_id=model_id,
+                            role=role,
+                            target_id=target_id_str,
+                            skills=pool_skills,
+                            limit=3,
+                        )
+                    except Exception:
+                        retrieved_mems = []
                 memory_candidates = len(retrieved_mems)
                 memory_supplied_ids = [
                     str(m.get("$id") or m.get("id") or f"mem_{i}")
@@ -3903,13 +4546,13 @@ class AdvancedExecutor(Executor):
                         )
 
             memory_telemetry = {
-                "context_mode": context_mode,
-                "memory_enabled": (context_mode in ("adaptive", "assisted")),
+                "context_mode": role_context_mode,
+                "memory_enabled": (role_context_mode in ("adaptive", "assisted")),
                 "memory_candidates": memory_candidates,
                 "memory_supplied_ids": memory_supplied_ids,
                 "memory_count": len(memory_supplied_ids),
                 "memory_scope": f"user:{format_config.get('user_id', 'villain')},model:{model_id}"
-                if context_mode in ("adaptive", "assisted")
+                if role_context_mode in ("adaptive", "assisted")
                 else "none",
             }
 
@@ -3918,6 +4561,18 @@ class AdvancedExecutor(Executor):
             max_consecutive_parse_failures = 3
             turns_used = 0
             fighter_t0 = time.time()
+            role_deadline = min(
+                deadline if deadline is not None else float("inf"),
+                fighter_t0 + role_total_timeout,
+            )
+            effective_required_outputs = list(
+                dict.fromkeys(
+                    list(required_outputs or [])
+                    + list(agent_cfg.evidence_contract.required_artifacts)
+                    if agent_cfg
+                    else list(required_outputs or [])
+                )
+            )
             is_finalized = False
 
             def finalize(**extra):
@@ -3950,9 +4605,9 @@ class AdvancedExecutor(Executor):
                     duration_ms=duration_ms,
                     consecutive_parse_failures=consecutive_parse_failures,
                     canonical_test_code=test_code,
-                    required_artifacts=required_outputs,
+                    required_artifacts=effective_required_outputs,
                     emit_action=emit_action,
-                    context_mode=context_mode,
+                    context_mode=role_context_mode,
                     skills_telemetry=tracker.to_telemetry(),
                     memory_telemetry=memory_telemetry,
                     **extra,
@@ -3974,8 +4629,21 @@ class AdvancedExecutor(Executor):
             conversation_messages: list[dict] = []
 
             try:
-                for turn in range(max_turns):
+                if not sess.runtime_available:
+                    finalize(
+                        outcome_override="INFRASTRUCTURE_FAILURE",
+                        terminal_reason="fighter_runtime_unavailable",
+                    )
+                    return
+                for turn in range(role_max_turns):
                     turns_used = turn + 1
+                    if time.time() >= role_deadline:
+                        finalize(
+                            budget_exceeded=True,
+                            outcome_override="TIMEOUT",
+                            terminal_reason="agent_time_budget_exhausted",
+                        )
+                        break
                     halted = halted_now()
                     if halted:
                         mark_halted(halted)
@@ -3992,19 +4660,27 @@ class AdvancedExecutor(Executor):
                         role=role,
                         format_name=fmt_name,
                         mission=mission,
-                        network_allowed=bool(env_cfg.get("network")),
-                        max_steps=max_steps,
-                        max_turns=max_turns,
+                        network_allowed=(
+                            bool(env_cfg.get("network"))
+                            or sess.network_policy.has_authorized_origins
+                        ),
+                        max_steps=role_max_steps,
+                        max_turns=role_max_turns,
                         judge_only=_judge_only(format_config),
                         custom=bool(format_config.get("custom")),
                         prior_public_context=prior,
+                        agent_id=agent_cfg.agent_id if agent_cfg else None,
                     )
-                    system_prompt += "\n\n" + fighter_tool_grammar()
+                    system_prompt += "\n\n" + fighter_tool_grammar(
+                        allowed_tools=allowed_tool_names
+                    )
+                    if memory_prompt_text:
+                        system_prompt += "\n" + memory_prompt_text
                     listing = str(sess.ls(count_step=False))
                     user_prompt = (
                         f"Workdir files:\n{listing}\n\n"
                         "Read TARGET.md for the public target contract and inspect whatever else you need.\n\n"
-                        f"Your turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}. "
+                        f"Your turn {turn + 1}/{role_max_turns}, steps {sess.steps}/{role_max_steps}. "
                         "Emit tool calls."
                     )
 
@@ -4016,11 +4692,15 @@ class AdvancedExecutor(Executor):
 
                     t0 = time.time()
                     model_timeout = None
-                    if deadline:
-                        remaining = deadline - time.time()
+                    if role_deadline:
+                        remaining = role_deadline - time.time()
                         if remaining <= 0:
-                            mark_halted(halted_now() or "failed")
-                            return
+                            finalize(
+                                budget_exceeded=True,
+                                outcome_override="TIMEOUT",
+                                terminal_reason="agent_time_budget_exhausted",
+                            )
+                            break
                         model_timeout = min(600.0, remaining)
                     with first_token_lock:
                         seen = first_token_seen
@@ -4037,14 +4717,22 @@ class AdvancedExecutor(Executor):
                     try:
                         from ...tool_protocol import REGISTRY, TOOL_SCHEMAS
 
+                        tools_schema = REGISTRY.openai_schemas(
+                            allowed_tools=allowed_tool_names
+                        )
+
                         try:
                             raw_resp = client.model(
                                 battle_id,
                                 model_id,
                                 conversation_messages,
                                 phase=local_phase,
-                                max_tokens=race_tokens,
-                                tools=REGISTRY.openai_schemas(),
+                                max_tokens=role_max_tokens,
+                                temperature=agent_cfg.model.temperature if agent_cfg else None,
+                                reasoning_effort=(
+                                    agent_cfg.model.reasoning_effort if agent_cfg else None
+                                ),
+                                tools=tools_schema,
                                 return_raw=True,
                                 timeout=model_timeout,
                             )
@@ -4054,9 +4742,10 @@ class AdvancedExecutor(Executor):
                                 model_id,
                                 conversation_messages,
                                 phase=local_phase,
-                                max_tokens=race_tokens,
-                                tools=REGISTRY.openai_schemas(),
+                                max_tokens=role_max_tokens,
+                                tools=tools_schema,
                                 return_raw=True,
+                                timeout=model_timeout,
                             )
                     except Exception as exc:
                         with first_token_lock:
@@ -4166,7 +4855,7 @@ class AdvancedExecutor(Executor):
                                 "content": (
                                     f"Notice: No valid tool calls were parsed from your response (error: {norm.error_code or 'unrecognized_format'}).\n"
                                     "Please emit your actions as standard tool calls or using the TOOL line grammar.\n\n"
-                                    f"Turn {turn + 1}/{max_turns}, steps {sess.steps}/{max_steps}."
+                                    f"Turn {turn +1}/{role_max_turns}, steps {sess.steps}/{role_max_steps}."
                                 ),
                             }
                         )
@@ -4204,7 +4893,7 @@ class AdvancedExecutor(Executor):
                         if halted:
                             mark_halted(halted)
                             break
-                        if sess.steps >= max_steps:
+                        if sess.steps >= role_max_steps:
                             finalize(
                                 budget_exceeded=True,
                                 terminal_reason="step_budget_exhausted",
@@ -4212,6 +4901,40 @@ class AdvancedExecutor(Executor):
                             break
 
                         tool_name = str(call.get("tool") or "").strip().lower()
+
+                        # Enforce agent tool permissions
+                        if (
+                            tool_name not in allowed_tool_names
+                            and tool_name not in ("done",)
+                        ):
+                            metrics["tool_errors"] += 1
+                            sess.steps += 1
+                            err_msg = (
+                                f"ERROR: permission denied: tool '{tool_name}' is not authorized for "
+                                f"{agent_cfg.name} ({agent_cfg.role})"
+                            )
+                            denied_result = ToolResult(
+                                tool=tool_name,
+                                success=False,
+                                output=err_msg,
+                                error=f"permission_denied: {tool_name}",
+                                exit_code=1,
+                                error_type="permission_denied",
+                                duration_ms=0,
+                                mutated=False,
+                                step_charged=True,
+                                truncated=False,
+                            )
+                            turn_tool_outputs.append(f"[{tool_name}]: {denied_result.output}")
+                            emit_action(
+                                model_id,
+                                "tool_permission_denied",
+                                state="failed",
+                                target=tool_name,
+                                result=err_msg,
+                                role=role,
+                            )
+                            continue
 
                         # Validate call arguments via REGISTRY
                         if tool_name not in ("done",):
@@ -4273,7 +4996,7 @@ class AdvancedExecutor(Executor):
                                 record_artifact(
                                     model_id, sanitize_artifact(val_result.output), role
                                 )
-                                if sess.steps >= max_steps:
+                                if sess.steps >= role_max_steps:
                                     finalize(
                                         budget_exceeded=True,
                                         terminal_reason="step_budget_exhausted",
@@ -4323,7 +5046,7 @@ class AdvancedExecutor(Executor):
                                 role=role,
                                 workspace=work.name,
                             )
-                            if sess.steps >= max_steps:
+                            if sess.steps >= role_max_steps:
                                 finalize(
                                     budget_exceeded=True,
                                     terminal_reason="step_budget_exhausted",
@@ -4344,20 +5067,37 @@ class AdvancedExecutor(Executor):
                                 or format_config.get("enforce_self_correction")
                                 or format_config.get("enforce_verification")
                                 or format_config.get("services")
+                                or (
+                                    agent_cfg
+                                    and agent_cfg.evidence_contract.require_test_pass
+                                )
+                            )
+                            missing_config_artifacts = [
+                                path
+                                for path in effective_required_outputs
+                                if not (work / path).is_file()
+                            ]
+                            needs_config_evidence = bool(
+                                missing_config_artifacts
+                                or (
+                                    agent_cfg
+                                    and agent_cfg.evidence_contract.require_test_pass
+                                    and has_harness
+                                    and not has_tested_solution
+                                )
                             )
                             if (
                                 should_enforce_advisory
-                                and has_harness
+                                and needs_config_evidence
                                 and role not in ("breaker", "attacker")
-                                and not has_tested_solution
                                 and not done_warning_issued
-                                and (turn + 1 < max_turns)
-                                and (sess.steps < max_steps)
+                                and (turn + 1 < role_max_turns)
+                                and (sess.steps < role_max_steps)
                             ):
                                 done_warning_issued = True
                                 turn_tool_outputs.append(
-                                    "[ADVISORY]: Notice: You have not executed TOOL test to verify your solution against the target harness. "
-                                    "If you are confident your changes are complete and correct, emit DONE again to confirm final submission."
+                                    "[ADVISORY]: The configured evidence contract is not yet satisfied. "
+                                    "Run the target test to a passing result and write the required artifacts before emitting DONE again."
                                 )
                                 emit_action(
                                     model_id,
@@ -4366,7 +5106,7 @@ class AdvancedExecutor(Executor):
                                     state="advisory",
                                     turn_id=turn + 1,
                                     tool_step=sess.steps,
-                                    result="Self-correction advisory: verification test not executed before DONE.",
+                                    result="Self-correction advisory: configured evidence contract is not satisfied before DONE.",
                                     role=role,
                                     workspace=work.name,
                                 )
@@ -4440,9 +5180,30 @@ class AdvancedExecutor(Executor):
                             workspace=work.name,
                         )
 
-                        tool_res = sess.exec_tool(call)
+                        remaining_tool_budget = role_deadline - time.time()
+                        if remaining_tool_budget <= 0:
+                            finalize(
+                                budget_exceeded=True,
+                                outcome_override="TIMEOUT",
+                                terminal_reason="agent_time_budget_exhausted",
+                            )
+                            break
+                        previous_tool_timeout = sess.tool_timeout
+                        # ToolSession applies this timeout to subprocess-backed
+                        # tools.  Tightening it at dispatch prevents a final
+                        # shell/test/run call from consuming a later role's
+                        # remaining time budget.
+                        remaining_seconds = max(1, int(remaining_tool_budget))
+                        sess.tool_timeout = min(
+                            previous_tool_timeout or remaining_seconds,
+                            remaining_seconds,
+                        )
+                        try:
+                            tool_res = sess.exec_tool(call)
+                        finally:
+                            sess.tool_timeout = previous_tool_timeout
                         failed = not tool_res.success
-                        if failed:
+                        if failed and tool_res.error_type != "infrastructure_failure":
                             metrics["tool_errors"] += 1
 
                         if tool_name_now == "use_skill":
@@ -4520,6 +5281,13 @@ class AdvancedExecutor(Executor):
                         )
                         record_artifact(model_id, public_exec_result, role)
 
+                        if tool_res.error_type == "infrastructure_failure":
+                            finalize(
+                                outcome_override="INFRASTRUCTURE_FAILURE",
+                                terminal_reason="infrastructure_failure",
+                            )
+                            break
+
                         tool_name = call.get("tool")
                         run_path = str(call.get("path") or "").replace("\\", "/")
                         if run_path.startswith("./"):
@@ -4532,7 +5300,9 @@ class AdvancedExecutor(Executor):
                             tool_name == "shell"
                             and any(kw in str(call.get("cmd") or "") for kw in ("pytest", "python -m unittest", "npm test"))
                         ):
-                            has_tested_solution = True
+                            has_tested_solution = has_tested_solution or self._harness_passed(
+                                exec_res_sanitized
+                            )
                         if harness_like:
                             last_test = exec_res_sanitized
                             if self._harness_passed(exec_res_sanitized):
@@ -4552,7 +5322,7 @@ class AdvancedExecutor(Executor):
                             {
                                 "role": "user",
                                 "content": (
-                                    f"Tool Output (Turn {turn + 1}/{max_turns}, step {sess.steps}/{max_steps}):\n"
+                                    f"Tool Output (Turn {turn + 1}/{role_max_turns}, step {sess.steps}/{role_max_steps}):\n"
                                     f"{tool_feedback_text[:4000]}\n\n"
                                     f"Workdir files:\n{listing_after}\n\n"
                                     "Emit your next TOOL calls or DONE."
@@ -4569,6 +5339,10 @@ class AdvancedExecutor(Executor):
                         terminal_reason="turn_budget_exhausted",
                     )
             finally:
+                try:
+                    sess.close()
+                except Exception:
+                    pass
                 if preview_server is not None:
                     try:
                         preview_server.stop()

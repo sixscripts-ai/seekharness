@@ -78,8 +78,8 @@ export const api = {
       body,
       token,
     }),
-  getBattle: (token: string, id: string) =>
-    request<BattleOut>(`/battles/${id}`, { token }),
+  getBattle: (token: string | null | undefined, id: string) =>
+    request<BattleOut>(`/battles/${id}`, { token: token || undefined }),
   listBattles: (token: string, saved?: boolean) => {
     const q = saved ? "?saved=true" : "";
     return request<BattleOut[]>(`/battles${q}`, { token });
@@ -175,6 +175,7 @@ export type BattleCreate = {
   difficulty?: "novice" | "general" | "advanced" | "expert" | null;
   target_id?: string | null;
   target_version?: string | null;
+  context_mode?: "strict" | "adaptive";
 };
 
 export type BattleOut = {
@@ -188,6 +189,7 @@ export type BattleOut = {
   timeout_seconds: number;
   round_visibility: string;
   saved: boolean;
+  context_mode?: "strict" | "adaptive" | string;
   difficulty?: string | null;
   sandbox_id?: string;
   preview_urls?: Record<string, string>;
@@ -329,7 +331,7 @@ export type StatsOut = {
 
 export async function streamBattle(
   battleId: string,
-  token: string,
+  token: string | null | undefined,
   onEvent: (ev: StreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -341,9 +343,11 @@ export async function streamBattle(
   while (!isDone && !signal?.aborted && attempt < maxAttempts) {
     try {
       const headers: Record<string, string> = {
-        Authorization: `Bearer ${token}`,
         Accept: "text/event-stream",
       };
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
 
       const res = await fetch(`${BASE}/battles/${battleId}/stream`, {
         headers,

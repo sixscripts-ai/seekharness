@@ -38,6 +38,7 @@ ENV_FILE = ROOT_DIR / ".env"
 
 TABLES_IN_ORDER = [
     "alembic_version",
+    "users",
     "formats",
     "providers",
     "skills",

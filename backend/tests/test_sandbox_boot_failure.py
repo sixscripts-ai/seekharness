@@ -84,7 +84,7 @@ def test_dead_sandbox_never_stays_running(monkeypatch):
     monkeypatch.setattr(
         sandbox_launcher,
         "try_spawn_modal_sandbox",
-        lambda battle_id: ("sb-dead", _DeadSandbox()),
+        lambda battle_id, **kwargs: ("sb-dead", _DeadSandbox()),
     )
     monkeypatch.setattr(sandbox_launcher, "stop_sandbox", lambda sid: None)
     monkeypatch.setattr(
@@ -117,7 +117,7 @@ def test_spawn_exception_is_coarse_public_boot_failure(monkeypatch):
     _wire_finalize(monkeypatch, battle, updates=updates, elo_calls=elo_calls, events=events)
     monkeypatch.setenv("ARENA_USE_MODAL_SANDBOX", "1")
 
-    def _boom(battle_id: str):
+    def _boom(battle_id: str, **kwargs):
         raise ModuleNotFoundError("No module named 'yaml'")
 
     monkeypatch.setattr(sandbox_launcher, "try_spawn_modal_sandbox", _boom)
@@ -162,7 +162,7 @@ def test_live_sandbox_reaches_running(monkeypatch):
     monkeypatch.setattr(
         sandbox_launcher,
         "try_spawn_modal_sandbox",
-        lambda battle_id: ("sb-live", _LiveSandbox()),
+        lambda battle_id, **kwargs: ("sb-live", _LiveSandbox()),
     )
 
     sandbox_launcher.start_battle("b-boot-live")

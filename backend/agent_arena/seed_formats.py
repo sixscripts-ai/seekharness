@@ -5,6 +5,7 @@ import re
 from appwrite.query import Query
 
 from . import db
+from .difficulty import DIFFICULTY_PRESETS, apply_difficulty  # noqa: F401
 
 ENGINE_TEMPLATES = {
     "build_and_break": {
@@ -239,43 +240,8 @@ CATALOG_FORMAT_DEFINITIONS = [
 # race_max_tokens, outcome_markers, pick_per_battle, competitive) remain supported.
 # When nested manifest keys are present, executors may read them for richer
 # system prompts / difficulty tuning.
-# Difficulty presets (E14): named presets override manifest limits/scoring when
-# a battle declares "difficulty": "novice|general|advanced|expert". These only
-# tune simulation params — containment is never weakened.
-DIFFICULTY_PRESETS = {
-    "novice": {
-        "limits": {
-            "max_tool_turns": 3,
-            "max_tool_steps": 8,
-            "exec_timeout_seconds": 180,
-        },
-        "scoring": {"weights": {"tests": 0.7, "skills": 0.1, "theory": 0.2}},
-    },
-    "general": {
-        "limits": {
-            "max_tool_turns": 6,
-            "max_tool_steps": 14,
-            "exec_timeout_seconds": 240,
-        },
-        "scoring": {"weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2}},
-    },
-    "advanced": {
-        "limits": {
-            "max_tool_turns": 8,
-            "max_tool_steps": 20,
-            "exec_timeout_seconds": 300,
-        },
-        "scoring": {"weights": {"tests": 0.5, "skills": 0.3, "theory": 0.2}},
-    },
-    "expert": {
-        "limits": {
-            "max_tool_turns": 12,
-            "max_tool_steps": 30,
-            "exec_timeout_seconds": 420,
-        },
-        "scoring": {"weights": {"tests": 0.4, "skills": 0.4, "theory": 0.2}},
-    },
-}
+# DIFFICULTY_PRESETS / apply_difficulty live in difficulty.py so the fighter
+# sandbox can apply them without importing this Appwrite-backed module.
 FORMAT_EXTRA_SCHEMA = {
     "objectives": ["human-readable goal statements, first is primary"],
     "recommended_skills": ["skill names suggested for this format"],
@@ -958,30 +924,6 @@ def build_format(
     if extra:
         cfg.update(extra)
     return cfg
-
-
-def apply_difficulty(cfg: dict, difficulty: str | None) -> dict:
-    """Merge a named difficulty preset into a format config (E14).
-
-    Only tunes limits/scoring — never containment. Preset limits override the
-    manifest's own limits for the matching keys; other keys are preserved.
-    """
-    if not difficulty:
-        return cfg
-    preset = DIFFICULTY_PRESETS.get(difficulty)
-    if not preset:
-        return cfg
-    out = dict(cfg)
-    out["difficulty"] = difficulty
-    manifest_limits = dict(out.get("limits") or {})
-    manifest_limits.update(preset.get("limits") or {})
-    out["limits"] = manifest_limits
-    manifest_scoring = dict(out.get("scoring") or {})
-    manifest_scoring.update(preset.get("scoring") or {})
-    out["scoring"] = manifest_scoring
-    for k, v in (preset.get("limits") or {}).items():
-        out[k] = v
-    return out
 
 
 ALL_FORMATS = [

@@ -28,6 +28,7 @@ def main(battle_id: str) -> None:
     client = InternalClient(
         HttpTransport(base, legacy_key, sandbox_token=sandbox_token or None)
     )
+    battle_ro_database_url = os.environ.get("BATTLE_RO_DATABASE_URL") or None
     terminal: list[str] = []
     scores: dict = {}
 
@@ -63,6 +64,7 @@ def main(battle_id: str) -> None:
             client=client,
             status_check=status_check,
             on_status=on_status,
+            battle_ro_database_url=battle_ro_database_url,
         )
         final = "completed" if scores else "failed"
     except Exception as exc:

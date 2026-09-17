@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from . import (
+    auth_router,
     battle_drafts,
     battles,
     formats,
@@ -42,6 +43,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router.router)
 app.include_router(formats.router)
 app.include_router(providers.router)
 app.include_router(battle_drafts.router)
@@ -69,7 +71,7 @@ def health():
     )
     return {
         "status": "ok",
-        "project": s["APPWRITE_PROJECT_ID"],
+        "project": s.get("APPWRITE_PROJECT_ID", ""),
         # Set at deploy time: modal deploy modal_entry.py --env ARENA_BUILD_SHA=$(git rev-parse HEAD)
         "build_sha": os.environ.get("ARENA_BUILD_SHA") or "unknown",
         "evidence_schema_version": EVIDENCE_SCHEMA_VERSION,

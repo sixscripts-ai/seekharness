@@ -32,8 +32,8 @@ def settings() -> dict:
     dual_write = _env_flag("APPWRITE_DUAL_WRITE", "false")
 
     if persistence == "postgres" and not (read_fallback or dual_write):
-        # Appwrite is identity-only: JWT Account.get() needs project + endpoint.
-        required = ["APPWRITE_ENDPOINT", "APPWRITE_PROJECT_ID"]
+        # Native Auth + Neon Postgres: Appwrite is completely optional.
+        required = []
     else:
         required = [
             "APPWRITE_ENDPOINT",

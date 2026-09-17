@@ -6,6 +6,10 @@ difficulty: expert
 format: builder_breaker
 runtime: fullstack-vite-fastapi
 description: Builder implements an interactive full-stack banking portal (React 18 + FastAPI + Neon PostgreSQL); Breaker launches blackbox penetration testing against the deployed product.
+database:
+  required: true
+  engine: postgresql
+  application_write: true
 tags:
 - python
 - fastapi

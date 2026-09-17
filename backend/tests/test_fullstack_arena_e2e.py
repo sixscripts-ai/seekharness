@@ -163,6 +163,10 @@ def test_builder_baseline_snapshot_lifecycle(monkeypatch):
 
 def test_breaker_sql_auditor_rejects_evaluator_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("ARENA_HERMETIC", "1")
+    monkeypatch.setenv(
+        "BATTLE_RO_DATABASE_URL",
+        "postgresql://mock_reader:mock@battle.mock.invalid/battle",
+    )
     session = ToolSession(workdir=tmp_path)
     try:
         # 1. Normal inspection on app_public succeeds (mocked in hermetic mode)

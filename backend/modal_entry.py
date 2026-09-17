@@ -7,7 +7,6 @@ import modal
 
 _BASE_DIR = Path(__file__).resolve().parent.parent
 _BACKEND_DIR = Path(__file__).resolve().parent
-_SKILLS_DIR = _BASE_DIR / ".agents" / "skills"
 _TARGETS_DIR = _BASE_DIR / "targets" / "library"
 
 # Private evaluator material (hidden tests, reference solutions, trusted
@@ -23,6 +22,7 @@ if str(_BACKEND_DIR) not in sys.path:
 
 from agent_arena.runtime_packaging import (
     attach_canonical_skill_yaml,
+    attach_fighter_skills,
     canonical_skill_runtime_env,
 )
 from agent_arena.target_library import materialize_fighter_visible_library
@@ -35,8 +35,7 @@ image = (
 )
 # add_local_python_source ships .py only. Attach D0 YAML after that overlay.
 image = attach_canonical_skill_yaml(image)
-if _SKILLS_DIR.is_dir():
-    image = image.add_local_dir(str(_SKILLS_DIR), remote_path="/opt/arena-skills")
+image = attach_fighter_skills(image)
 
 # Public allowlist only. Never add_local_dir the raw repository library:
 # .gitignore is not a packaging boundary.

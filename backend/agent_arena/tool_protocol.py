@@ -817,8 +817,18 @@ class ToolRegistry:
     def all_names(self) -> set[str]:
         return set(self._by_name.keys())
 
-    def openai_schemas(self) -> list[dict[str, Any]]:
-        return list(self._schemas)
+    def openai_schemas(
+        self, allowed_tools: set[str] | list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        if allowed_tools is None:
+            return list(self._schemas)
+        allowed_set = {str(t).strip().lower() for t in allowed_tools}
+        return [
+            s
+            for s in self._schemas
+            if str((s.get("function") or {}).get("name") or "").strip().lower()
+            in allowed_set
+        ]
 
     def validate_call(
         self, name: str, args: dict[str, Any]

@@ -237,6 +237,10 @@ def test_executor_inprocess_solo_verify_returns_coarse_payload(
     assert "hidden_passed" not in ev
     assert "hidden_output" not in ev
     assert "hidden_exit_code" not in ev
+    assert "visible_output" not in ev
+    assert "builder_output" not in ev
     arts = [r.get("artifact") or "" for r in transport.rounds]
     assert any("TRUSTED_VERIFICATION:" in a for a in arts)
     assert all("hidden_output" not in a for a in arts)
+    assert all("builder_output" not in a for a in arts)
+    assert all("visible_output" not in a for a in arts)

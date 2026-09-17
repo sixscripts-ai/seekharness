@@ -343,6 +343,41 @@ def test_race_loop_passes_without_done(monkeypatch):
     os.environ.pop("ARENA_IN_SANDBOX", None)
 
 
+def test_missing_battle_sql_credential_stops_as_infrastructure_failure(monkeypatch):
+    monkeypatch.delenv("BATTLE_RO_DATABASE_URL", raising=False)
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql://control_admin@control-db.test/arena"
+    )
+    reply = '{"tool":"sql_query","query":"SELECT 1"}'
+
+    _scores, transport = _run_fake_race(monkeypatch, reply)
+    results = _executor_results(transport.rounds)
+
+    assert results
+    assert all(r.get("outcome") == "INFRASTRUCTURE_FAILURE" for r in results)
+    assert all(r.get("terminal_reason") == "infrastructure_failure" for r in results)
+    assert all(r.get("tool_errors") == 0 for r in results)
+
+
+def test_infrastructure_outcome_cannot_be_overwritten_by_target_pass(monkeypatch):
+    def trusted_pass(self, **kwargs):
+        del self, kwargs
+        return {"passed": True, "verification_status": "verified_pass"}, None
+
+    monkeypatch.setattr(AdvancedExecutor, "_verify_target_trusted", trusted_pass)
+    _scores, transport = _run_fake_race(
+        monkeypatch,
+        '{"tool":"sql_query","query":"SELECT 1"}',
+        format_overlay={"target_id": "synthetic-target"},
+    )
+
+    results = _executor_results(transport.rounds)
+    assert results
+    assert all(r.get("outcome") == "INFRASTRUCTURE_FAILURE" for r in results)
+    assert all(r.get("passed") is False for r in results)
+    assert all(r.get("terminal_reason") == "infrastructure_failure" for r in results)
+
+
 def test_race_loop_pass_then_step_cap_still_passed(monkeypatch):
     import os
 
@@ -1012,53 +1047,43 @@ def test_tool_session_fetch_blocks_loopback(tmp_path):
 def test_fetch_obeys_allow_network_before_any_request(tmp_path, monkeypatch):
     import httpx
 
-    def boom(*args, **kwargs):
+    def boom(request):
         raise AssertionError(
-            "fetch must not open a connection when network is disabled"
+            f"fetch must not open a connection when unapproved: {request.url}"
         )
 
-    monkeypatch.setattr(httpx, "get", boom)
-    from agent_arena.sandbox.executors import advanced_executor as ae
-
-    monkeypatch.setattr(
-        ae,
-        "_fetch_url_blocked",
-        lambda url: (_ for _ in ()).throw(
-            AssertionError("SSRF check must not run when network is disabled")
-        ),
-    )
     sess = ToolSession(tmp_path / "work", allow_network=False)
+    sess._http_transport = httpx.MockTransport(boom)
     out = sess.fetch("https://example.com/public")
     assert out.success is False
     assert out.policy_rejected is True
-    assert out.error_type == "policy_rejection"
+    assert out.error_type == "network_policy_rejection"
     assert "network" in out.output.lower()
     assert "blocked" in out.output.lower()
 
 
 def test_fetch_with_network_enabled_reaches_transport_after_ssrf(tmp_path, monkeypatch):
     import httpx
-    from agent_arena.sandbox.executors import advanced_executor as ae
+    from agent_arena.sandbox.executors.fighter_network_policy import (
+        FighterNetworkPolicy,
+    )
 
-    monkeypatch.setattr(ae, "_fetch_url_blocked", lambda url: None)
     seen: dict[str, object] = {}
 
-    class _Resp:
-        is_redirect = False
-        status_code = 200
-        text = "public-ok"
-        headers: dict[str, str] = {}
+    def handler(request):
+        seen["url"] = str(request.url)
+        return httpx.Response(200, text="public-ok")
 
-    def fake_get(url, **kwargs):
-        seen["url"] = url
-        seen["follow"] = kwargs.get("follow_redirects")
-        return _Resp()
-
-    monkeypatch.setattr(httpx, "get", fake_get)
-    sess = ToolSession(tmp_path / "work", allow_network=True)
-    out = sess.fetch("https://example.com/page")
-    assert seen["url"] == "https://example.com/page"
-    assert seen["follow"] is False
+    policy = FighterNetworkPolicy(allow_external=True)
+    policy.authorize_external("https://1.1.1.1")
+    sess = ToolSession(
+        tmp_path / "work",
+        allow_network=True,
+        network_policy=policy,
+        http_transport=httpx.MockTransport(handler),
+    )
+    out = sess.fetch("https://1.1.1.1/page")
+    assert seen["url"] == "https://1.1.1.1/page"
     assert out.success is True
     assert "STATUS 200" in out.output
     assert "public-ok" in out.output

@@ -58,6 +58,7 @@ class Executor:
         on_status: "Callable[[str], None] | None" = None,
         deadline: float | None = None,
         stop: "threading.Event | None" = None,
+        battle_ro_database_url: str | None = None,
     ) -> dict:
         """Default: drive the generic phase loop via run_phase. Returns scores dict."""
         if deadline is None:

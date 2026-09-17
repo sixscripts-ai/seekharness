@@ -39,6 +39,7 @@ class BattleCreate(BaseModel):
     difficulty: Literal["novice", "general", "advanced", "expert"] | None = None
     target_id: str | None = None
     target_version: str | None = None
+    context_mode: Literal["strict", "adaptive"] = "strict"
 
 
 class TargetSummaryOut(BaseModel):

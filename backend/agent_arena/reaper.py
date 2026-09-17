@@ -136,6 +136,7 @@ def _reap_pg(now: float, grace: float) -> list[str]:
                 "created_at": b.created_at,
                 "timeout_seconds": b.timeout_seconds,
                 "sandbox_id": b.sandbox_id,
+                "battle_db_branch_id": getattr(b, "battle_db_branch_id", None),
             }
             for b in rows
         ]
@@ -153,11 +154,21 @@ def _reap_pg(now: float, grace: float) -> list[str]:
             out = fail_closed_incomplete(battle["id"], reason=reason)
         except Exception:
             continue
-        if out.get("status") == "not_found" or out.get("already_finalized"):
+        if out.get("status") == "not_found":
             continue
         sandbox_id = battle.get("sandbox_id")
         if sandbox_id:
             _stop_sandbox(sandbox_id)
+        branch_id = battle.get("battle_db_branch_id")
+        if branch_id:
+            from . import sandbox_launcher
+
+            sandbox_launcher.cleanup_battle_database(
+                battle["id"],
+                branch_id=branch_id,
+            )
+        if out.get("already_finalized"):
+            continue
         reaped.append(battle["id"])
     return reaped
 
@@ -202,6 +213,11 @@ def reap_stale_battles(databases=None, database_id: str | None = None) -> list[s
         sandbox_id = battle.get("sandbox_id")
         if sandbox_id:
             _stop_sandbox(sandbox_id)
+        branch_id = battle.get("battle_db_branch_id")
+        if branch_id:
+            from . import sandbox_launcher
+
+            sandbox_launcher.cleanup_battle_database(doc.id, branch_id=branch_id)
         _publish_failed(doc.id, reason)
         reaped.append(doc.id)
     return reaped

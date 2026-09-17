@@ -485,6 +485,48 @@ def _extract_trusted_verifications(
     return found
 
 
+_TRUSTED_BREAKER_FINDINGS = frozenset(
+    {
+        "server_crashed",
+        "availability_degraded",
+        "unauthorized_mutation",
+        "flag_captured",
+    }
+)
+
+
+def _trusted_breaker_semantic_passed(record: dict) -> bool:
+    """Accept Breaker success only with a persisted evaluator-owned fact.
+
+    ``breaker_passed`` alone is deliberately insufficient: older or forged
+    records could otherwise promote a Fighter return code or stdout marker.
+    This validation is a finalization defense-in-depth check; the verifier is
+    still responsible for creating the record from a target postcondition.
+    """
+    semantic = record.get("breaker_semantic_evidence")
+    if not isinstance(semantic, dict):
+        return False
+    if semantic.get("verifier_error"):
+        return False
+    if (
+        semantic.get("artifact_status") != "valid_breaker_artifact"
+        or semantic.get("execution_completed") is not True
+        or semantic.get("process_return_code") != 0
+    ):
+        return False
+    if not bool(semantic.get("trusted_condition_checked")):
+        return False
+    if not bool(semantic.get("trusted_condition_passed")):
+        return False
+    evidence_ids = semantic.get("evidence_ids")
+    findings = semantic.get("findings")
+    if not isinstance(evidence_ids, list) or not any(str(item) for item in evidence_ids):
+        return False
+    if not isinstance(findings, list) or not findings:
+        return False
+    return all(str(item) in _TRUSTED_BREAKER_FINDINGS for item in findings)
+
+
 def _merge_trusted_authority(
     telemetry: list[dict],
     trusted: list[dict],
@@ -533,10 +575,18 @@ def _merge_trusted_authority(
         passed = bool(tv.get("passed"))
         kind = str(tv.get("kind") or "solo").strip().lower()
         if kind == "builder_breaker":
+            breaker_semantic_passed = _trusted_breaker_semantic_passed(tv)
+            semantic = tv.get("breaker_semantic_evidence")
+            if isinstance(semantic, dict):
+                item["breaker_semantic_evidence"] = dict(semantic)
+                findings = set(semantic.get("findings") or []) if breaker_semantic_passed else set()
+                item["exploit_evidence"] = {
+                    finding: finding in findings for finding in _TRUSTED_BREAKER_FINDINGS
+                }
             if role == "builder":
-                passed = bool(tv.get("builder_passed", tv.get("passed")))
+                passed = bool(tv.get("builder_passed", tv.get("passed"))) and not breaker_semantic_passed
             elif role == "breaker":
-                passed = bool(tv.get("breaker_passed", tv.get("passed")))
+                passed = bool(tv.get("breaker_passed")) and breaker_semantic_passed
         stored_vs = str(tv.get("verification_status") or "")
         outcome = str(tv.get("outcome") or "")
         if stored_vs == "not_attempted":
@@ -579,11 +629,17 @@ def _merge_trusted_authority(
         if not model_id:
             continue
         passed = bool(tv.get("passed"))
+        semantic = None
+        semantic_findings: set[str] = set()
         if str(tv.get("kind") or "").strip().lower() == "builder_breaker":
+            breaker_semantic_passed = _trusted_breaker_semantic_passed(tv)
+            semantic = tv.get("breaker_semantic_evidence")
+            if isinstance(semantic, dict):
+                semantic_findings = set(semantic.get("findings") or []) if breaker_semantic_passed else set()
             if role == "builder":
-                passed = bool(tv.get("builder_passed", tv.get("passed")))
+                passed = bool(tv.get("builder_passed", tv.get("passed"))) and not breaker_semantic_passed
             elif role == "breaker":
-                passed = bool(tv.get("breaker_passed", tv.get("passed")))
+                passed = bool(tv.get("breaker_passed")) and breaker_semantic_passed
         stored_vs = str(tv.get("verification_status") or "")
         if stored_vs == "not_attempted":
             outcome = "VERIFICATION_NOT_ATTEMPTED"
@@ -607,6 +663,11 @@ def _merge_trusted_authority(
             "verification_status": verif_status,
             "_trusted": True,
         }
+        if isinstance(semantic, dict):
+            extra["breaker_semantic_evidence"] = dict(semantic)
+            extra["exploit_evidence"] = {
+                finding: finding in semantic_findings for finding in _TRUSTED_BREAKER_FINDINGS
+            }
         if tv.get("executor_outcome"):
             extra["executor_outcome"] = tv.get("executor_outcome")
         if tv.get("terminal_reason"):
@@ -1123,7 +1184,11 @@ def _apply_self_learning_pg(
     results: list[dict],
 ) -> None:
     """Apply skill attribution and winner memory learning inside the SAME Postgres session."""
-    context_mode = str(battle.get("context_mode") or "strict").lower().strip()
+    context_mode = str(
+        battle.get("context_mode")
+        or (battle.get("battle_config") or {}).get("context_mode")
+        or "strict"
+    ).lower().strip()
     if context_mode not in ("adaptive", "assisted") or not results:
         return
 

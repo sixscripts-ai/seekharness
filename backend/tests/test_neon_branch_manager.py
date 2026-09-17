@@ -47,6 +47,17 @@ def test_neon_branch_manager_hermetic_mock(monkeypatch):
     assert del_res is True
 
 
+def test_ephemeral_branch_names_remain_unique_for_similar_battles(monkeypatch):
+    monkeypatch.setenv("ARENA_HERMETIC", "1")
+    mgr = NeonBranchManager(api_key="", project_id="ep-test-123")
+
+    first = mgr.create_ephemeral_branch("battle-1234567890123456-a")
+    second = mgr.create_ephemeral_branch("battle-1234567890123456-b")
+
+    assert first.name != second.name
+    assert first.branch_id != second.branch_id
+
+
 def test_neon_branch_manager_api_call(monkeypatch):
     mgr = NeonBranchManager(api_key="neon_sec_test", project_id="ep-project-999")
     mgr.use_mock = False
@@ -96,4 +107,3 @@ def test_neon_branch_manager_fails_closed_without_falling_back_to_database_url(m
 
         assert "ARENA_INFRA_FAILURE" in str(exc_info.value)
         assert control_db not in str(exc_info.value)
-

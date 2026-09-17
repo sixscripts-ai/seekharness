@@ -31,6 +31,7 @@ COLLECTIONS = {
         ("round_visibility", "string", True),
         ("saved", "boolean", True),
         ("sandbox_id", "string", False),
+        ("battle_db_branch_id", "string", False),
         ("judge_provider_id", "string", False),
         ("preview_urls", "string", False),  # JSON map model_id -> tunnel URL
         ("failure_reason", "string", False),

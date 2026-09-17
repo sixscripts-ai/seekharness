@@ -457,6 +457,7 @@ def _pg_battle_dict(battle: Battle, model_ids: list[str]) -> dict:
         "round_visibility": battle.round_visibility,
         "saved": battle.saved,
         "sandbox_id": battle.sandbox_id,
+        "battle_db_branch_id": battle.battle_db_branch_id,
         "judge_provider_id": battle.judge_provider_id,
         "preview_urls": battle.preview_urls,
         "failure_reason": battle.failure_reason,
@@ -465,6 +466,7 @@ def _pg_battle_dict(battle: Battle, model_ids: list[str]) -> dict:
         "difficulty": battle.difficulty,
         "draft_id": battle.draft_id,
         "battle_config": battle.battle_config,
+        "context_mode": (battle.battle_config or {}).get("context_mode", "strict"),
         "spec_hash": battle.spec_hash,
         "custom_title": battle.custom_title,
         "ranked": battle.ranked,
@@ -515,6 +517,8 @@ def battle_create(
     difficulty: str | None = None,
     target_id: str | None = None,
     target_version: str | None = None,
+    context_mode: str = "strict",
+    role_to_agent_id: dict[str, str] | None = None,
 ) -> dict:
     """Create a battle with the full validation chain. Returns {id, status}."""
     from fastapi import HTTPException
@@ -584,6 +588,42 @@ def battle_create(
             detail=f"Concurrency limit reached: 5 active battles",
         )
 
+    cfg = dict(cfg)
+    cfg["context_mode"] = context_mode
+    if role_to_agent_id is not None:
+        if not isinstance(role_to_agent_id, dict):
+            raise HTTPException(status_code=400, detail="role_to_agent_id must be a mapping")
+        playable_roles = [r for r in cfg.get("roles", []) if r != "judge"]
+        unknown_roles = set(role_to_agent_id) - set(playable_roles)
+        if unknown_roles:
+            raise HTTPException(
+                status_code=400,
+                detail=f"agent binding roles are not battle roles: {sorted(unknown_roles)}",
+            )
+        bindings = {
+            str(role): str(agent_id)
+            for role, agent_id in role_to_agent_id.items()
+            if str(agent_id).strip()
+        }
+        if len(bindings) != len(role_to_agent_id):
+            raise HTTPException(status_code=400, detail="agent binding ids must be non-empty")
+        # Validate the immutable agent/provider contract before persisting a
+        # battle that the sandbox cannot execute. This is a configuration
+        # resolver only; real provider requests remain in /internal/model.
+        from agent_arena.sandbox.agent_runtime import (
+            AgentRuntimeConfigurationError,
+            resolve_role_runtime_bindings,
+        )
+
+        try:
+            resolve_role_runtime_bindings(
+                dict(zip(playable_roles, model_ids)),
+                {**cfg, "role_to_agent_id": bindings},
+            )
+        except AgentRuntimeConfigurationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        cfg["role_to_agent_id"] = bindings
+
     payload = {
         "user_id": user_id,
         "format_id": format_id,
@@ -593,6 +633,8 @@ def battle_create(
         "timeout_seconds": timeout_seconds,
         "round_visibility": round_visibility,
         "saved": save,
+        "context_mode": context_mode,
+        "battle_config": cfg,
     }
     if target_bundle is not None:
         payload["target_id"] = target_bundle.id
@@ -681,6 +723,8 @@ def _aw_battle_dict(doc) -> dict:
         data["target_id"] = data["battle_config"].get("target_id")
         data["target_version"] = data["battle_config"].get("target_version")
         data["target_manifest_hash"] = data["battle_config"].get("manifest_hash")
+    if not data.get("context_mode") and isinstance(data.get("battle_config"), dict):
+        data["context_mode"] = data["battle_config"].get("context_mode", "strict")
     return data
 
 
@@ -713,6 +757,7 @@ def _battle_read_through(record: dict) -> None:
                 saved=bool(record.get("saved")),
                 status=record.get("status", "queued"),
                 sandbox_id=record.get("sandbox_id"),
+                battle_db_branch_id=record.get("battle_db_branch_id"),
                 judge_provider_id=record.get("judge_provider_id"),
                 preview_urls=record.get("preview_urls"),
                 failure_reason=record.get("failure_reason"),

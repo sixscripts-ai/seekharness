@@ -84,6 +84,7 @@ class TargetVerificationConfig:
     visible_command: str = ""
     hidden_command: str = ""
     ranked_requires_hidden_pass: bool = True
+    breaker_evaluator: str = "tests/breaker_harness.py"
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,20 @@ class TargetSafetyConfig:
     scope: str = "synthetic-local-only"
     real_targets: bool = False
     network_required: bool = False
+
+
+@dataclass(frozen=True)
+class TargetDatabaseConfig:
+    """Authoritative Battle database requirement for a target.
+
+    The contract is intentionally small: only PostgreSQL Battle branches are
+    supported, and ``application_write`` describes the separate application
+    credential. Fighter SQL access is always the read-only capability.
+    """
+
+    required: bool = False
+    engine: str = ""
+    application_write: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,6 +143,12 @@ class TargetBundle:
     raw_manifest: dict[str, Any] = field(repr=False)
     private_fixture_files: dict[str, bytes] = field(default_factory=dict, repr=False)
     services: dict[str, Any] = field(default_factory=dict, repr=False)
+    database: TargetDatabaseConfig = field(default_factory=TargetDatabaseConfig)
+
+    @property
+    def evaluator_hash(self) -> str:
+        """Pin private evaluator programs/fixtures separately from hidden tests."""
+        return _compute_bundle_hash(self.private_fixture_files)
 
 
 def _validate_safe_relative_path(rel_path: str, context: str = "") -> str:
@@ -279,12 +300,19 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
     )
 
     ver_raw = raw.get("verification") or {}
+    breaker_evaluator = _validate_safe_relative_path(
+        ver_raw.get("breaker_evaluator", "tests/breaker_harness.py"),
+        context="verification.breaker_evaluator",
+    )
+    if not breaker_evaluator.startswith("tests/") or not breaker_evaluator.endswith(".py") or "*" in breaker_evaluator:
+        raise TargetManifestError(f"{target_id}: breaker_evaluator must name a Python script under tests/")
     verification_cfg = TargetVerificationConfig(
         visible_command=str(ver_raw.get("visible_command") or ""),
         hidden_command=str(ver_raw.get("hidden_command") or ""),
         ranked_requires_hidden_pass=bool(
             ver_raw.get("ranked_requires_hidden_pass", True)
         ),
+        breaker_evaluator=breaker_evaluator,
     )
 
     # Seatbelt at load time: refuse to ship a target whose verification commands
@@ -314,6 +342,38 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
         scope=str(safety_raw.get("scope") or "synthetic-local-only"),
         real_targets=bool(safety_raw.get("real_targets", False)),
         network_required=bool(safety_raw.get("network_required", False)),
+    )
+
+    database_raw = raw.get("database")
+    if database_raw is None:
+        database_raw = {}
+    if not isinstance(database_raw, dict):
+        raise TargetManifestError(f"{target_id}: database must be a mapping")
+    database_required = database_raw.get("required", False)
+    if not isinstance(database_required, bool):
+        raise TargetManifestError(f"{target_id}: database.required must be boolean")
+    database_engine = str(database_raw.get("engine") or "").strip().lower()
+    if database_required and database_engine != "postgresql":
+        raise TargetManifestError(
+            f"{target_id}: required Battle database engine must be 'postgresql'"
+        )
+    if not database_required and database_engine not in ("", "postgresql"):
+        raise TargetManifestError(
+            f"{target_id}: unsupported Battle database engine '{database_engine}'"
+        )
+    if database_raw.get("initialization"):
+        raise TargetManifestError(
+            f"{target_id}: database initialization has no trusted Arena executor"
+        )
+    application_write = database_raw.get("application_write", False)
+    if not isinstance(application_write, bool):
+        raise TargetManifestError(
+            f"{target_id}: database.application_write must be boolean"
+        )
+    database_cfg = TargetDatabaseConfig(
+        required=database_required,
+        engine=database_engine,
+        application_write=application_write,
     )
 
     # Parse objectives (supports both flat list and dict with role keys)
@@ -392,6 +452,7 @@ def load_target_bundle(target_dir: Path) -> TargetBundle:
         private_fixture_files=private_fixture_files,
         raw_manifest=raw,
         services=raw.get("services") if isinstance(raw.get("services"), dict) else {},
+        database=database_cfg,
     )
 
 
@@ -580,6 +641,7 @@ def compile_target_to_battle_config(
         "manifest_hash": bundle.manifest_hash,
         "starter_hash": bundle.starter_hash,
         "hidden_hash": bundle.hidden_hash,
+        "evaluator_hash": bundle.evaluator_hash,
         "category": bundle.category,
         "difficulty": bundle.difficulty,
         "format": bundle.format,
@@ -605,6 +667,11 @@ def compile_target_to_battle_config(
             "scope": bundle.safety.scope,
             "real_targets": bundle.safety.real_targets,
             "network_required": bundle.safety.network_required,
+        },
+        "database": {
+            "required": bundle.database.required,
+            "engine": bundle.database.engine,
+            "application_write": bundle.database.application_write,
         },
         "environment": {
             "network": bundle.network,
@@ -741,14 +808,59 @@ def fighter_visible_battle_config(cfg: dict | None) -> dict:
 
     public = copy.deepcopy(cfg) if isinstance(cfg, dict) else {}
     public.pop("hidden_hash", None)
+    public.pop("evaluator_hash", None)
     public.pop("hidden_test_files", None)
     public.pop("reference_files", None)
     public.pop("private_fixture_files", None)
     verification = public.get("verification")
     if isinstance(verification, dict):
         verification.pop("hidden_command", None)
+        verification.pop("breaker_evaluator", None)
         public["verification"] = verification
     return public
+
+
+def target_requires_battle_database(cfg: dict | None) -> bool:
+    """Resolve the frozen Target database contract without using heuristics.
+
+    Missing database policy means no Battle database. A malformed required
+    policy raises so orchestration cannot silently skip isolation.
+    """
+    if cfg is None:
+        return False
+    if not isinstance(cfg, dict):
+        raise TargetManifestError("frozen battle config must be a mapping")
+    raw = cfg.get("database")
+    if raw is None:
+        return False
+    if not isinstance(raw, dict):
+        raise TargetManifestError("frozen database policy must be a mapping")
+    required_value = raw.get("required", False)
+    if not isinstance(required_value, bool):
+        raise TargetManifestError("frozen database policy 'required' must be boolean")
+    required = required_value
+    engine_value = raw.get("engine", "")
+    if not isinstance(engine_value, str):
+        raise TargetManifestError("frozen database policy 'engine' must be a string")
+    engine = engine_value.strip().lower()
+    if required and engine != "postgresql":
+        raise TargetManifestError(
+            "frozen database policy requires the PostgreSQL Battle provider"
+        )
+    if not required and engine not in ("", "postgresql"):
+        raise TargetManifestError(
+            "frozen database policy names an unsupported Battle provider"
+        )
+    if raw.get("initialization"):
+        raise TargetManifestError(
+            "frozen database policy has no trusted Arena initializer"
+        )
+    application_write = raw.get("application_write", False)
+    if not isinstance(application_write, bool):
+        raise TargetManifestError(
+            "frozen database policy 'application_write' must be boolean"
+        )
+    return required
 
 
 def default_evaluator_root() -> Path:

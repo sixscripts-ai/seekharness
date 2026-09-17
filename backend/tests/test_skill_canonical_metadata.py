@@ -20,7 +20,7 @@ from agent_arena.sandbox.executors.skill_pool import BATTLE_SKILL_NAMES, load_sk
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SKILLS_ROOT = ROOT / ".agents" / "skills"
+SKILLS_ROOT = ROOT / "arena-fighter-skills" if (ROOT / "arena-fighter-skills").is_dir() else (ROOT / ".agents" / "skills")
 
 _EXISTING_VERSIONS = {
     "secure-code-execution": "2.0.0",

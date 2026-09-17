@@ -48,6 +48,28 @@ class Base(DeclarativeBase):
     """Declarative base; metadata is consumed by Alembic."""
 
 
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        UniqueConstraint("email", name="uq_users_email"),
+        Index("ix_users_email", "email"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class Provider(Base):
     __tablename__ = "providers"
     __table_args__ = (
@@ -120,6 +142,11 @@ class Battle(Base):
     round_visibility: Mapped[str] = mapped_column(String(32), nullable=False)
     saved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sandbox_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Non-secret Neon branch handle used by the trusted cleanup path. The
+    # read-only connection string is never persisted in the Battle record.
+    battle_db_branch_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
     judge_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     preview_urls: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -30,6 +30,7 @@ import { isAuthoritativeScoresEvent, isAuthoritativeStatusEvent, isTerminalBattl
 import ExecutionSurface from "@/components/battle/ExecutionSurface";
 import BattleInspector from "@/components/battle/BattleInspector";
 import BattleStatus from "@/components/battle/BattleStatus";
+import SpectatorArenaView from "@/components/battle/SpectatorArenaView";
 import type { BattleStreamItem, SkillActivity } from "@/components/battle/types";
 import {
   mergeEvent,
@@ -42,6 +43,7 @@ import {
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 type InspectorTab = "activity" | "expertise" | "evidence" | "result";
+type ViewMode = "arena" | "deep" | "replay";
 
 function unwrap(ev: StreamEvent): any {
   const wrapped = ev.data as any;
@@ -117,6 +119,7 @@ export default function LiveBattle() {
   const [phase, setPhase] = useState("runtime");
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   const [selectedModelId, setSelectedModelId] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("arena");
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>("activity");
   const [showMission, setShowMission] = useState(false);
   const [showActions, setShowActions] = useState(false);
@@ -139,15 +142,15 @@ export default function LiveBattle() {
   }, [status]);
 
   useEffect(() => {
-    if (!jwt || !id) return;
+    if (!id) return;
     let active = true;
     void (async () => {
       try {
-        const token = (await refreshJwt()) || jwt;
+        const token = (await refreshJwt()) || jwt || null;
         const [loadedBattle, loadedFormats, loadedProviders] = await Promise.all([
           api.getBattle(token, id),
           api.formats(token).catch(() => []),
-          api.providers(token).catch(() => []),
+          api.providers(token || "").catch(() => []),
         ]);
         if (!active) return;
         setBattle(loadedBattle);
@@ -188,14 +191,14 @@ export default function LiveBattle() {
   }, [jwt, id, refreshJwt]);
 
   useEffect(() => {
-    if (!jwt || !id || !user) return;
+    if (!id) return;
     let cancelled = false;
     const controller = new AbortController();
 
     const connect = async (attempt = 0): Promise<void> => {
       if (cancelled) return;
       try {
-        const token = (await refreshJwt()) || jwt;
+        const token = (await refreshJwt()) || jwt || null;
         await streamBattle(id, token, (ev) => {
           if (cancelled) return;
           const data = unwrap(ev) || {};
@@ -443,7 +446,7 @@ export default function LiveBattle() {
     );
   }
 
-  if (!user) {
+  if (!user && !battle && err) {
     return (
       <div className="grid min-h-[calc(100vh-56px)] place-items-center bg-transparent px-6">
         <div className="max-w-[36ch] text-center rounded-2xl border border-white/[0.08] bg-[#0c0f18]/80 p-8 backdrop-blur-xl shadow-2xl">
@@ -478,6 +481,33 @@ export default function LiveBattle() {
         </div>
 
         <div className="flex items-center gap-1.5">
+          <div className="flex items-center bg-[#090B10] rounded-xl border border-white/10 p-0.5 mr-2">
+            <button
+              type="button"
+              onClick={() => setViewMode("arena")}
+              className={cn(
+                "px-2.5 py-1 text-[11px] font-medium rounded-lg transition font-mono",
+                viewMode === "arena"
+                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold"
+                  : "text-slate-400 hover:text-white"
+              )}
+            >
+              Arena
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("deep")}
+              className={cn(
+                "px-2.5 py-1 text-[11px] font-medium rounded-lg transition font-mono",
+                viewMode === "deep"
+                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 font-bold"
+                  : "text-slate-400 hover:text-white"
+              )}
+            >
+              Deep Dive
+            </button>
+          </div>
+
           {isTargetBattle && battle?.target_id ? (
             <Link to={`/targets/${encodeURIComponent(battle.target_id)}`} className="battle-text-button hidden md:inline-flex">
               <Target className="h-3.5 w-3.5" /> Briefing
@@ -513,108 +543,133 @@ export default function LiveBattle() {
         </div>
       ) : null}
 
-      <div className="battle-context-strip">
-        <div className="flex min-w-0 items-center gap-4 overflow-x-auto">
-          <span className="shrink-0 font-mono text-[8px] font-semibold uppercase tracking-[0.14em] text-zinc-700">Phase</span>
-          {pipeline.map((item, index) => {
-            const active = item === phase;
-            const done = index < currentPhaseIndex || (TERMINAL_STATES.has(status) && index <= currentPhaseIndex);
-            return (
-              <div key={`${item}-${index}`} className="flex shrink-0 items-center gap-2">
-                <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-cyan-400 shadow-[0_0_8px_rgba(0,210,255,0.8)] animate-pulse" : done ? "bg-emerald-400/80" : "bg-zinc-800")} />
-                <span className={cn("font-mono text-[9px]", active ? "text-cyan-200 font-semibold drop-shadow-[0_0_8px_rgba(0,210,255,0.4)]" : done ? "text-zinc-400" : "text-zinc-600")}>{titleCase(item)}</span>
-                {index < pipeline.length - 1 ? <span className="h-px w-5 bg-white/[0.08]" /> : null}
-              </div>
-            );
-          })}
-        </div>
-
-        {targetDetail?.objectives?.length ? (
-          <button type="button" onClick={() => setShowMission((value) => !value)} className="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.11em] text-zinc-500 hover:text-cyan-300 md:flex">
-            Mission <ChevronDown className={cn("h-3 w-3 transition", showMission && "rotate-180")} />
-          </button>
-        ) : null}
-      </div>
-
-      {showMission && targetDetail?.objectives?.length ? (
-        <div className="border-b border-white/[0.08] bg-[#0c0f18]/80 backdrop-blur-md px-5 py-3">
-          <div className="mx-auto flex max-w-[1500px] flex-wrap gap-x-8 gap-y-2">
-            {targetDetail.objectives.map((objective, index) => (
-              <div key={`${objective}-${index}`} className="flex max-w-[46ch] items-start gap-2 text-[10px] leading-5 text-zinc-400">
-                <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-cyan-400/60" /><span>{objective}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-
-      {modelIds.length > 1 ? (
-        <div className={cn("battle-fighter-switcher", dualDesktop && "md:hidden")}>
-          {modelIds.map((modelId, index) => (
-            <button key={modelId} type="button" onClick={() => setSelectedModelId(modelId)} className={cn("battle-fighter-switch", selectedModelId === modelId && "battle-fighter-switch-active")}>
-              <span>{modelName(modelId)}</span><span>{roleForModel(modelId, index)}</span>
-            </button>
-          ))}
-        </div>
-      ) : null}
-
-      <main className="battle-stage">
-        <div className="battle-stage-arena">
-          <div className={cn("battle-stage-grid", dualDesktop && "battle-stage-grid-dual")}>
-            {modelIds.map((modelId, index) => {
-              const history = histories.get(modelId) || [];
-              const artifacts = history.filter((item) => item.kind === "artifact");
-              const skills = skillActivity.filter((item) => item.modelId === modelId);
-              const hideOnMobile = dualDesktop && selectedModelId !== modelId;
-              const hideExtra = modelIds.length > 2 && selectedModelId !== modelId;
-              return (
-                <div key={modelId} className={cn("battle-stage-slot", hideExtra && "hidden", hideOnMobile && "max-md:hidden")}>
-                  <ExecutionSurface
-                    modelId={modelId}
-                    displayName={modelName(modelId)}
-                    role={roleForModel(modelId, index)}
-                    state={fighterState(modelId)}
-                    phase={history[history.length - 1]?.phase || phase}
-                    events={history}
-                    artifacts={artifacts}
-                    skillActivity={skills}
-                    previewUrl={previewUrls[modelId]}
-                    focused={selectedModelId === modelId}
-                    onFocus={() => setSelectedModelId(modelId)}
-                  />
-                </div>
-              );
-            })}
-
-            {!modelIds.length ? (
-              <div className="flex min-h-[520px] flex-col items-center justify-center rounded-2xl border border-white/[0.08] bg-[#0b0e15]/70 p-8 text-center backdrop-blur-xl">
-                <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-400 shadow-[0_0_20px_rgba(0,210,255,0.2)]">
-                  <TerminalSquare className="h-6 w-6 animate-pulse" />
-                </div>
-                <div className="mt-4 font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-300">Awaiting Fighter Stream</div>
-                <p className="mt-2 max-w-[34ch] text-[12px] leading-5 text-zinc-400">Battle initialized. Ready to receive streaming runtime events and execution slots.</p>
-              </div>
-            ) : null}
-          </div>
-        </div>
-
-        {battle ? (
-          <BattleInspector
-            tab={inspectorTab}
-            onTabChange={setInspectorTab}
+      {viewMode === "arena" || viewMode === "replay" ? (
+        <main className="mx-auto max-w-[1500px] px-4 py-5 md:px-6">
+          <SpectatorArenaView
             battle={battle}
             status={status}
+            phase={phase}
+            pipeline={pipeline}
             modelIds={modelIds}
             modelName={modelName}
+            roleForModel={roleForModel}
+            targetDetail={targetDetail}
             events={events}
+            histories={histories}
             skillActivity={skillActivity}
-            selectedModelId={selectedModelId || modelIds[0] || ""}
-            resultView={resultView}
+            scores={scores}
+            previewUrls={previewUrls}
+            selectedModelId={selectedModelId}
+            onSelectModelId={setSelectedModelId}
+            onSwitchToDeepDive={() => setViewMode("deep")}
           />
-        ) : (
-          <div className="battle-inspector" />
-        )}
-      </main>
+        </main>
+      ) : (
+        <>
+          <div className="battle-context-strip">
+            <div className="flex min-w-0 items-center gap-4 overflow-x-auto">
+              <span className="shrink-0 font-mono text-[8px] font-semibold uppercase tracking-[0.14em] text-zinc-700">Phase</span>
+              {pipeline.map((item, index) => {
+                const active = item === phase;
+                const done = index < currentPhaseIndex || (TERMINAL_STATES.has(status) && index <= currentPhaseIndex);
+                return (
+                  <div key={`${item}-${index}`} className="flex shrink-0 items-center gap-2">
+                    <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-cyan-400 shadow-[0_0_8px_rgba(0,210,255,0.8)] animate-pulse" : done ? "bg-emerald-400/80" : "bg-zinc-800")} />
+                    <span className={cn("font-mono text-[9px]", active ? "text-cyan-200 font-semibold drop-shadow-[0_0_8px_rgba(0,210,255,0.4)]" : done ? "text-zinc-400" : "text-zinc-600")}>{titleCase(item)}</span>
+                    {index < pipeline.length - 1 ? <span className="h-px w-5 bg-white/[0.08]" /> : null}
+                  </div>
+                );
+              })}
+            </div>
+
+            {targetDetail?.objectives?.length ? (
+              <button type="button" onClick={() => setShowMission((value) => !value)} className="ml-auto hidden shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.11em] text-zinc-500 hover:text-cyan-300 md:flex">
+                Mission <ChevronDown className={cn("h-3 w-3 transition", showMission && "rotate-180")} />
+              </button>
+            ) : null}
+          </div>
+
+          {showMission && targetDetail?.objectives?.length ? (
+            <div className="border-b border-white/[0.08] bg-[#0c0f18]/80 backdrop-blur-md px-5 py-3">
+              <div className="mx-auto flex max-w-[1500px] flex-wrap gap-x-8 gap-y-2">
+                {targetDetail.objectives.map((objective, index) => (
+                  <div key={`${objective}-${index}`} className="flex max-w-[46ch] items-start gap-2 text-[10px] leading-5 text-zinc-400">
+                    <span className="mt-[8px] h-1 w-1 shrink-0 rounded-full bg-cyan-400/60" /><span>{objective}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {modelIds.length > 1 ? (
+            <div className={cn("battle-fighter-switcher", dualDesktop && "md:hidden")}>
+              {modelIds.map((modelId, index) => (
+                <button key={modelId} type="button" onClick={() => setSelectedModelId(modelId)} className={cn("battle-fighter-switch", selectedModelId === modelId && "battle-fighter-switch-active")}>
+                  <span>{modelName(modelId)}</span><span>{roleForModel(modelId, index)}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          <main className="battle-stage">
+            <div className="battle-stage-arena">
+              <div className={cn("battle-stage-grid", dualDesktop && "battle-stage-grid-dual")}>
+                {modelIds.map((modelId, index) => {
+                  const history = histories.get(modelId) || [];
+                  const artifacts = history.filter((item) => item.kind === "artifact");
+                  const skills = skillActivity.filter((item) => item.modelId === modelId);
+                  const hideOnMobile = dualDesktop && selectedModelId !== modelId;
+                  const hideExtra = modelIds.length > 2 && selectedModelId !== modelId;
+                  return (
+                    <div key={modelId} className={cn("battle-stage-slot", hideExtra && "hidden", hideOnMobile && "max-md:hidden")}>
+                      <ExecutionSurface
+                        modelId={modelId}
+                        displayName={modelName(modelId)}
+                        role={roleForModel(modelId, index)}
+                        state={fighterState(modelId)}
+                        phase={history[history.length - 1]?.phase || phase}
+                        events={history}
+                        artifacts={artifacts}
+                        skillActivity={skills}
+                        previewUrl={previewUrls[modelId]}
+                        focused={selectedModelId === modelId}
+                        onFocus={() => setSelectedModelId(modelId)}
+                      />
+                    </div>
+                  );
+                })}
+
+                {!modelIds.length ? (
+                  <div className="flex min-h-[520px] flex-col items-center justify-center rounded-2xl border border-white/[0.08] bg-[#0b0e15]/70 p-8 text-center backdrop-blur-xl">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-cyan-500/20 bg-cyan-500/10 text-cyan-400 shadow-[0_0_20px_rgba(0,210,255,0.2)]">
+                      <TerminalSquare className="h-6 w-6 animate-pulse" />
+                    </div>
+                    <div className="mt-4 font-mono text-[10px] uppercase tracking-[0.18em] text-cyan-300">Awaiting Fighter Stream</div>
+                    <p className="mt-2 max-w-[34ch] text-[12px] leading-5 text-zinc-400">Battle initialized. Ready to receive streaming runtime events and execution slots.</p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {battle ? (
+              <BattleInspector
+                tab={inspectorTab}
+                onTabChange={setInspectorTab}
+                battle={battle}
+                status={status}
+                modelIds={modelIds}
+                modelName={modelName}
+                events={events}
+                skillActivity={skillActivity}
+                selectedModelId={selectedModelId || modelIds[0] || ""}
+                resultView={resultView}
+              />
+            ) : (
+              <div className="battle-inspector" />
+            )}
+          </main>
+        </>
+      )}
 
       {resultView.statusTone === "verified" && resultView.winnerId ? (
         <div className="battle-result-toast">

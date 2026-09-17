@@ -1,45 +1,101 @@
-import { Account, Client } from "appwrite";
+declare const __DEFAULT_MODAL_URL__: string;
 
-const endpoint = import.meta.env.VITE_APPWRITE_ENDPOINT || "https://sfo.cloud.appwrite.io/v1";
-const projectId = import.meta.env.VITE_APPWRITE_PROJECT_ID || "6a92f61d001bf8be437e";
+const BASE = (
+  import.meta.env.VITE_MODAL_URL ||
+  (typeof __DEFAULT_MODAL_URL__ !== "undefined" ? __DEFAULT_MODAL_URL__ : "")
+).replace(/\/$/, "");
 
-export function createClient() {
-  const client = new Client().setEndpoint(endpoint).setProject(projectId);
-  return client;
+export interface AuthUser {
+  id: string;
+  $id: string;
+  email: string;
+  name: string;
 }
 
-export function getAccount(client?: Client) {
-  return new Account(client ?? createClient());
+interface AuthResponse {
+  user: AuthUser;
+  token: string;
 }
 
-export async function signup(email: string, password: string, name: string) {
-  const account = getAccount();
-  await account.create("unique()", email, password, name);
-  return login(email, password);
-}
-
-export async function login(email: string, password: string) {
-  const account = getAccount();
-  await account.createEmailPasswordSession(email, password);
-  return account.get();
-}
-
-export async function logout() {
-  const account = getAccount();
-  try { await account.deleteSession("current"); } catch {}
-}
-
-export async function getSessionUser() {
-  const account = getAccount();
-  try { return await account.get(); } catch { return null; }
-}
-
-export async function createJwt(): Promise<string | null> {
-  const account = getAccount();
+function getStoredToken(): string | null {
   try {
-    const jwt = await account.createJWT();
-    return jwt.jwt;
+    return sessionStorage.getItem("arena_jwt");
   } catch {
     return null;
   }
 }
+
+function setStoredToken(token: string | null) {
+  try {
+    if (token) {
+      sessionStorage.setItem("arena_jwt", token);
+    } else {
+      sessionStorage.removeItem("arena_jwt");
+    }
+  } catch {}
+}
+
+export async function signup(email: string, password: string, name: string): Promise<AuthUser> {
+  const res = await fetch(`${BASE}/auth/signup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, name }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Signup failed" }));
+    throw new Error(err.detail || `Signup failed (${res.status})`);
+  }
+  const data: AuthResponse = await res.json();
+  setStoredToken(data.token);
+  return data.user;
+}
+
+export async function login(email: string, password: string): Promise<AuthUser> {
+  const res = await fetch(`${BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Invalid email or password" }));
+    throw new Error(err.detail || `Login failed (${res.status})`);
+  }
+  const data: AuthResponse = await res.json();
+  setStoredToken(data.token);
+  return data.user;
+}
+
+export async function logout(): Promise<void> {
+  const token = getStoredToken();
+  setStoredToken(null);
+  if (token) {
+    try {
+      await fetch(`${BASE}/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch {}
+  }
+}
+
+export async function getSessionUser(): Promise<AuthUser | null> {
+  const token = getStoredToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`${BASE}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      setStoredToken(null);
+      return null;
+    }
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function createJwt(): Promise<string | null> {
+  return getStoredToken();
+}
+

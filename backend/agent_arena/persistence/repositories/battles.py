@@ -28,6 +28,7 @@ def battle_create(
     status: str = "queued",
     saved: bool = False,
     sandbox_id: str | None = None,
+    battle_db_branch_id: str | None = None,
     judge_provider_id: str | None = None,
     preview_urls: dict[str, Any] | None = None,
     failure_reason: str | None = None,
@@ -54,6 +55,7 @@ def battle_create(
         round_visibility=round_visibility,
         saved=saved,
         sandbox_id=sandbox_id,
+        battle_db_branch_id=battle_db_branch_id,
         judge_provider_id=judge_provider_id,
         preview_urls=preview_urls,
         failure_reason=failure_reason,
@@ -92,7 +94,7 @@ def battle_get(session: Session, battle_id: str) -> Battle | None:
 
 _BATTLE_UPDATE_FIELDS = {
     "status", "timeout_seconds", "round_visibility", "saved",
-    "sandbox_id", "judge_provider_id", "preview_urls",
+    "sandbox_id", "battle_db_branch_id", "judge_provider_id", "preview_urls",
     "failure_reason", "started_at", "completed_at", "finalized_at",
     "difficulty",
     "draft_id", "battle_config", "spec_hash", "custom_title",
