@@ -108,3 +108,7 @@ def test_modal_entry_parses_and_still_keeps_evaluator_volume_private():
     ast.parse(source)
     assert source.count('"ARENA_EVALUATOR_DIR"') == 1
     assert "attach_canonical_skill_yaml" in source
+    # Host image must ship Node so trusted verify can run `npm test` for
+    # Node targets (fighter MicroVM Node is not enough).
+    assert "setup_22.x" in source
+    assert "apt-get install -y nodejs" in source

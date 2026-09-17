@@ -66,7 +66,7 @@ cfg = apply_difficulty(
     },
     "novice",
 )
-assert cfg["limits"]["max_tool_steps"] == 8
+assert cfg["limits"]["max_tool_steps"] == 40
 
 bindings = resolve_role_runtime_bindings(
     {"fighter": "host:modal-kimi"},

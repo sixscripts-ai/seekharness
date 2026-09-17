@@ -103,10 +103,10 @@ BUILDER_V1 = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs"],
     ),
     budgets=AgentBudgets(
-        max_turns=14,
-        max_steps=32,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["THEORY.md"],
@@ -196,10 +196,10 @@ BREAKER_V1 = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs", "test"],
     ),
     budgets=AgentBudgets(
-        max_turns=12,
-        max_steps=28,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["exploit.py", "THEORY.md"],
@@ -278,10 +278,10 @@ FIGHTER_V1 = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs"],
     ),
     budgets=AgentBudgets(
-        max_turns=8,
-        max_steps=20,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["THEORY.md"],
@@ -431,10 +431,10 @@ REVIEWER_V1 = AgentConfig(
         ],
     ),
     budgets=AgentBudgets(
-        max_turns=6,
-        max_steps=15,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=60,
-        total_timeout_seconds=300,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=[],
@@ -518,10 +518,10 @@ BUILDER_FASTAPI = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs"],
     ),
     budgets=AgentBudgets(
-        max_turns=14,
-        max_steps=32,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["THEORY.md"],
@@ -603,10 +603,10 @@ BUILDER_SECURITY_HARDENING = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs"],
     ),
     budgets=AgentBudgets(
-        max_turns=14,
-        max_steps=32,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["THEORY.md"],
@@ -684,10 +684,10 @@ BUILDER_PYTHON_KATA = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs"],
     ),
     budgets=AgentBudgets(
-        max_turns=14,
-        max_steps=32,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["THEORY.md"],
@@ -773,10 +773,10 @@ BREAKER_AUTH = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs", "test"],
     ),
     budgets=AgentBudgets(
-        max_turns=12,
-        max_steps=28,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["exploit.py", "THEORY.md"],
@@ -855,10 +855,10 @@ BREAKER_API = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs", "test"],
     ),
     budgets=AgentBudgets(
-        max_turns=12,
-        max_steps=28,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["exploit.py", "THEORY.md"],
@@ -934,10 +934,10 @@ BREAKER_WEB = AgentConfig(
         denied_tools=["fetch", "bg", "ps", "kill", "logs", "test"],
     ),
     budgets=AgentBudgets(
-        max_turns=14,
-        max_steps=32,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=120,
-        total_timeout_seconds=600,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=["exploit.py", "THEORY.md"],
@@ -1012,10 +1012,10 @@ REVIEWER_SECURITY = AgentConfig(
         ],
     ),
     budgets=AgentBudgets(
-        max_turns=6,
-        max_steps=15,
+        max_turns=30,
+        max_steps=60,
         tool_timeout_seconds=60,
-        total_timeout_seconds=300,
+        total_timeout_seconds=900,
     ),
     evidence_contract=EvidenceContract(
         required_artifacts=[],

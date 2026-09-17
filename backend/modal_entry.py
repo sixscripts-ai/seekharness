@@ -27,10 +27,19 @@ from agent_arena.runtime_packaging import (
 )
 from agent_arena.target_library import materialize_fighter_visible_library
 
+# Trusted verify for Node targets runs `npm test` on this host image, not in
+# the fighter MicroVM. Without node/npm the harness reports visible_passed=false
+# even when the fighter correctly repaired the package.
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_pyproject(str(Path(__file__).resolve().parent / "pyproject.toml"))
     .run_commands("playwright install --with-deps chromium")
+    .apt_install("curl", "ca-certificates", "gnupg")
+    .run_commands(
+        "curl -fsSL https://deb.nodesource.com/setup_22.x | bash -",
+        "apt-get install -y nodejs",
+        "node --version && npm --version",
+    )
     .add_local_python_source("agent_arena")
 )
 # add_local_python_source ships .py only. Attach D0 YAML after that overlay.

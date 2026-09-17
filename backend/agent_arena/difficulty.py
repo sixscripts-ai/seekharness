@@ -2,6 +2,9 @@
 
 Kept free of Appwrite, FastAPI, and persistence imports so the fighter
 sandbox can apply difficulty without pulling control-plane packages.
+
+Step budgets stay in the 40–60 range so exploration-heavy models are not
+killed by step exhaustion before they can repair and verify.
 """
 
 from __future__ import annotations
@@ -9,33 +12,33 @@ from __future__ import annotations
 DIFFICULTY_PRESETS = {
     "novice": {
         "limits": {
-            "max_tool_turns": 3,
-            "max_tool_steps": 8,
-            "exec_timeout_seconds": 180,
+            "max_tool_turns": 16,
+            "max_tool_steps": 40,
+            "exec_timeout_seconds": 420,
         },
         "scoring": {"weights": {"tests": 0.7, "skills": 0.1, "theory": 0.2}},
     },
     "general": {
         "limits": {
-            "max_tool_turns": 6,
-            "max_tool_steps": 14,
-            "exec_timeout_seconds": 240,
+            "max_tool_turns": 20,
+            "max_tool_steps": 48,
+            "exec_timeout_seconds": 540,
         },
         "scoring": {"weights": {"tests": 0.6, "skills": 0.2, "theory": 0.2}},
     },
     "advanced": {
         "limits": {
-            "max_tool_turns": 8,
-            "max_tool_steps": 20,
-            "exec_timeout_seconds": 300,
+            "max_tool_turns": 24,
+            "max_tool_steps": 54,
+            "exec_timeout_seconds": 720,
         },
         "scoring": {"weights": {"tests": 0.5, "skills": 0.3, "theory": 0.2}},
     },
     "expert": {
         "limits": {
-            "max_tool_turns": 12,
-            "max_tool_steps": 30,
-            "exec_timeout_seconds": 420,
+            "max_tool_turns": 30,
+            "max_tool_steps": 60,
+            "exec_timeout_seconds": 900,
         },
         "scoring": {"weights": {"tests": 0.4, "skills": 0.4, "theory": 0.2}},
     },

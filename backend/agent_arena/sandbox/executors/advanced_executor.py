@@ -4040,9 +4040,11 @@ class AdvancedExecutor(Executor):
         if active_agent_candidate and active_agent_candidate.budgets:
             default_turns = active_agent_candidate.budgets.max_turns
             default_steps = active_agent_candidate.budgets.max_steps
-        max_turns = min(20, max(1, int(_budget("max_tool_turns", default_turns, ["max_turns"]))))
+        # Hard ceilings track expert difficulty (30 turns / 60 steps) with a
+        # little headroom so format/agent budgets are the real gate, not this clamp.
+        max_turns = min(40, max(1, int(_budget("max_tool_turns", default_turns, ["max_turns"]))))
         max_steps = min(
-            50, max(1, int(_budget("max_tool_steps", default_steps, ["max_steps", "max_tool_steps"])))
+            80, max(1, int(_budget("max_tool_steps", default_steps, ["max_steps", "max_tool_steps"])))
         )
         raw_timeout = _budget("tool_timeout", None, ["timeout", "timeout_seconds"])
         tool_timeout = int(raw_timeout) if raw_timeout else None

@@ -467,8 +467,7 @@ export default function NewBattle() {
             round_visibility:
               target ? "isolated" : visibility,
 
-            difficulty:
-              target ? undefined : difficulty,
+            difficulty,
 
             target_id:
               target?.id || undefined,
@@ -1207,19 +1206,10 @@ export default function NewBattle() {
               </div>
             </ControlCell>
 
-            {/* DIFFICULTY */}
             <ControlCell
               label="Difficulty"
-              value={titleCase(
-                target?.difficulty ||
-                  difficulty,
-              )}
+              value={titleCase(difficulty)}
             >
-              {target ? (
-                <div className="mt-3 border border-accent/30 bg-[var(--accent-soft)] px-3 py-3 font-mono text-[9px] uppercase tracking-[0.1em] text-accent">
-                  Locked by target manifest
-                </div>
-              ) : (
               <div className="mt-3 grid grid-cols-2 border border-border">
                 {DIFFICULTIES.map(
                   (level) => (
@@ -1243,7 +1233,11 @@ export default function NewBattle() {
                   ),
                 )}
               </div>
-              )}
+              {target ? (
+                <div className="mt-2 font-mono text-[8px] uppercase tracking-[0.08em] text-muted">
+                  Target default {titleCase(target.difficulty)}; override applies to this launch
+                </div>
+              ) : null}
             </ControlCell>
 
             {/* WORKSPACE ACCESS */}

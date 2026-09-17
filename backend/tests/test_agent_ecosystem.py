@@ -66,7 +66,7 @@ def test_specialized_builder_profiles_invariants():
     assert kata_builder is not None
     assert kata_builder.role == "builder"
     assert "Python Kata & Algorithmic Builder" in kata_builder.name
-    assert kata_builder.budgets.max_turns == 14
+    assert kata_builder.budgets.max_turns == 30
     assert kata_builder.tool_permissions.is_allowed("test")
 
 

@@ -323,5 +323,5 @@ def test_run_battle_loop_applies_difficulty(monkeypatch):
     )
     assert scores == {"m1": 1.0, "m2": 2.0}
     assert seen["cfg"]["difficulty"] == "novice"
-    assert seen["cfg"]["max_tool_steps"] == 8
+    assert seen["cfg"]["max_tool_steps"] == 40
     assert seen["cfg"]["scoring"]["weights"]["tests"] == 0.7

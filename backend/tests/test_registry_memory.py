@@ -71,10 +71,11 @@ def test_record_outcome_and_decay():
 def test_difficulty_presets():
     base = {"limits": {"max_tool_steps": 14}, "scoring": {"weights": {"tests": 0.6}}}
     novice = apply_difficulty(base, "novice")
-    assert novice["limits"]["max_tool_steps"] == 8
+    assert novice["limits"]["max_tool_steps"] == 40
     assert novice["difficulty"] == "novice"
     expert = apply_difficulty(base, "expert")
-    assert expert["limits"]["max_tool_steps"] == 30
+    assert expert["limits"]["max_tool_steps"] == 60
+    assert expert["limits"]["max_tool_turns"] == 30
     assert apply_difficulty(base, None) is base
 
 

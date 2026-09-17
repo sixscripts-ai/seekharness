@@ -92,15 +92,15 @@ class ToolPermissions(BaseModel):
 class AgentBudgets(BaseModel):
     """Resource, step, and turn budgets allocated to the agent."""
 
-    max_turns: int = Field(default=10, ge=1, le=100, description="Maximum model turns")
+    max_turns: int = Field(default=30, ge=1, le=100, description="Maximum model turns")
     max_steps: int = Field(
-        default=24, ge=1, le=200, description="Maximum tool execution steps"
+        default=60, ge=1, le=200, description="Maximum tool execution steps"
     )
     tool_timeout_seconds: int = Field(
         default=120, ge=5, le=1200, description="Per-tool execution timeout in seconds"
     )
     total_timeout_seconds: int = Field(
-        default=600, ge=30, le=3600, description="Total phase timeout in seconds"
+        default=900, ge=30, le=3600, description="Total phase timeout in seconds"
     )
 
 
