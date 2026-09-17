@@ -33,6 +33,7 @@ from agent_arena.target_library import materialize_fighter_visible_library
 image = (
     modal.Image.debian_slim(python_version="3.11")
     .pip_install_from_pyproject(str(Path(__file__).resolve().parent / "pyproject.toml"))
+    .pip_install("pytest>=8.0")
     .run_commands("playwright install --with-deps chromium")
     .apt_install("curl", "ca-certificates", "gnupg")
     .run_commands(
