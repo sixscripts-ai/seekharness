@@ -1,15 +1,14 @@
-import { BrowserRouter as Router, Routes, Route, useLocation } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import SiteHeader from "@/components/SiteHeader";
 import QuantumBackground from "@/components/QuantumBackground";
 import { useEffect, lazy, Suspense } from "react";
 import { subscribeSystemTheme } from "@/lib/theme";
+import { legacyCustomUrl, legacyTargetUrl } from "@/lib/challengeNavigation";
 
-const Home = lazy(() => import("@/pages/Home"));
 const Login = lazy(() => import("@/pages/Login"));
 const Signup = lazy(() => import("@/pages/Signup"));
 const Providers = lazy(() => import("@/pages/Providers"));
 const NewBattle = lazy(() => import("@/pages/NewBattle"));
-const CustomBattle = lazy(() => import("@/pages/CustomBattle"));
 const LiveBattle = lazy(() => import("@/pages/LiveBattle"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const History = lazy(() => import("@/pages/History"));
@@ -21,7 +20,7 @@ function PageLoader() {
     <div className="flex min-h-[50vh] items-center justify-center">
       <div className="relative flex flex-col items-center gap-3">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-cyan-500/20 border-t-cyan-400" />
-        <span className="font-mono text-xs text-cyan-400/70 tracking-wider uppercase">Loading surface...</span>
+        <span className="text-sm text-slate-400">Loading…</span>
       </div>
     </div>
   );
@@ -36,6 +35,8 @@ function isFullWidthPath(pathname: string): boolean {
     pathname === "/battles/custom" ||
     pathname === "/providers" ||
     pathname === "/keys" ||
+    pathname.startsWith("/settings") ||
+    pathname.startsWith("/challenges") ||
     pathname === "/leaderboard" ||
     pathname === "/targets" ||
     pathname.startsWith("/targets/") ||
@@ -50,6 +51,16 @@ function isLiveBattlePath(pathname: string): boolean {
     pathname !== "/battles/custom" &&
     pathname !== "/battles"
   );
+}
+
+function LegacyCustomBattle() {
+  const location = useLocation();
+  return <Navigate replace to={legacyCustomUrl(location.search)} />;
+}
+
+function LegacyTargets() {
+  const location = useLocation();
+  return <Navigate replace to={legacyTargetUrl(location.pathname, location.search, location.hash)} />;
 }
 
 function AppShell() {
@@ -77,19 +88,23 @@ function AppShell() {
         >
         <Suspense fallback={<PageLoader />}>
           <Routes>
-            <Route path="/" element={<Home />} />
+            <Route path="/" element={<History />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/providers" element={<Providers />} />
             <Route path="/keys" element={<Providers />} />
+            <Route path="/settings" element={<Providers />} />
+            <Route path="/settings/models" element={<Providers />} />
             <Route path="/battles" element={<History />} />
             <Route path="/history" element={<History />} />
             <Route path="/battles/new" element={<NewBattle />} />
-            <Route path="/battles/custom" element={<CustomBattle />} />
+            <Route path="/battles/custom" element={<LegacyCustomBattle />} />
             <Route path="/battles/:id" element={<LiveBattle />} />
             <Route path="/leaderboard" element={<Leaderboard />} />
-            <Route path="/targets" element={<Targets />} />
-            <Route path="/targets/:id" element={<TargetDetail />} />
+            <Route path="/targets" element={<LegacyTargets />} />
+            <Route path="/targets/:id" element={<LegacyTargets />} />
+            <Route path="/challenges" element={<Targets />} />
+            <Route path="/challenges/:id" element={<TargetDetail />} />
             <Route path="*" element={<div className="p-8 text-center text-zinc-400">404 — Not found</div>} />
           </Routes>
         </Suspense>

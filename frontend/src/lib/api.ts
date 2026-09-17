@@ -190,6 +190,8 @@ export type BattleOut = {
   arena_size: number;
   status: string;
   timeout_seconds: number;
+  created_at?: number | string | null;
+  failure_reason?: string | null;
   round_visibility: string;
   saved: boolean;
   context_mode?: "strict" | "adaptive" | string;
@@ -451,7 +453,7 @@ export async function streamBattle(
   }
 }
 
-function formatConfig(format: FormatOut): any {
+export function formatConfig(format: FormatOut): any {
   if (format.config && typeof format.config === "object") return format.config;
   if (typeof format.config === "string") {
     try {

@@ -107,10 +107,10 @@ export default function TargetDetail() {
           </h3>
           <p className="mt-2 text-xs text-zinc-400">{error || "The requested target is not installed in the registry."}</p>
           <Link
-            to="/targets"
+            to="/challenges"
             className="mono btn btn-primary mt-6 inline-flex h-9 items-center gap-2 px-5 text-xs font-bold"
           >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to Target Library
+            <ArrowLeft className="h-3.5 w-3.5" /> Back to Challenges
           </Link>
         </div>
       </div>
@@ -135,11 +135,11 @@ export default function TargetDetail() {
         <div className="relative z-10 mx-auto max-w-[1560px]">
           {/* Breadcrumb */}
           <Link
-            to="/targets"
+            to="/challenges"
             className="mono inline-flex items-center gap-2 text-xs font-semibold text-zinc-400 hover:text-white transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            <span>Target Library</span>
+            <span>Challenges</span>
             <span className="text-zinc-600">/</span>
             <span className="text-accent">{target.name}</span>
           </Link>
@@ -200,7 +200,7 @@ export default function TargetDetail() {
                 className="btn btn-primary flex h-12 items-center justify-center gap-2 px-8 text-sm font-extrabold shadow-[0_0_25px_rgba(255,0,160,0.45)] hover:shadow-[0_0_35px_rgba(255,0,160,0.6)] transition-all"
               >
                 <Play className="h-4 w-4 fill-current" />
-                <span>Run Target Challenge</span>
+                <span>Fight →</span>
                 <ArrowRight className="h-4 w-4" />
               </Link>
 
@@ -319,7 +319,7 @@ export default function TargetDetail() {
                       disclosed to authenticated sessions.
                     </span>
                     <Link
-                      to={`/login?next=${encodeURIComponent(`/targets/${encodeURIComponent(target.id)}`)}`}
+                      to={`/login?next=${encodeURIComponent(`/challenges/${encodeURIComponent(target.id)}`)}`}
                       className="mono ml-2 font-bold uppercase tracking-wider text-accent hover:text-accent-hover"
                     >
                       Sign In to Inspect →

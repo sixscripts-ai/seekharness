@@ -573,20 +573,19 @@ export default function Providers() {
             <Lock className="h-6 w-6" />
           </div>
           <div className="mono text-[11px] font-bold uppercase tracking-[0.2em] text-accent">
-            Vault Authentication
+            Settings
           </div>
           <h2 className="text-2xl font-extrabold text-white">
-            Model Registry Locked
+            Log in to manage models
           </h2>
           <p className="text-xs leading-relaxed text-zinc-400">
-            Log in to manage platform-hosted models, register personal API
-            credentials with AES-256 encryption, and verify live endpoints.
+            Connect your own providers, manage model visibility, and check available platform models.
           </p>
           <Link
-            to="/login"
+            to="/login?next=%2Fsettings%2Fmodels"
             className="btn btn-primary mx-auto flex h-11 w-full items-center justify-center gap-2 text-xs font-bold"
           >
-            <span>Authenticate Session</span>
+            <span>Log in</span>
           </Link>
         </div>
       </div>
@@ -595,7 +594,7 @@ export default function Providers() {
 
   return (
     <div className="min-h-[calc(100vh-56px)] bg-transparent py-8 text-foreground relative z-10">
-      <div className="mx-auto max-w-[1560px] space-y-10 px-4 sm:px-6">
+      <div className="mx-auto max-w-[1280px] space-y-10 px-4 sm:px-6">
         {/* ================================================================= */}
         {/* HERO CONTAINER WITH RADIAL HOME PAGE GLOWS                        */}
         {/* ================================================================= */}
@@ -607,23 +606,10 @@ export default function Providers() {
           {/* Header Row */}
           <div className="relative z-10 flex flex-col justify-between gap-6 border-b border-white/[0.08] pb-6 lg:flex-row lg:items-end">
             <div className="space-y-3">
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3.5 py-1 text-[11px] font-semibold text-cyan-300 shadow-[0_0_16px_rgba(0,210,255,0.25)]">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400 opacity-75"></span>
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-cyan-400"></span>
-                </span>
-                AUTHORITATIVE MODEL REGISTRY • ZERO FABRICATED LOGS
-              </div>
-
-              <h1 className="text-3xl font-extrabold tracking-[-0.03em] text-white md:text-4xl">
-                Model{" "}
-                <span className="bg-clip-text text-transparent bg-gradient-to-r from-[#00D2FF] via-[#38BDF8] to-[#D946EF] drop-shadow-[0_0_24px_rgba(0,210,255,0.45)]">
-                  Registry
-                </span>
-              </h1>
-              <p className="max-w-2xl text-xs leading-relaxed text-zinc-300">
-                Authoritative catalog of platform-hosted models and encrypted
-                personal credentials with real-time health verification.
+              <h1 className="font-display text-3xl font-semibold tracking-tight text-white">Settings</h1>
+              <h2 className="text-lg text-slate-200">Models and connections</h2>
+              <p className="max-w-xl text-sm leading-6 text-slate-400">
+                Manage platform models and your provider connections here. Choose the models for a run in New battle.
               </p>
             </div>
 
@@ -634,7 +620,7 @@ export default function Providers() {
                 className="qos-btn-glow flex h-11 items-center gap-2 px-6 text-xs font-bold"
               >
                 <Plus className="h-4 w-4" />
-                <span>Register Provider</span>
+                <span>Add connection</span>
               </button>
             </div>
           </div>

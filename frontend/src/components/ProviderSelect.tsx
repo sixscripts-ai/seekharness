@@ -26,8 +26,9 @@ export default function ProviderSelect({
 
   return (
     <select className="select h-11 font-mono text-[12px]" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="" disabled>Choose a model</option>
       {visibleHost.length > 0 && (
-        <optgroup label="Host — always available">
+        <optgroup label="Platform models">
           {visibleHost.map((p) => (
             <option key={p.id} value={p.id}>{formatOptionLabel(p)}</option>
           ))}
@@ -43,4 +44,3 @@ export default function ProviderSelect({
     </select>
   );
 }
-
