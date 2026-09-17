@@ -541,7 +541,9 @@ def _extract_judge_scores_from_events(
                 return None, None, {}
             latest_judge = judge_events[-1]
             jpayload = latest_judge.payload
-            default_model = latest_judge.model_id
+            default_model = getattr(latest_judge, "model_id", None)
+            if not default_model and isinstance(jpayload, dict):
+                default_model = jpayload.get("model_id")
         else:
             from .persistence import service
 

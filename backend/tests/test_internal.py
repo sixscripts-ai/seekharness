@@ -334,3 +334,38 @@ def test_event_bus_uuid_and_dedupe():
     events = event_bus.subscribe("b-test")
     ids = [e["event_id"] for e in events if e.get("event_id") in (e1["event_id"], e2["event_id"])]
     assert len(ids) == 2
+
+
+def test_extract_judge_scores_from_events_pg_event_record(monkeypatch):
+    import json
+    from unittest.mock import MagicMock
+    from agent_arena.finalization import _extract_judge_scores_from_events
+    from agent_arena.persistence.models import BattleEvent
+
+    mock_event = BattleEvent(
+        id="evt-1",
+        battle_id="b-test",
+        event_id="eid-1",
+        event_type="judge",
+        payload={
+            "phase": "judge",
+            "model_id": "system",
+            "artifact": json.dumps({
+                "scores": {"model-a": 88.0, "model-b": 50.0},
+                "judge_model": "judge-test-v1",
+                "justifications": {"model-a": "Good", "model-b": "Exceeded budget"},
+            }),
+        },
+    )
+
+    mock_session = MagicMock()
+    monkeypatch.setattr(
+        "agent_arena.persistence.repositories.events.event_list",
+        lambda sess, bid, event_type=None: [mock_event],
+    )
+
+    scores, judge_m, justs = _extract_judge_scores_from_events(mock_session, "b-test")
+    assert scores == {"model-a": 88.0, "model-b": 50.0}
+    assert judge_m == "judge-test-v1"
+    assert justs == {"model-a": "Good", "model-b": "Exceeded budget"}
+
