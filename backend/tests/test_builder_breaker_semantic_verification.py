@@ -31,6 +31,7 @@ def _bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         ({"notes.txt": "no entrypoint"}, "missing_exploit_entrypoint"),
         ({"exploit.py": b"\xff"}, "malformed_breaker_artifact"),
         ({"exploit.py": ""}, "malformed_breaker_artifact"),
+        ({"exploit.js": ""}, "malformed_breaker_artifact"),
     ],
 )
 def test_missing_or_malformed_breaker_artifact_fails_closed(

@@ -228,7 +228,11 @@ def _breaker_entrypoint(
     """Classify a Fighter executable without interpreting it as proof."""
     if not breaker_files:
         return "no_breaker_artifact", None
-    for rel, command in (("exploit.py", "python3 exploit.py"), ("exploit.sh", "bash exploit.sh")):
+    for rel, command in (
+        ("exploit.py", "python3 exploit.py"),
+        ("exploit.sh", "bash exploit.sh"),
+        ("exploit.js", "node exploit.js"),
+    ):
         if rel not in breaker_files:
             continue
         payload = breaker_files[rel]

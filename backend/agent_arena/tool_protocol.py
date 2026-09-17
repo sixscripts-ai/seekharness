@@ -951,6 +951,18 @@ _XML_TAG_RE = re.compile(
     r"<(?:tool_call|invoke|function_call)(?:\s+name=[\"']([a-zA-Z0-9_-]+)[\"'])?[^>]*>(.*?)</(?:tool_call|invoke|function_call)>",
     re.DOTALL | re.IGNORECASE,
 )
+_HERMES_FUNC_RE = re.compile(
+    r"<function=([a-zA-Z0-9_-]+)>(.*?)</function>",
+    re.DOTALL | re.IGNORECASE,
+)
+_HERMES_PARAM_RE = re.compile(
+    r"<parameter=([a-zA-Z0-9_-]+)>(.*?)</parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
+_ANTHROPIC_PARAM_RE = re.compile(
+    r"<parameter\s+name=[\"']([a-zA-Z0-9_-]+)[\"'][^>]*>(.*?)</parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
 _XML_NAME_RE = re.compile(
     r"<(?:name|tool_name|tool)>([a-zA-Z0-9_-]+)</(?:name|tool_name|tool)>", re.I
 )
@@ -960,8 +972,74 @@ _XML_ARGS_RE = re.compile(
 )
 
 
+def _extract_xml_args(tool_name: str, body: str) -> dict[str, Any]:
+    raw_args: dict[str, Any] = {}
+
+    # 1. Hermes style: <parameter=path>val</parameter>
+    for m in _HERMES_PARAM_RE.finditer(body):
+        raw_args[m.group(1).strip()] = m.group(2).strip()
+    if raw_args:
+        return _normalize_args(tool_name, raw_args)
+
+    # 2. Anthropic style: <parameter name="path">val</parameter>
+    for m in _ANTHROPIC_PARAM_RE.finditer(body):
+        raw_args[m.group(1).strip()] = m.group(2).strip()
+    if raw_args:
+        return _normalize_args(tool_name, raw_args)
+
+    # 3. Arguments container: <arguments>{"path": "..."}</arguments> or <arguments><cmd>...</cmd></arguments>
+    args_match = _XML_ARGS_RE.search(body)
+    if args_match:
+        raw_content = args_match.group(1).strip()
+        try:
+            raw_args = json.loads(raw_content)
+        except Exception:
+            for kv in re.finditer(
+                r"<([a-zA-Z0-9_-]+)>(.*?)</\1>", raw_content, re.DOTALL
+            ):
+                raw_args[kv.group(1)] = kv.group(2).strip()
+        if raw_args:
+            return _normalize_args(
+                tool_name, raw_args if isinstance(raw_args, dict) else {}
+            )
+
+    # 4. Direct child tags: <path>val</path>
+    for kv in re.finditer(r"<([a-zA-Z0-9_-]+)>(.*?)</\1>", body, re.DOTALL):
+        tag = kv.group(1).lower()
+        if tag not in ("name", "tool_name", "tool"):
+            raw_args[kv.group(1)] = kv.group(2).strip()
+    if raw_args:
+        return _normalize_args(tool_name, raw_args)
+
+    # 5. Embedded JSON in body
+    m = re.search(r"\{.*\}", body, re.DOTALL)
+    if m:
+        try:
+            parsed = json.loads(m.group(0))
+            if isinstance(parsed, dict):
+                return _normalize_args(tool_name, parsed)
+        except Exception:
+            pass
+
+    return _normalize_args(tool_name, raw_args)
+
+
 def parse_xml_tags(text: str) -> list[CanonicalToolCall]:
     calls: list[CanonicalToolCall] = []
+
+    # Check for Hermes functions first (e.g. <function=read>...</function>)
+    for m in _HERMES_FUNC_RE.finditer(text):
+        tool_name = m.group(1).strip().lower()
+        body = m.group(2)
+        args = _extract_xml_args(tool_name, body)
+        calls.append(
+            CanonicalToolCall(name=tool_name, arguments=args, dialect="xml_tag")
+        )
+
+    if calls:
+        return calls
+
+    # Check standard tags (<tool_call>, <invoke>, <function_call>)
     for m in _XML_TAG_RE.finditer(text):
         tool_name = m.group(1)
         body = m.group(2)
@@ -970,23 +1048,14 @@ def parse_xml_tags(text: str) -> list[CanonicalToolCall]:
             if nm:
                 tool_name = nm.group(1)
         if not tool_name:
+            h_m = _HERMES_FUNC_RE.search(body)
+            if h_m:
+                tool_name = h_m.group(1)
+                body = h_m.group(2)
+        if not tool_name:
             continue
         tool_name = tool_name.strip().lower()
-        raw_args: dict[str, Any] = {}
-        args_match = _XML_ARGS_RE.search(body)
-        if args_match:
-            raw_content = args_match.group(1).strip()
-            try:
-                raw_args = json.loads(raw_content)
-            except Exception:
-                # Fallback: key-value extraction
-                for kv in re.finditer(
-                    r"<([a-zA-Z0-9_-]+)>(.*?)</\1>", raw_content, re.DOTALL
-                ):
-                    raw_args[kv.group(1)] = kv.group(2).strip()
-        args = _normalize_args(
-            tool_name, raw_args if isinstance(raw_args, dict) else {}
-        )
+        args = _extract_xml_args(tool_name, body)
         calls.append(
             CanonicalToolCall(name=tool_name, arguments=args, dialect="xml_tag")
         )

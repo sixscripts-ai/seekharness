@@ -34,6 +34,7 @@ network: false
 verification:
   visible_command: PYTHONPATH=. pytest -q tests/visible
   hidden_command: PYTHONPATH=. pytest -q tests/hidden
+  breaker_evaluator: tests/breaker_harness.py
   ranked_requires_hidden_pass: true
 limits:
   max_tool_steps: 24

@@ -108,6 +108,60 @@ def test_standard_xml_tag_parsing():
     assert norm.calls[1].arguments == {"cmd": "pytest -q"}
 
 
+def test_hermes_xml_tag_parsing():
+    hermes_text = (
+        "<function=read>\n"
+        "<parameter=path>\n"
+        "TARGET.md\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    norm = normalize_response(hermes_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "xml_tag"
+    assert len(norm.calls) == 1
+    assert norm.calls[0].name == "read"
+    assert norm.calls[0].arguments == {"path": "TARGET.md"}
+
+
+def test_hermes_nested_and_multiple_parsing():
+    nested_text = (
+        "<tool_call>\n"
+        "<function=shell>\n"
+        "<parameter=cmd>cat TARGET.md</parameter>\n"
+        "</function>\n"
+        "</tool_call>\n"
+        "<function=read>\n"
+        "<parameter=path>app.py</parameter>\n"
+        "</function>"
+    )
+    norm = normalize_response(nested_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "xml_tag"
+    assert len(norm.calls) == 2
+    assert norm.calls[0].name == "shell"
+    assert norm.calls[0].arguments == {"cmd": "cat TARGET.md"}
+    assert norm.calls[1].name == "read"
+    assert norm.calls[1].arguments == {"path": "app.py"}
+
+
+def test_anthropic_xml_tag_parsing():
+    anthropic_text = (
+        "<invoke name=\"write\">\n"
+        "<parameter name=\"path\">solution.py</parameter>\n"
+        "<parameter name=\"content\">print('hello')</parameter>\n"
+        "</invoke>"
+    )
+    norm = normalize_response(anthropic_text)
+    assert norm.parse_status == "parsed"
+    assert norm.dialect == "xml_tag"
+    assert len(norm.calls) == 1
+    assert norm.calls[0].name == "write"
+    assert norm.calls[0].arguments == {"path": "solution.py", "content": "print('hello')"}
+
+
+
 def test_arena_fenced_json_parsing():
     json_text = (
         "Here are my actions:\n"
