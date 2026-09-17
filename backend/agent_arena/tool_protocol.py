@@ -1066,7 +1066,15 @@ def parse_xml_tags(text: str) -> list[CanonicalToolCall]:
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\[.*?\]|\{.*?\})\s*```", re.I | re.S)
 _ARENA_JSON_ARG_CONTAINERS = ("arguments", "parameters", "args", "action_input")
 _ARENA_JSON_ENVELOPE_KEYS = frozenset(
-    {"tool", "action", "type", "call_id", "id", *_ARENA_JSON_ARG_CONTAINERS}
+    {
+        "tool",
+        "action",
+        "type",
+        "call_id",
+        "id",
+        "function",
+        *_ARENA_JSON_ARG_CONTAINERS,
+    }
 )
 
 
@@ -1117,7 +1125,11 @@ def _arena_json_flat_args(
     skip = set(_ARENA_JSON_ENVELOPE_KEYS)
     if name_is_tool_identity:
         skip.add("name")
-    return {key: value for key, value in obj.items() if key not in skip}
+    return {
+        key: value
+        for key, value in obj.items()
+        if key not in skip and not (key == "index" and isinstance(value, int))
+    }
 
 
 def _arena_json_merge_args(
@@ -1288,7 +1300,12 @@ def normalize_response(
             # Supplement with flat-format fields when standard container is empty.
             # Some providers emit {"tool":"write","path":"...","content":"..."}
             # instead of {"function":{"name":"write","arguments":"{...}"}}.
-            if not raw_args or (len(raw_args) == 1 and "raw" in raw_args):
+            has_explicit_container = bool(
+                tc.get("function") or "arguments" in tc or "parameters" in tc
+            )
+            if not has_explicit_container and (
+                not raw_args or (len(raw_args) == 1 and "raw" in raw_args)
+            ):
                 flat_fields = _arena_json_flat_args(tc, name_is_tool_identity=False)
                 if flat_fields:
                     flat = _normalize_args(name, flat_fields)

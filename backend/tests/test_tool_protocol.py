@@ -66,6 +66,31 @@ def test_openai_native_tool_calls():
     assert norm.calls[1].arguments == {"cmd": "npm test"}  # normalized from command
 
 
+def test_openai_native_empty_arguments_no_pollution():
+    resp = ModelResponse(
+        text="",
+        native_tool_calls=[
+            {
+                "id": "call_test_empty",
+                "type": "function",
+                "index": 0,
+                "function": {
+                    "name": "test",
+                    "arguments": "{}",
+                },
+            }
+        ],
+    )
+    norm = normalize_response(resp)
+    assert norm.parse_status == "native"
+    assert norm.dialect == "openai_native"
+    assert len(norm.calls) == 1
+    assert norm.calls[0].name == "test"
+    assert norm.calls[0].arguments == {}
+    assert "index" not in norm.calls[0].arguments
+    assert "function" not in norm.calls[0].arguments
+
+
 def test_kimi_token_xml_parsing():
     kimi_text = (
         "I will inspect the package.json and formatter.<|open|>tools<|sep|>"
