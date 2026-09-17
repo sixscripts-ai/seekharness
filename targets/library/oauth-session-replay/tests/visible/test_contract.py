@@ -18,7 +18,7 @@ def test_oauth_flow_authorized():
     # 1. Authorize
     auth_res = client.post("/oauth/authorize", json={
         "client_id": "client_1",
-        "code_challenge": "E9Melhoa2OwvFrGMTJguCH5rtx6441C8E_08C61mqAw",
+        "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
         "code_challenge_method": "S256"
     })
     assert auth_res.status_code == 200

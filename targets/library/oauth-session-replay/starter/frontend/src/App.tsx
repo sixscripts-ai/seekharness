@@ -14,7 +14,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           client_id: 'client_webapp',
-          code_challenge: 'E9Melhoa2OwvFrGMTJguCH5rtx6441C8E_08C61mqAw',
+          code_challenge: 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
           code_challenge_method: 'S256'
         })
       })

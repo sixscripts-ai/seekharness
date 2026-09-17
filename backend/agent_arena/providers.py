@@ -602,31 +602,34 @@ def normalize_reasoning_effort(effort: str | None) -> str | None:
 
 
 def validate_reasoning_effort(arena_model_id: str, effort: str | None) -> str | None:
-    spec = get_model_spec(arena_model_id)
     normalized = normalize_reasoning_effort(effort)
-    if normalized is None:
-        return None
-    if normalized not in spec.reasoning_efforts:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Model {arena_model_id} does not support reasoning effort "
-                f"{normalized}"
-            ),
-        )
+    if arena_model_id.startswith("host:"):
+        spec = get_model_spec(arena_model_id)
+        if normalized is None:
+            return None
+        if normalized not in spec.reasoning_efforts:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model {arena_model_id} does not support reasoning effort "
+                    f"{normalized}"
+                ),
+            )
+        return normalized
     return normalized
 
 
 def reasoning_request_fields(arena_model_id: str, effort: str | None) -> dict:
     """Provider-layer payload fragment. Battle code must not branch on vendor."""
-    spec = get_model_spec(arena_model_id)
-    provider = get_provider_spec(spec.provider_id)
     normalized = validate_reasoning_effort(arena_model_id, effort)
     if normalized is None or normalized == REASONING_OFF:
         return {}
-    if provider.id == OPENROUTER_PROVIDER_ID:
-        or_effort = REASONING_XHIGH if normalized == REASONING_MAX else normalized
-        return {"reasoning": {"effort": or_effort}}
+    if arena_model_id.startswith("host:"):
+        spec = get_model_spec(arena_model_id)
+        provider = get_provider_spec(spec.provider_id)
+        if provider.id == OPENROUTER_PROVIDER_ID:
+            or_effort = REASONING_XHIGH if normalized == REASONING_MAX else normalized
+            return {"reasoning": {"effort": or_effort}}
     return {"reasoning_effort": normalized}
 
 

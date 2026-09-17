@@ -259,6 +259,18 @@ def test_unknown_model_ids_fail_predictably():
     assert effort_exc.value.status_code == 404
 
 
+def test_custom_provider_model_reasoning_effort():
+    from agent_arena import providers
+
+    # Custom models (non-host IDs) should not raise 404 Unknown model_id
+    assert providers.validate_reasoning_effort("custom-user-model-123", None) is None
+    assert providers.validate_reasoning_effort("custom-user-model-123", "high") == "high"
+    assert providers.reasoning_request_fields("custom-user-model-123", None) == {}
+    assert providers.reasoning_request_fields("custom-user-model-123", "high") == {
+        "reasoning_effort": "high"
+    }
+
+
 def test_model_capabilities_are_model_specific():
     from agent_arena import providers
 
