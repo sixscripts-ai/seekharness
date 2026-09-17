@@ -1,7 +1,8 @@
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import SiteHeader from "@/components/SiteHeader";
+import SiteSidebar from "@/components/SiteSidebar";
 import QuantumBackground from "@/components/QuantumBackground";
-import { useEffect, lazy, Suspense } from "react";
+import { useEffect, useState, lazy, Suspense } from "react";
 import { subscribeSystemTheme } from "@/lib/theme";
 import { legacyCustomUrl, legacyTargetUrl } from "@/lib/challengeNavigation";
 
@@ -67,6 +68,7 @@ function AppShell() {
   const loc = useLocation();
   const fullWidth = isFullWidthPath(loc.pathname);
   const liveBattle = isLiveBattlePath(loc.pathname);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.add("theme-void");
@@ -74,13 +76,15 @@ function AppShell() {
   }, []);
 
   return (
-    <div className="relative min-h-screen text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200">
+    <div className="relative min-h-screen text-slate-100 selection:bg-cyan-500/30 selection:text-cyan-200 luxe-canvas">
       <QuantumBackground />
-      <div className="relative z-10">
-        <SiteHeader />
+      <SiteSidebar mobileOpen={mobileSidebarOpen} onCloseMobile={() => setMobileSidebarOpen(false)} />
+      <div className="relative z-10 flex min-h-screen flex-col lg:pl-64">
+        <SiteHeader onToggleSidebar={() => setMobileSidebarOpen(v => !v)} />
         <main
           className={[
-            fullWidth ? "px-0 py-0" : "mx-auto max-w-[1560px] px-6 py-8",
+            "flex-1",
+            fullWidth ? "px-0 py-0" : "mx-auto w-full max-w-[1560px] px-6 py-8",
             liveBattle ? "meticulous-ignore" : "",
           ]
             .filter(Boolean)

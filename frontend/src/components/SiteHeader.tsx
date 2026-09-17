@@ -1,21 +1,19 @@
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Menu, Plus, Settings, X } from "lucide-react";
+import { Menu, Plus, Search, Settings, Swords, Shield, Trophy } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
-const navigation = [
-  { href: "/battles", label: "Battles" },
-  { href: "/challenges", label: "Challenges" },
-  { href: "/leaderboard", label: "Leaderboard" },
-];
+interface SiteHeaderProps {
+  onToggleSidebar?: () => void;
+}
 
-export default function SiteHeader() {
-  const { user, logout, init } = useAuth();
-  const [menuOpen, setMenuOpen] = useState(false);
+export default function SiteHeader({ onToggleSidebar }: SiteHeaderProps) {
+  const { user, init } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+
   useEffect(() => { void init(); }, [init]);
-  useEffect(() => { setMenuOpen(false); }, [location.pathname, location.search]);
 
   const active = (href: string) => href === "/battles"
     ? location.pathname === "/" || location.pathname === "/history" || location.pathname.startsWith("/battles")
@@ -23,33 +21,122 @@ export default function SiteHeader() {
       ? /^\/(challenges|targets)(\/|$)/.test(location.pathname)
       : location.pathname.startsWith(href);
 
+  function handleSearchSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    if (location.pathname.startsWith("/challenges")) {
+      navigate(`/challenges?q=${encodeURIComponent(searchQuery.trim())}`);
+    } else {
+      navigate(`/battles?q=${encodeURIComponent(searchQuery.trim())}`);
+    }
+  }
+
   return (
-    <header className="sticky top-0 z-50 border-b border-white/10 bg-[#08090D]/95 backdrop-blur-md">
-      <div className="mx-auto flex h-16 max-w-[1440px] items-center gap-3 px-4 sm:gap-4 sm:px-6">
-        <Link to="/battles" className="mr-auto flex items-center gap-2 font-display text-lg font-semibold tracking-tight text-white md:mr-6">
-          <span aria-hidden="true" className="grid h-8 w-8 place-items-center rounded-lg border border-cyan-400/40 bg-cyan-400/10 text-sm text-cyan-300">S</span>
-          <span>SeekHarness</span>
-        </Link>
-        <nav aria-label="Main navigation" className="mr-auto hidden items-center gap-1 md:flex">
-          {navigation.map(link => <Link key={link.href} to={link.href} aria-current={active(link.href) ? "page" : undefined}
-            className={`rounded-lg px-3 py-2 text-sm transition-colors ${active(link.href) ? "bg-white/5 text-cyan-300" : "text-slate-400 hover:text-white"}`}>{link.label}</Link>)}
-        </nav>
-        <Link to="/battles/new" className="flex min-h-9 items-center gap-1.5 rounded-lg bg-cyan-300 px-3 text-sm font-semibold text-slate-950 hover:bg-cyan-200">
-          <Plus className="h-4 w-4" aria-hidden="true" /><span className="hidden sm:inline">New battle</span><span className="sm:hidden">New</span>
-        </Link>
-        <Link to="/settings" aria-label="Settings" aria-current={location.pathname.startsWith("/settings") ? "page" : undefined} className="hidden rounded-lg p-2 text-slate-400 hover:text-white md:block" title="Settings">
-          <Settings className="h-5 w-5" />
-        </Link>
-        {user ? <button type="button" title="Log out" aria-label="Log out" onClick={async () => { await logout(); navigate("/battles"); }} className="hidden rounded-lg p-2 text-slate-400 hover:text-white md:block"><LogOut className="h-4 w-4" /></button>
-          : <Link to="/login" className="hidden text-sm text-slate-300 hover:text-white md:block">Log in</Link>}
-        <button type="button" aria-label={menuOpen ? "Close navigation" : "Open navigation"} aria-expanded={menuOpen} aria-controls="mobile-navigation" onClick={() => setMenuOpen(!menuOpen)} onKeyDown={event => { if (event.key === "Escape") setMenuOpen(false); }} className="rounded-lg p-2 text-slate-300 md:hidden">
-          {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-        </button>
+    <header className="sticky top-0 z-30 border-b border-white/[0.08] bg-[#07080B]/80 backdrop-blur-xl">
+      <div className="flex h-16 items-center justify-between gap-4 px-4 sm:px-6">
+        
+        {/* Left: Mobile Drawer Trigger + Breadcrumb Tabs */}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white lg:hidden"
+            aria-label="Toggle navigation menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+
+          {/* Desktop segmented view pill */}
+          <nav aria-label="Quick tabs" className="hidden sm:flex items-center gap-1 rounded-xl border border-white/[0.08] bg-white/[0.03] p-1 shadow-inner">
+            <Link
+              to="/battles"
+              aria-current={active("/battles") ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                active("/battles")
+                  ? "bg-white/[0.09] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15)] border border-white/10"
+                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+              }`}
+            >
+              <Swords className="h-3.5 w-3.5" />
+              <span>Battles</span>
+            </Link>
+            <Link
+              to="/challenges"
+              aria-current={active("/challenges") ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                active("/challenges")
+                  ? "bg-white/[0.09] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15)] border border-white/10"
+                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+              }`}
+            >
+              <Shield className="h-3.5 w-3.5" />
+              <span>Challenges</span>
+            </Link>
+            <Link
+              to="/leaderboard"
+              aria-current={active("/leaderboard") ? "page" : undefined}
+              className={`flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
+                active("/leaderboard")
+                  ? "bg-white/[0.09] text-white shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15)] border border-white/10"
+                  : "text-slate-400 hover:text-slate-200 border border-transparent"
+              }`}
+            >
+              <Trophy className="h-3.5 w-3.5" />
+              <span>Leaderboard</span>
+            </Link>
+          </nav>
+        </div>
+
+        {/* Center: Search Arena (Cmd+K) */}
+        <form onSubmit={handleSearchSubmit} className="relative flex-1 max-w-md hidden md:block">
+          <Search className="absolute left-3.5 top-2.5 h-4 w-4 text-slate-500" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search Arena (Cmd+K)"
+            aria-label="Search Arena"
+            className="luxe-input w-full pl-9 pr-14 py-1.5 text-xs placeholder:text-slate-500"
+          />
+          <kbd className="pointer-events-none absolute right-2.5 top-2 hidden h-5 select-none items-center gap-0.5 rounded border border-white/10 bg-white/5 px-1.5 font-mono text-[10px] font-medium text-slate-400 sm:flex">
+            ⌘K
+          </kbd>
+        </form>
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-3">
+          <Link
+            to="/battles/new"
+            className="btn-luxe-primary h-9 px-3.5 text-xs gap-1.5"
+          >
+            <Plus className="h-3.5 w-3.5 text-cyan-300" />
+            <span className="font-semibold">New Battle</span>
+          </Link>
+
+          <Link
+            to="/settings"
+            aria-label="Settings"
+            className="rounded-lg border border-white/[0.08] bg-white/[0.03] p-2 text-slate-400 hover:bg-white/[0.08] hover:text-white transition-colors"
+            title="Settings & Model Registry"
+          >
+            <Settings className="h-4 w-4" />
+          </Link>
+
+          {user ? (
+            <div className="relative flex h-8 w-8 items-center justify-center rounded-full border border-white/20 bg-gradient-to-tr from-cyan-500/20 to-purple-500/20 text-xs font-bold text-white shadow-inner">
+              {user.name ? user.name[0].toUpperCase() : "U"}
+            </div>
+          ) : (
+            <Link
+              to="/login"
+              className="text-xs font-medium text-slate-300 hover:text-white px-2 py-1"
+            >
+              Sign in
+            </Link>
+          )}
+        </div>
+
       </div>
-      {menuOpen && <nav id="mobile-navigation" aria-label="Mobile navigation" className="space-y-1 border-t border-white/10 px-4 py-3 md:hidden">
-        {[...navigation, { href: "/settings", label: "Settings" }].map(link => <Link key={link.href} to={link.href} aria-current={active(link.href) ? "page" : undefined} className={`block rounded-lg px-3 py-3 text-sm ${active(link.href) ? "bg-white/5 text-cyan-300" : "text-slate-300"}`}>{link.label}</Link>)}
-        {user ? <button type="button" className="px-3 py-3 text-sm text-slate-400" onClick={async () => { await logout(); setMenuOpen(false); navigate("/battles"); }}>Log out</button> : <Link to="/login" className="block px-3 py-3 text-sm text-slate-300">Log in</Link>}
-      </nav>}
     </header>
   );
 }
