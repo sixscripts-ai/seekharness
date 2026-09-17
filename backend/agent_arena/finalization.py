@@ -527,6 +527,58 @@ def _trusted_breaker_semantic_passed(record: dict) -> bool:
     return all(str(item) in _TRUSTED_BREAKER_FINDINGS for item in findings)
 
 
+def _extract_judge_scores_from_events(
+    session: Session | None,
+    battle_id: str,
+) -> tuple[dict[str, float] | None, str | None, dict[str, str]]:
+    """Extract authentic judge event scores, judge model, and justifications if present."""
+    try:
+        if session is not None:
+            from .persistence import repositories
+
+            judge_events = repositories.events.event_list(session, battle_id, event_type="judge")
+            if not judge_events:
+                return None, None, {}
+            latest_judge = judge_events[-1]
+            jpayload = latest_judge.payload
+            default_model = latest_judge.model_id
+        else:
+            from .persistence import service
+
+            events = service.events_load(battle_id)
+            judge_events = [e for e in events if isinstance(e, dict) and e.get("type") == "judge"]
+            if not judge_events:
+                return None, None, {}
+            latest_judge = judge_events[-1]
+            jpayload = (latest_judge.get("data") or {}).get("artifact") or latest_judge.get("payload")
+            default_model = latest_judge.get("model_id")
+
+        if isinstance(jpayload, str):
+            try:
+                jpayload = json.loads(jpayload)
+            except Exception:
+                jpayload = {}
+        if not isinstance(jpayload, dict):
+            return None, None, {}
+
+        jart = jpayload.get("artifact")
+        if isinstance(jart, str) and jart.strip().startswith("{"):
+            try:
+                jart = json.loads(jart)
+            except Exception:
+                pass
+        jdata = jart if isinstance(jart, dict) else jpayload
+        jscores = jdata.get("scores")
+        if isinstance(jscores, dict) and any(float(v) > 0 for v in jscores.values()):
+            scores_map = {str(k): float(v) for k, v in jscores.items()}
+            judge_m = str(jdata.get("judge_model") or default_model or "arena-judge")
+            justs = {str(k): str(v) for k, v in (jdata.get("justifications") or {}).items()}
+            return scores_map, judge_m, justs
+    except Exception:
+        pass
+    return None, None, {}
+
+
 def _merge_trusted_authority(
     telemetry: list[dict],
     trusted: list[dict],
@@ -862,6 +914,19 @@ def finalize_battle(
                 )
             )
             effective_scores = dict(effective_scores or {})
+            judge_justifications: dict[str, str] = {}
+            if (not effective_scores) and (
+                fmt_cfg.get("judge_only")
+                or fmt_cfg.get("evaluation_mode") == "quick"
+                or not battle_dict.get("target_id")
+            ):
+                jscores, jjudge_model, jjusts = _extract_judge_scores_from_events(session, battle_id)
+                if jscores:
+                    effective_scores = jscores
+                    score_source = "arena-judge-v1"
+                    finalize_error = None
+                    judge_model = jjudge_model or judge_model
+                    judge_justifications = jjusts
 
             now_utc = datetime.now(timezone.utc)
             if not effective_scores:
@@ -893,8 +958,9 @@ def finalize_battle(
                     or ("TEST_PASS" if passed else "TEST_FAIL")
                 )
                 if not r_payload.get("_trusted"):
-                    sc = 0.0
-                    passed = False
+                    if score_source != "arena-judge-v1":
+                        sc = 0.0
+                        passed = False
                     term_reason = UNTRUSTED_EXECUTION
                 part_status = participant_status_from_outcome(
                     term_reason, passed=passed
@@ -947,13 +1013,15 @@ def finalize_battle(
 
             score_judge = judge_model or "arena-deterministic"
             for mid, sc in effective_scores.items():
+                just = judge_justifications.get(mid)
+                score_just = f"Finalized via {score_source}: {just[:200]}" if just else f"Finalized via {score_source}"
                 repositories.scores.score_insert(
                     session,
                     battle_id=battle_id,
                     model_id=mid,
                     score=float(sc),
                     judge_model=score_judge,
-                    justification=f"Finalized via {score_source}",
+                    justification=score_just,
                 )
 
             learnable = score_source == "arena-score-v1" and all(
@@ -1015,6 +1083,19 @@ def finalize_battle(
             )
         )
         effective_scores = dict(effective_scores or {})
+        judge_justifications: dict[str, str] = {}
+        if (not effective_scores) and (
+            fmt_cfg.get("judge_only")
+            or fmt_cfg.get("evaluation_mode") == "quick"
+            or not battle_dict.get("target_id")
+        ):
+            jscores, jjudge_model, jjusts = _extract_judge_scores_from_events(None, battle_id)
+            if jscores:
+                effective_scores = jscores
+                score_source = "arena-judge-v1"
+                finalize_error = None
+                judge_model = jjudge_model or judge_model
+                judge_justifications = jjusts
 
         if not effective_scores:
             return _retryable_incomplete_payload(
@@ -1023,12 +1104,14 @@ def finalize_battle(
         status = "completed"
         score_judge = judge_model or "arena-deterministic"
         for mid, sc in effective_scores.items():
+            just = judge_justifications.get(mid)
+            score_just = f"Finalized via {score_source}: {just[:200]}" if just else f"Finalized via {score_source}"
             service.score_upsert(
                 battle_id,
                 mid,
                 float(sc),
                 judge_model=score_judge,
-                justification=f"Finalized via {score_source}",
+                justification=score_just,
             )
         learnable = score_source == "arena-score-v1" and all(
             is_learnable_model_outcome(str(r.get("outcome") or "")) for r in results

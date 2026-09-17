@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from .sandbox.executors._command_guard import command_block_reason
+from .breaker_isolation import BreakerExecution, run_breaker_isolated
 from .target_library import TargetBundle, compute_bundle_hash, validate_safe_relative_path
 
 # Fighter-authored pytest/Python config must never become the verifier harness.
@@ -307,8 +308,11 @@ def _run_breaker_evaluator(
     *,
     timeout_seconds: int = 10,
     builder_hidden_passed: bool = False,
+    breaker_execution: BreakerExecution | None = None,
 ) -> TrustedBreakerSemanticEvidence | None:
     """Run target-owned breaker evaluator script if present in private fixtures."""
+    # ``breaker_files`` remains in the call signature for compatibility with
+    # existing verifier callers, but is intentionally never serialized here.
     entrypoint = bundle.verification.breaker_evaluator
     if not (bundle.private_fixture_files and entrypoint in bundle.private_fixture_files):
         return None
@@ -319,7 +323,22 @@ def _run_breaker_evaluator(
         "manifest_hash": bundle.manifest_hash,
         "evaluator_hash": bundle.evaluator_hash,
         "builder_files": _submission_text({**bundle.starter_files, **builder_files}),
-        "breaker_files": _submission_text(breaker_files),
+        # The Breaker already ran in a separate execution boundary. Never copy
+        # its source into this private evaluator process: the evaluator Volume
+        # is trusted-only, and read access to it would let a malicious artifact
+        # recover hidden harness material. Evaluators consume only the bounded
+        # execution observation below and their target-owned postconditions.
+        "breaker_files": {},
+        "breaker_execution": {
+            "schema_version": 1,
+            "started": bool(breaker_execution and breaker_execution.started),
+            "completed": bool(breaker_execution and breaker_execution.completed),
+            "return_code": (
+                breaker_execution.return_code if breaker_execution is not None else None
+            ),
+            "stdout": breaker_execution.stdout if breaker_execution is not None else "",
+            "stderr": breaker_execution.stderr if breaker_execution is not None else "",
+        },
     }
     encoded = json.dumps(request, sort_keys=True, separators=(",", ":"))
 
@@ -605,75 +624,45 @@ def verify_builder_breaker_submission(
     execution_completed = False
     process_return_code: int | None = None
 
-    with tempfile.TemporaryDirectory(prefix=f"arena-breaker-{bundle.id}-") as tmp_dir:
-        work = pathlib.Path(tmp_dir).resolve()
+    breaker_execution: BreakerExecution | None = None
 
-        # Materialize starter
-        for rel_path, data in bundle.starter_files.items():
-            dest = (work / rel_path).resolve()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(data)
-
-        # Overlay Builder's submitted solution
-        for rel_path, payload in builder_files.items():
-            if _blocked_submission_path(rel_path):
-                continue
-            clean_rel = str(rel_path).replace("\\", "/").strip()
-            dest = (work / clean_rel).resolve()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            raw_bytes = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
-            dest.write_bytes(raw_bytes)
-
-        # Overlay Breaker's submitted exploit scripts
-        for rel_path, payload in breaker_files.items():
-            if _blocked_submission_path(rel_path):
-                continue
-            clean_rel = str(rel_path).replace("\\", "/").strip()
-            dest = (work / clean_rel).resolve()
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            raw_bytes = payload if isinstance(payload, bytes) else str(payload).encode("utf-8")
-            dest.write_bytes(raw_bytes)
-
-        # Evaluator files must be absent from the submitted exploit's tree.
-        # Dispatch later in a fresh private directory using original snapshots.
-
-        for script in work.rglob("*.sh"):
-            script.chmod(0o755)
-
-        ini_path = _write_arena_pytest_harness(work)
-        env = _build_hardened_env(work, extra_env)
-
-        # This execution is Fighter telemetry only. A return code or output
-        # marker is never a trusted exploit fact; a target-owned runtime or
-        # evaluator must separately provide TrustedBreakerSemanticEvidence.
-        if builder_ev.details.get("blocked"):
-            trusted_semantic_evidence = TrustedBreakerSemanticEvidence(
-                verifier_error="verifier_execution_refused"
+    # This execution is Fighter telemetry only. It happens in a separate Modal
+    # Sandbox in production, which has no evaluator Volume attached. A return
+    # code or output marker is never trusted semantic evidence.
+    if builder_ev.details.get("blocked"):
+        trusted_semantic_evidence = TrustedBreakerSemanticEvidence(
+            verifier_error="verifier_execution_refused"
+        )
+    elif breaker_cmd:
+        block_reason = command_block_reason(
+            breaker_cmd, allow_network=bundle.network
+        )
+        if block_reason:
+            breaker_out = f"Breaker command blocked: {block_reason}"
+        else:
+            execution_files = {
+                **bundle.starter_files,
+                **builder_files,
+                **breaker_files,
+            }
+            breaker_execution = run_breaker_isolated(
+                breaker_cmd,
+                execution_files,
+                timeout_seconds=timeout_seconds,
+                allow_network=bundle.network,
+                runtime=bundle.runtime,
             )
-        elif breaker_cmd:
-            breaker_cmd = _harden_pytest_command(
-                breaker_cmd, ini_path=ini_path, root=work
+            breaker_out = (
+                (breaker_execution.stdout or "")
+                + (breaker_execution.stderr or "")
             )
-            block_reason = command_block_reason(breaker_cmd, allow_network=bundle.network)
-            if block_reason:
-                breaker_out = f"Breaker command blocked: {block_reason}"
-            else:
-                try:
-                    execution_started = True
-                    r_brk = subprocess.run(
-                        breaker_cmd,
-                        cwd=work,
-                        shell=True,
-                        text=True,
-                        capture_output=True,
-                        timeout=timeout_seconds,
-                        env=env,
-                    )
-                    breaker_out = (r_brk.stdout or "") + (r_brk.stderr or "")
-                    execution_completed = True
-                    process_return_code = int(r_brk.returncode)
-                except Exception as exc:
-                    breaker_out = f"Breaker exploit execution error: {exc}"
+            execution_started = breaker_execution.started
+            execution_completed = breaker_execution.completed
+            process_return_code = breaker_execution.return_code
+            if breaker_execution.error:
+                trusted_semantic_evidence = TrustedBreakerSemanticEvidence(
+                    verifier_error=breaker_execution.error
+                )
 
     if (
         trusted_semantic_evidence is None
@@ -686,6 +675,7 @@ def verify_builder_breaker_submission(
             breaker_files,
             timeout_seconds=timeout_seconds,
             builder_hidden_passed=builder_ev.hidden_passed,
+            breaker_execution=breaker_execution,
         )
 
     duration = time.time() - start_time
@@ -742,5 +732,8 @@ def verify_builder_breaker_submission(
         details={
             "builder_evidence": builder_ev.details,
             "breaker_command": breaker_cmd,
+            "breaker_execution_error": (
+                breaker_execution.error if breaker_execution is not None else ""
+            ),
         },
     )

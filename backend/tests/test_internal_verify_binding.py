@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from agent_arena.battle_token import issue_battle_token
-from agent_arena.internal_router import VerifyBody, _derive_verify_binding
+from agent_arena.internal_router import (
+    VerifyBody,
+    _derive_verify_binding,
+    _role_verification_status,
+)
 from agent_arena.target_library import load_target_bundle
 from fastapi import HTTPException
 
@@ -108,6 +112,34 @@ def test_derive_accepts_matching_hints():
     assert phase == "solve"
     assert role == "fighter"
     assert model_id == "model-a"
+
+
+def test_role_status_preserves_trusted_infrastructure_failure():
+    class Evidence:
+        breaker_passed = False
+        builder_passed = False
+        verification_status = "infra_failure"
+        breaker_semantic_evidence = {
+            "verifier_error": "breaker_isolation_unavailable:RuntimeError"
+        }
+
+    assert _role_verification_status(Evidence(), "breaker") == (
+        False,
+        "infra_failure",
+    )
+
+
+def test_role_status_preserves_trusted_verified_result():
+    class Evidence:
+        breaker_passed = False
+        builder_passed = True
+        verification_status = "verified_fail"
+        breaker_semantic_evidence = {}
+
+    assert _role_verification_status(Evidence(), "builder") == (
+        True,
+        "verified_fail",
+    )
 
 
 def test_http_verify_unbound_rejected(client, monkeypatch):

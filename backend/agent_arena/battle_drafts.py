@@ -206,6 +206,13 @@ def create_draft(body: BattleDraftCreate, user_id: str = Depends(get_current_use
     return draft_out(doc)
 
 
+@router.get("/templates")
+def list_battle_templates():
+    from .battle_templates import PREBUILT_TEMPLATES
+
+    return PREBUILT_TEMPLATES
+
+
 @router.get("/{draft_id}")
 def get_draft(draft_id: str, user_id: str = Depends(get_current_user)):
     from .persistence import service

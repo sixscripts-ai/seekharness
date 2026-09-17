@@ -3512,11 +3512,14 @@ class AdvancedExecutor(Executor):
                     bundle, builder_files or {}, breaker_files or {}
                 )
                 role_passed = ev.breaker_passed if role == "breaker" else ev.builder_passed
-                role_status = (
-                    "verified_pass"
-                    if role_passed
-                    else ("infra_failure" if getattr(ev, "verifier_error", None) else "verified_fail")
-                )
+                role_status = str(getattr(ev, "verification_status", "") or "")
+                if role_status not in {"infra_failure", "verified_pass", "verified_fail"}:
+                    semantic = getattr(ev, "breaker_semantic_evidence", {}) or {}
+                    role_status = (
+                        "infra_failure"
+                        if isinstance(semantic, dict) and semantic.get("verifier_error")
+                        else ("verified_pass" if role_passed else "verified_fail")
+                    )
                 public = {
                     "target_id": ev.target_id,
                     "passed": role_passed,

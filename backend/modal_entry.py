@@ -97,6 +97,9 @@ if _CURRENT_SHA == "unknown":
         "ARENA_SKILLS_ROOT": "/opt/arena-skills",
         "ARENA_TARGETS_DIR": "/opt/arena-targets",
         "ARENA_EVALUATOR_DIR": EVALUATOR_MOUNT_PATH,
+        # Breaker artifacts execute in a separate Modal Sandbox without this
+        # evaluator Volume. Never fall back to same-container execution here.
+        "ARENA_BREAKER_EXECUTION_MODE": "modal",
         "ARENA_BUILD_SHA": _CURRENT_SHA,
         **_PERSISTENCE_ENV,
         **canonical_skill_runtime_env(),

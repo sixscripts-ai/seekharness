@@ -644,3 +644,62 @@ def test_internal_finalize_reread_completes_without_fail_closed(monkeypatch):
     )
     assert n["i"] == 2
     assert resp["status"] == "completed"
+
+
+def test_judge_only_finalizes_with_authoritative_judge_event(monkeypatch):
+    import json
+
+    battle = {
+        "id": "b-judge-only",
+        "user_id": "u1",
+        "format_id": "custom-prompt-battle",
+        "status": "running",
+        "arena_size": 2,
+        "model_ids": ["model-a", "model-b"],
+        "ranked": False,
+        "target_id": None,
+        "battle_config": {"judge_only": True, "evaluation_mode": "quick"},
+    }
+    stored_scores: dict = {}
+    updates: list[dict] = []
+
+    from agent_arena.persistence import service
+
+    judge_event = {
+        "type": "judge",
+        "model_id": "judge-expert",
+        "data": {
+            "artifact": json.dumps({
+                "scores": {"model-a": 85.0, "model-b": 40.0},
+                "justifications": {"model-a": "Faithful attack", "model-b": "Defensive inversion"},
+                "judge_model": "judge-expert",
+            })
+        },
+    }
+
+    monkeypatch.setattr(service, "using_postgres", lambda: False)
+    monkeypatch.setattr("agent_arena.finalization.using_postgres", lambda: False)
+    monkeypatch.setattr(service, "battle_get", lambda uid, bid: dict(battle) if bid == "b-judge-only" else None)
+    monkeypatch.setattr(service, "scores_exist", lambda bid: False)
+    monkeypatch.setattr(service, "scores_list", lambda bid: [])
+    monkeypatch.setattr(service, "format_get", lambda fid: {"config": {"judge_only": True, "evaluation_mode": "quick"}})
+    monkeypatch.setattr(service, "rounds_list", lambda bid: [])
+    monkeypatch.setattr(service, "events_load", lambda bid: [judge_event])
+    monkeypatch.setattr(
+        service,
+        "score_upsert",
+        lambda bid, mid, score, **kw: stored_scores.setdefault(bid, {}).__setitem__(mid, score),
+    )
+    monkeypatch.setattr(
+        service,
+        "battle_update",
+        lambda bid, payload: (updates.append(payload), battle.update(payload)),
+    )
+
+    result = finalize_battle("b-judge-only")
+    assert result["ok"] is True
+    assert result["status"] == "completed"
+    assert result["scores"] == {"model-a": 85.0, "model-b": 40.0}
+    assert stored_scores["b-judge-only"] == {"model-a": 85.0, "model-b": 40.0}
+    assert battle["status"] == "completed"
+

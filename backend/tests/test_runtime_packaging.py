@@ -107,6 +107,7 @@ def test_modal_entry_parses_and_still_keeps_evaluator_volume_private():
     source = MODAL_ENTRY.read_text(encoding="utf-8")
     ast.parse(source)
     assert source.count('"ARENA_EVALUATOR_DIR"') == 1
+    assert '"ARENA_BREAKER_EXECUTION_MODE": "modal"' in source
     assert "attach_canonical_skill_yaml" in source
     # Host image must ship Node so trusted verify can run `npm test` for
     # Node targets (fighter MicroVM Node is not enough).

@@ -110,6 +110,7 @@ export const api = {
       `/battle-drafts/${id}/launch`,
       { method: "POST", body, token },
     ),
+  getBattleTemplates: () => request<BattleTemplate[]>("/battle-drafts/templates"),
   targets: (filters: TargetFilters = {}) => {
     const params = new URLSearchParams();
     if (filters.category) params.set("category", filters.category);
@@ -237,6 +238,21 @@ export type BattleSpec = {
   test_code?: string | null;
   languages?: string[];
   mode?: "quick" | "verified";
+};
+
+export type BattleTemplate = {
+  id: string;
+  title: string;
+  category: string;
+  badge: string;
+  mode: "quick" | "verified";
+  prompt: string;
+  brief: string;
+  deliverables: string[];
+  constraints: string[];
+  required_artifacts: string[];
+  judge_rubric: string;
+  languages?: string[];
 };
 
 export type BattleDraftCreate = {

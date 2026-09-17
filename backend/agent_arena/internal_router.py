@@ -212,6 +212,29 @@ def _trusted_verifier_kind(fmt_cfg: dict) -> str:
     return "solo"
 
 
+def _role_verification_status(ev: object, role: str) -> tuple[bool, str]:
+    """Project trusted verifier evidence without rewriting its status.
+
+    ``verify_builder_breaker_submission`` classifies infrastructure failures
+    separately from verified losses. The internal route must carry that
+    classification through to persistence; otherwise a sandbox/evaluator
+    outage is incorrectly recorded as a participant failure.
+    """
+    role_passed = bool(
+        getattr(ev, "breaker_passed", False)
+        if role == "breaker"
+        else getattr(ev, "builder_passed", False)
+    )
+    recorded_status = str(getattr(ev, "verification_status", "") or "")
+    if recorded_status in {"infra_failure", "verified_pass", "verified_fail"}:
+        return role_passed, recorded_status
+
+    semantic = getattr(ev, "breaker_semantic_evidence", {}) or {}
+    if isinstance(semantic, dict) and semantic.get("verifier_error"):
+        return role_passed, "infra_failure"
+    return role_passed, "verified_pass" if role_passed else "verified_fail"
+
+
 def _derive_verify_binding(battle: dict, fmt_cfg: dict, body: VerifyBody) -> tuple[str, str, str, str, str]:
     """target_id and kind come from trusted battle/format/plan, never the sandbox."""
     target_id = str(battle.get("target_id") or "").strip() or str(
@@ -658,12 +681,7 @@ def internal_verify(
                 "passed": False,
                 "verification_status": "infra_failure",
             }
-        role_passed = ev.breaker_passed if role == "breaker" else ev.builder_passed
-        role_status = (
-            "verified_pass"
-            if role_passed
-            else ("infra_failure" if getattr(ev, "verifier_error", None) else "verified_fail")
-        )
+        role_passed, role_status = _role_verification_status(ev, role)
         public = {
             "ok": True,
             "target_id": ev.target_id,
