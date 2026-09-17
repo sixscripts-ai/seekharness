@@ -45,7 +45,7 @@ export function isAuthoritativeScoresEvent(data: {
   source?: string;
 } | null | undefined): boolean {
   if (!data) return false;
-  return data.authoritative === true || data.source === "arena-score-v1";
+  return data.authoritative === true && data.source === "arena-score-v1";
 }
 
 const BATTLE_STATUSES = new Set(["queued", "running", "completed", "failed", "cancelled"]);

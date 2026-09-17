@@ -64,8 +64,9 @@ describe("target result truth", () => {
 
   it("ignores judge score events that are not authoritative", () => {
     expect(isAuthoritativeScoresEvent({})).toBe(false);
-    expect(isAuthoritativeScoresEvent({ authoritative: true })).toBe(true);
-    expect(isAuthoritativeScoresEvent({ source: "arena-score-v1" })).toBe(true);
+    expect(isAuthoritativeScoresEvent({ authoritative: true })).toBe(false);
+    expect(isAuthoritativeScoresEvent({ source: "arena-score-v1" })).toBe(false);
+    expect(isAuthoritativeScoresEvent({ authoritative: true, source: "arena-score-v1" })).toBe(true);
   });
 
   it("treats sandbox battle_status hints as non-authoritative", () => {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BattleOut, FormatOut, ProviderOut, TargetDetailOut } from "./api";
 import {
   battleCreatedAt, challengeRoles, formatScoring, legacyCustomUrl, legacyTargetUrl,
-  modelSlots, rememberChallenge, savedChallengeIds, validModelSlots,
+  forgetChallenge, modelSlots, rememberChallenge, savedChallengeIds, validModelSlots,
 } from "./challengeNavigation";
 
 const providers = ["host:a", "host:b", "personal:c"].map(id => ({ id, name: id, model_name: id })) as ProviderOut[];
@@ -76,6 +76,8 @@ describe("saved challenge links", () => {
     expect(savedChallengeIds("u1")).toEqual(["d1", "d2"]);
     expect(savedChallengeIds("u2")).toEqual([]);
     expect(entries.get("seekharness_challenges:u1")).toBe('["d1","d2"]');
+    forgetChallenge("u1", "d1");
+    expect(savedChallengeIds("u1")).toEqual(["d2"]);
   });
   it("handles corrupt or blocked browser storage without pretending a save succeeded", () => {
     vi.stubGlobal("localStorage", { getItem: () => "{bad json", setItem: () => { throw new Error("blocked"); } });

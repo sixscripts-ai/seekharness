@@ -572,6 +572,7 @@ def draft_out(doc) -> dict:
         "spec": spec,
         "revision": int(data.get("revision") or 0),
         "status": data.get("status") or "draft",
+        "saved": bool(data.get("saved", False)),
         "launched_battle_id": data.get("launched_battle_id") or None,
         "architect_error": data.get("architect_error") or None,
         "spec_hash": spec_hash(spec) if spec else None,

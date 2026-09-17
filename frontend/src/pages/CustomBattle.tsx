@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, splitProviders, type BattleDraftOut, type BattleSpec, type BattleTemplate, type ProviderOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { modelSlots, rememberChallenge, validModelSlots } from "@/lib/challengeNavigation";
+import { forgetChallenge, modelSlots, validModelSlots } from "@/lib/challengeNavigation";
 import BattleSetupHeader from "@/components/BattleSetupHeader";
 import BattleModelFields from "@/components/BattleModelFields";
 import ProviderSelect from "@/components/ProviderSelect";
@@ -130,9 +130,22 @@ export default function CustomBattle() {
     });
   }
   function saveToLibrary() {
-    if (!draft || !user || dirty) return;
-    if (rememberChallenge(user.$id, draft.id)) setNotice("Saved to your challenge library on this browser.");
-    else setError("This browser could not save the link. Bookmark this draft instead: /battles/new?custom=1&draft=" + draft.id);
+    if (!draft || dirty) return;
+    void perform("library", async () => {
+      const token = await tokenOrThrow();
+      acceptDraft(await api.saveBattleDraft(token, draft.id));
+      if (userId) forgetChallenge(userId, draft.id);
+      setNotice("Saved to your account library. You can open it on another device.");
+    });
+  }
+  function removeFromLibrary() {
+    if (!draft) return;
+    void perform("library", async () => {
+      const token = await tokenOrThrow();
+      acceptDraft(await api.unsaveBattleDraft(token, draft.id));
+      if (userId) forgetChallenge(userId, draft.id);
+      setNotice("Removed from your challenge library. This draft still exists at its direct link.");
+    });
   }
   function addModel() {
     if (selected.length < 6) setSelected(previous => modelSlots(previous, providers, previous.length + 1));
@@ -166,7 +179,7 @@ export default function CustomBattle() {
             <label className="block text-sm text-slate-400">Task and requirements<textarea className="input mt-2 min-h-48 resize-y" value={brief} onChange={event => setBrief(event.target.value)} disabled={Boolean(busy)} placeholder="What should the models produce?" /></label>
             {mode === "verified" && <label className="block text-sm text-slate-400">Acceptance tests<textarea className="input mt-2 min-h-48 resize-y font-mono text-xs" spellCheck={false} value={testCode} onChange={event => setTestCode(event.target.value)} disabled={Boolean(busy)} /><span className="mt-2 block text-xs leading-5 text-slate-500">The backend validates these tests before marking the draft ready. A saved draft is not a verified battle result.</span></label>}
             {draft && <details className="text-sm text-slate-400"><summary className="cursor-pointer">Full specification · revision {draft.revision}</summary><pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-words text-xs">{JSON.stringify(draft.spec, null, 2)}</pre></details>}
-            <div className="flex flex-wrap gap-3"><button type="button" className="btn btn-ghost" onClick={saveSpec} disabled={Boolean(busy) || !title.trim() || !brief.trim()}>{busy === "save" ? "Saving…" : launched ? "Create reusable copy" : "Save challenge"}</button>{draft && <button type="button" className="btn btn-ghost" onClick={saveToLibrary} disabled={Boolean(busy) || dirty}>Save to library</button>}</div>
+            <div className="flex flex-wrap gap-3"><button type="button" className="btn btn-ghost" onClick={saveSpec} disabled={Boolean(busy) || !title.trim() || !brief.trim()}>{busy === "save" ? "Saving…" : launched ? "Create reusable copy" : "Save challenge"}</button>{draft && <button type="button" className="btn btn-ghost" onClick={draft.saved ? removeFromLibrary : saveToLibrary} disabled={Boolean(busy) || dirty}>{busy === "library" ? "Updating library…" : draft.saved ? "Remove from library" : "Save to library"}</button>}</div>
             {dirty && <p className="text-xs text-amber-200">Save your changes before continuing.</p>}
             {draft?.architect_error && <p role="alert" className="break-words text-xs text-amber-200">{draft.architect_error}</p>}
           </section>

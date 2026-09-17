@@ -101,6 +101,12 @@ export const api = {
     request<BattleDraftOut>("/battle-drafts", { method: "POST", body, token }),
   getBattleDraft: (token: string, id: string) =>
     request<BattleDraftOut>(`/battle-drafts/${id}`, { token }),
+  listSavedBattleDrafts: (token: string) =>
+    request<BattleDraftOut[]>("/battle-drafts", { token }),
+  saveBattleDraft: (token: string, id: string) =>
+    request<BattleDraftOut>(`/battle-drafts/${encodeURIComponent(id)}/save`, { method: "PUT", token }),
+  unsaveBattleDraft: (token: string, id: string) =>
+    request<BattleDraftOut>(`/battle-drafts/${encodeURIComponent(id)}/save`, { method: "DELETE", token }),
   postDraftMessage: (token: string, id: string, body: { content: string; architect_provider_id?: string | null }) =>
     request<BattleDraftOut>(`/battle-drafts/${id}/messages`, { method: "POST", body, token }),
   patchDraftSpec: (token: string, id: string, body: Partial<BattleSpec>) =>
@@ -205,6 +211,10 @@ export type BattleOut = {
     judge_only?: boolean;
     description?: string;
     spec_hash?: string;
+    format?: string;
+    runtime?: string;
+    roles?: string[];
+    battle_plan?: { phases?: Array<{ phase_id?: string; phase_type?: string; actor?: string }> };
   } | null;
   spec_hash?: string | null;
   title?: string | null;
@@ -270,6 +280,7 @@ export type BattleDraftOut = {
   spec: BattleSpec;
   revision: number;
   status: string;
+  saved?: boolean;
   launched_battle_id?: string | null;
   architect_error?: string | null;
   spec_hash?: string | null;

@@ -105,6 +105,7 @@ def _pg_draft_doc(row) -> SimpleNamespace:
         "spec": dict(row.spec or {}),
         "revision": int(row.revision or 0),
         "status": row.status or "draft",
+        "saved": bool(row.saved),
         "launched_battle_id": row.launched_battle_id,
         "architect_error": row.architect_error,
         "created_at": row.created_at.isoformat() if row.created_at else None,
@@ -172,6 +173,54 @@ def _compile_message(
 
 
 # --- Routes --------------------------------------------------------------------
+
+
+def _require_saved_draft_store() -> None:
+    from .persistence import service
+
+    if not service.using_postgres():
+        # Do not place a new cross-device library in Appwrite's legacy
+        # document path. Neon remains authoritative for application state.
+        raise HTTPException(status_code=503, detail="Saved challenge library requires PostgreSQL")
+
+
+@router.get("")
+def list_saved_drafts(user_id: str = Depends(get_current_user)):
+    _require_saved_draft_store()
+    from .persistence import repositories
+    from .persistence.session import session_scope
+
+    with session_scope() as session:
+        return [
+            draft_out(_pg_draft_doc(row))
+            for row in repositories.drafts.saved_draft_list(session, user_id)
+        ]
+
+
+@router.put("/{draft_id}/save")
+def save_draft(draft_id: str, user_id: str = Depends(get_current_user)):
+    _require_saved_draft_store()
+    from .persistence import repositories
+    from .persistence.session import session_scope
+
+    with session_scope() as session:
+        row = repositories.drafts.draft_set_saved(session, draft_id, user_id, True)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        return draft_out(_pg_draft_doc(row))
+
+
+@router.delete("/{draft_id}/save")
+def unsave_draft(draft_id: str, user_id: str = Depends(get_current_user)):
+    _require_saved_draft_store()
+    from .persistence import repositories
+    from .persistence.session import session_scope
+
+    with session_scope() as session:
+        row = repositories.drafts.draft_set_saved(session, draft_id, user_id, False)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Draft not found")
+        return draft_out(_pg_draft_doc(row))
 
 
 @router.post("", status_code=201)

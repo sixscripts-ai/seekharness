@@ -65,3 +65,10 @@ export function rememberChallenge(userId: string, draftId: string): boolean {
     return true;
   } catch { return false; }
 }
+
+export function forgetChallenge(userId: string, draftId: string): void {
+  try {
+    localStorage.setItem("seekharness_challenges:" + userId,
+      JSON.stringify(savedChallengeIds(userId).filter(id => id !== draftId)));
+  } catch { /* Migration is best effort; the account record is authoritative. */ }
+}

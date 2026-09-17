@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, isCustomFormat, isToolUsingFormat, splitProviders, type FormatOut, type ProviderOut, type TargetDetailOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { challengeRoles, formatScoring, modelSlots, validModelSlots } from "@/lib/challengeNavigation";
+import { clearSetupDraft, readSetupDraft, setupDraftKey, writeSetupDraft } from "@/lib/battleSetupDraft";
 import BattleSetupHeader from "@/components/BattleSetupHeader";
 import BattleModelFields from "@/components/BattleModelFields";
 import BattleSetupActions from "@/components/BattleSetupActions";
@@ -26,6 +27,7 @@ function ConfiguredBattle() {
   const requestedTarget = params.get("target") || "";
   const requestedFormat = params.get("format") || "";
   const userId = user?.$id;
+  const draftKey = userId ? setupDraftKey(userId, requestedTarget ? `target:${requestedTarget}` : `format:${requestedFormat}`) : "";
   const hasToken = Boolean(jwt);
   const [formats, setFormats] = useState<FormatOut[]>([]);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
@@ -58,11 +60,28 @@ function ConfiguredBattle() {
       setFormats(available);
       setProviders(providerRows);
       setTarget(targetRow);
-      if (targetRow) setDifficulty(targetRow.difficulty);
+      const savedDraft = draftKey ? readSetupDraft(draftKey) : null;
+      if (savedDraft) {
+        const restoredMode = targetRow && targetRow.format !== "builder_breaker" ? savedDraft.runMode : "solo";
+        const restoredRoles = challengeRoles(targetRow, available.find(row => row.id === requestedFormat), restoredMode);
+        setRunMode(restoredMode);
+        setSelected(modelSlots(savedDraft.selected, providerRows, restoredRoles.length));
+        setJudgeId(providerRows.some(row => row.id === savedDraft.judgeId) ? savedDraft.judgeId : "");
+        setTimeoutSec(savedDraft.timeoutSec);
+        setSave(savedDraft.save);
+        setVisibility(savedDraft.visibility);
+        setDifficulty(targetRow?.difficulty || savedDraft.difficulty);
+        setContextMode(savedDraft.contextMode);
+      } else if (targetRow) setDifficulty(targetRow.difficulty);
     }).catch(err => { if (!cancelled) setLoadError(err instanceof Error ? err.message : "Could not load this challenge."); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [userId, hasToken, requestedTarget, requestedFormat, reload]);
+  }, [userId, hasToken, requestedTarget, requestedFormat, draftKey, reload]);
+
+  useEffect(() => {
+    if (!draftKey || loading || loadError) return;
+    writeSetupDraft(draftKey, { selected, runMode, judgeId, timeoutSec, save, visibility, difficulty, contextMode });
+  }, [draftKey, loading, loadError, selected, runMode, judgeId, timeoutSec, save, visibility, difficulty, contextMode]);
 
   const format = formats.find(row => row.id === requestedFormat);
   // The existing API requires a playable format record before replacing its
@@ -96,6 +115,7 @@ function ConfiguredBattle() {
         target_id: target?.id, target_version: target?.version, context_mode: contextMode,
         judge_provider_id: judgeId || null,
       });
+      if (draftKey) clearSetupDraft(draftKey);
       navigate("/battles/" + battle.id);
     } catch (err) { setError(err instanceof Error ? err.message : "Could not start battle."); }
     finally { setBusy(false); }

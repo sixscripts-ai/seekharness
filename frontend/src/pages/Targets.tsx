@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { ArrowUpRight, Search, Plus } from "lucide-react";
 import { api, isCustomFormat, type BattleDraftOut, type BattleTemplate, type FormatOut, type TargetSummaryOut } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { formatScoring, savedChallengeIds } from "@/lib/challengeNavigation";
+import { forgetChallenge, formatScoring, savedChallengeIds } from "@/lib/challengeNavigation";
 
 type Challenge = { key: string; title: string; description: string; kind: "Built-in" | "Template" | "Saved"; meta: string[]; href: string; detail?: string };
 
@@ -35,12 +35,23 @@ export function ChallengeLibrary({ picker = false }: { picker?: boolean }) {
       if (targetRows.status === "fulfilled") setTargets(targetRows.value); else { setTargets([]); failures.push("Built-in challenges could not be loaded."); }
       if (formatRows.status === "fulfilled") setFormats(formatRows.value.filter(format => !isCustomFormat(format))); else { setFormats([]); failures.push("Preset challenges could not be loaded."); }
       if (templateRows.status === "fulfilled") setTemplates(templateRows.value); else { setTemplates([]); failures.push("Custom templates could not be loaded."); }
-      const saved = await Promise.allSettled(ids.map(id => api.getBattleDraft(token!, id)));
-      if (cancelled) return;
-      setDrafts(saved.flatMap(result => result.status === "fulfilled" ? [result.value] : []));
-      if (saved.some(result => result.status === "rejected")) failures.push("Some saved challenges are unavailable. Their saved links have been kept.");
-      setErrors(failures);
-      setLoading(false);
+      if (token && userId) {
+        try {
+          const accountDrafts = await api.listSavedBattleDrafts(token);
+          const accountIds = new Set(accountDrafts.map(draft => draft.id));
+          const legacy = await Promise.allSettled(ids.filter(id => !accountIds.has(id)).map(id => api.saveBattleDraft(token, id)));
+          const migrated = legacy.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+          for (const id of ids) if (accountIds.has(id) || migrated.some(draft => draft.id === id)) forgetChallenge(userId, id);
+          if (legacy.some(result => result.status === "rejected")) failures.push("Some browser-only saved links could not be moved to your account.");
+          if (!cancelled) setDrafts([...accountDrafts, ...migrated]);
+        } catch {
+          failures.push("Your saved challenges could not be loaded from your account.");
+        }
+      }
+      if (!cancelled) {
+        setErrors(failures);
+        setLoading(false);
+      }
     });
     return () => { cancelled = true; };
   }, [userId, hasToken, reload]);
@@ -82,7 +93,7 @@ export function ChallengeLibrary({ picker = false }: { picker?: boolean }) {
     </div>
     {errors.length > 0 && <div role="alert" className="mb-6 rounded-lg border border-amber-400/20 bg-amber-950/20 p-4 text-sm text-amber-200">{errors.map(error => <p key={error}>{error}</p>)}<button type="button" className="mt-2 underline" onClick={() => setReload(value => value + 1)}>Try again</button></div>}
     {loading ? <p role="status" className="py-12 text-sm text-slate-400">Loading the challenge library…</p> : <>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><span>{visible.length} {visible.length === 1 ? "challenge" : "challenges"}</span>{kind === "Saved" && <span>Saved links on this browser; challenge content is stored on your account.</span>}</div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500"><span>{visible.length} {visible.length === 1 ? "challenge" : "challenges"}</span>{kind === "Saved" && <span>Saved to your account for access across devices.</span>}</div>
       {visible.length ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {visible.map(challenge => <article key={challenge.key} className="flex min-w-0 flex-col rounded-xl border border-white/10 bg-[#11141E] p-5">
           <div className="mb-4 flex items-center justify-between gap-3 text-xs"><span className={challenge.kind === "Saved" ? "text-fuchsia-300" : "text-slate-400"}>{challenge.kind}</span>{challenge.detail && <Link to={challenge.detail} className="text-slate-400 hover:text-white">Details <span aria-hidden="true">↗</span><span className="sr-only">: {challenge.title}</span></Link>}</div>

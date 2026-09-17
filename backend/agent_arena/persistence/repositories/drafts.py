@@ -74,3 +74,25 @@ def draft_list(session: Session, user_id: str | None = None) -> list[BattleDraft
     if user_id is not None:
         stmt = stmt.where(BattleDraft.user_id == user_id)
     return list(session.scalars(stmt))
+
+
+def saved_draft_list(session: Session, user_id: str) -> list[BattleDraft]:
+    """Only the authenticated owner's explicitly saved drafts."""
+    stmt = (
+        select(BattleDraft)
+        .where(BattleDraft.user_id == user_id, BattleDraft.saved.is_(True))
+        .order_by(BattleDraft.updated_at.desc(), BattleDraft.created_at.desc())
+    )
+    return list(session.scalars(stmt))
+
+
+def draft_set_saved(session: Session, draft_id: str, user_id: str, saved: bool) -> BattleDraft | None:
+    """Idempotent library membership; does not change the frozen spec revision."""
+    draft = session.scalar(
+        select(BattleDraft).where(BattleDraft.id == draft_id, BattleDraft.user_id == user_id)
+    )
+    if draft is None:
+        return None
+    draft.saved = saved
+    session.flush()
+    return draft

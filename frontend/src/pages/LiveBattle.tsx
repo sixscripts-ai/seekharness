@@ -27,10 +27,11 @@ import {
 import { useAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 import { isAuthoritativeScoresEvent, isAuthoritativeStatusEvent, isTerminalBattleStatus, streamBattleStatus, targetResultPresentation } from "@/lib/targetResult";
+import { battleShape } from "@/lib/battleOverview";
 import ExecutionSurface from "@/components/battle/ExecutionSurface";
 import BattleInspector from "@/components/battle/BattleInspector";
 import BattleStatus from "@/components/battle/BattleStatus";
-import SpectatorArenaView from "@/components/battle/SpectatorArenaView";
+import BattleOverview from "@/components/battle/BattleOverview";
 import type { BattleStreamItem, SkillActivity } from "@/components/battle/types";
 import {
   mergeEvent,
@@ -69,9 +70,11 @@ function normalizeEvent(ev: StreamEvent, fallbackPhase: string): BattleStreamIte
     phase: String(phase || "runtime"),
     model_id: String(modelId),
     artifact,
-    t: eventTime(data),
+    t: eventTime(wrapped?.created_at || wrapped?.ts ? wrapped : data),
     kind: ev.event,
-    payload: data && typeof data === "object" && !Array.isArray(data) ? data : undefined,
+    payload: data && typeof data === "object" && !Array.isArray(data)
+      ? { ...data, event_id: wrapped?.event_id || data.event_id, created_at: wrapped?.created_at || data.created_at }
+      : undefined,
   };
 }
 
@@ -110,6 +113,7 @@ export default function LiveBattle() {
   const { id } = useParams<{ id: string }>();
   const { user, jwt, refreshJwt, loading } = useAuth();
   const [battle, setBattle] = useState<BattleOut | null>(null);
+  const [officialBattle, setOfficialBattle] = useState<BattleOut | null>(null);
   const [format, setFormat] = useState<FormatOut | null>(null);
   const [providers, setProviders] = useState<ProviderOut[]>([]);
   const [targetDetail, setTargetDetail] = useState<TargetDetailOut | null>(null);
@@ -154,6 +158,7 @@ export default function LiveBattle() {
         ]);
         if (!active) return;
         setBattle(loadedBattle);
+        setOfficialBattle(loadedBattle);
         setStatus(loadedBattle.status);
         statusRef.current = loadedBattle.status;
         setFormat(loadedFormats.find((row) => row.id === loadedBattle.format_id) || null);
@@ -216,6 +221,7 @@ export default function LiveBattle() {
                 statusRef.current = loaded.status;
                 setStatus(loaded.status);
                 setBattle(loaded);
+                setOfficialBattle(loaded);
                 if (loaded.scores && Object.keys(loaded.scores).length) {
                   setScores(loaded.scores);
                 }
@@ -231,12 +237,12 @@ export default function LiveBattle() {
             }
           }
 
-          if (["artifact", "transcript", "action_log", "phase_start", "skill_index_browse", "skill_search", "skill_card_view", "skill_load"].includes(ev.event)) {
+          if (["artifact", "transcript", "action_log", "phase_start", "skill_index_browse", "skill_search", "skill_card_view", "skill_load", "verification", "scores", "error", "battle_status"].includes(ev.event)) {
             const item = normalizeEvent(ev, phaseRef.current);
             if (item) setEvents((previous) => mergeEvent(previous, item));
           }
 
-          if (ev.event === "verification") {
+          if (ev.event === "verification" && data?.authoritative === true && data?.source === "trusted_verifier") {
             setBattle((current) => current ? {
               ...current,
               verification_status: data?.verification_status ?? current.verification_status,
@@ -308,6 +314,7 @@ export default function LiveBattle() {
   }, [modelIds, selectedModelId]);
 
   const formatRoles = useMemo(() => rolesForFormat(format), [format]);
+  const contract = useMemo(() => battle ? battleShape(battle, format, targetDetail) : null, [battle, format, targetDetail]);
   const runtimeRoles = useMemo(() => {
     const map = new Map<string, string>();
     for (const item of events) {
@@ -323,7 +330,7 @@ export default function LiveBattle() {
     }
     return map;
   }, [events]);
-  const roleForModel = (modelId: string, index: number) => runtimeRoles.get(modelId) || formatRoles[index] || `Fighter ${index + 1}`;
+  const roleForModel = (modelId: string, index: number) => runtimeRoles.get(modelId) || contract?.roles[index] || formatRoles[index] || `Fighter ${index + 1}`;
 
   const histories = useMemo(() => {
     const map = new Map<string, BattleStreamItem[]>();
@@ -356,7 +363,7 @@ export default function LiveBattle() {
     return status === "running" ? "running" : "waiting";
   }
 
-  const expectedPhases = useMemo(() => configuredPhases(format), [format]);
+  const expectedPhases = useMemo(() => contract?.phases.length ? contract.phases : configuredPhases(format), [contract, format]);
   const observedPhases = useMemo(() => {
     const out: string[] = [];
     for (const item of events) if (item.phase && !out.includes(item.phase)) out.push(item.phase);
@@ -370,14 +377,14 @@ export default function LiveBattle() {
     status,
     isTargetBattle: Boolean(battle?.target_id),
     result: {
-      scores: scores || battle?.scores,
-      winner: battle?.winner,
-      verified_solution: battle?.verified_solution,
-      verification_status: battle?.verification_status,
-      termination_reason: battle?.termination_reason,
-      outcome: battle?.outcome,
+      scores: officialBattle?.scores,
+      winner: officialBattle?.winner,
+      verified_solution: officialBattle?.verified_solution,
+      verification_status: officialBattle?.verification_status,
+      termination_reason: officialBattle?.termination_reason || officialBattle?.failure_reason,
+      outcome: officialBattle?.outcome,
     },
-  }), [status, battle, scores]);
+  }), [status, battle?.target_id, officialBattle]);
 
   const firstEventTime = useMemo(() => events.length ? Math.min(...events.map((item) => item.t)) : sessionStartedRef.current, [events]);
   const elapsed = formatElapsed(now - firstEventTime);
@@ -473,7 +480,8 @@ export default function LiveBattle() {
               <BattleStatus status={status} verificationStatus={battle?.verification_status} compact />
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-2 font-mono text-[8px] uppercase tracking-[0.1em] text-zinc-700">
-              <span className="truncate">{format?.name || titleCase(battle?.format_id || "battle")}</span>
+              <span className="truncate">{contract?.label || format?.name || titleCase(battle?.format_id || "battle")}</span>
+              {contract?.runtime ? <><span>·</span><span>{contract.runtime}</span></> : null}
               {!TERMINAL_STATES.has(status) ? <><span>·</span><span>{elapsed}</span></> : null}
               {battle?.target_version ? <><span>·</span><span>v{battle.target_version}</span></> : null}
             </div>
@@ -485,6 +493,8 @@ export default function LiveBattle() {
             <button
               type="button"
               onClick={() => setViewMode("arena")}
+              aria-label="Battle overview"
+              aria-pressed={viewMode === "arena"}
               className={cn(
                 "px-2.5 py-1 text-[11px] font-medium rounded-lg transition font-mono",
                 viewMode === "arena"
@@ -492,11 +502,13 @@ export default function LiveBattle() {
                   : "text-slate-400 hover:text-white"
               )}
             >
-              Arena
+              <span className="sm:hidden">Live</span><span className="hidden sm:inline">Overview</span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode("deep")}
+              aria-label="Deep Dive execution trace"
+              aria-pressed={viewMode === "deep"}
               className={cn(
                 "px-2.5 py-1 text-[11px] font-medium rounded-lg transition font-mono",
                 viewMode === "deep"
@@ -504,7 +516,7 @@ export default function LiveBattle() {
                   : "text-slate-400 hover:text-white"
               )}
             >
-              Deep Dive
+              <span className="sm:hidden">Trace</span><span className="hidden sm:inline">Deep Dive</span>
             </button>
           </div>
 
@@ -544,25 +556,10 @@ export default function LiveBattle() {
       ) : null}
 
       {viewMode === "arena" || viewMode === "replay" ? (
-        <main className="mx-auto max-w-[1500px] px-4 py-5 md:px-6">
-          <SpectatorArenaView
-            battle={battle}
-            status={status}
-            phase={phase}
-            pipeline={pipeline}
-            modelIds={modelIds}
-            modelName={modelName}
-            roleForModel={roleForModel}
-            targetDetail={targetDetail}
-            events={events}
-            histories={histories}
-            skillActivity={skillActivity}
-            scores={scores}
-            previewUrls={previewUrls}
-            selectedModelId={selectedModelId}
-            onSelectModelId={setSelectedModelId}
-            onSwitchToDeepDive={() => setViewMode("deep")}
-          />
+        <main className="min-h-0 w-full flex-1 overflow-y-auto overscroll-contain px-4 py-5 md:px-6">
+          <div className="mx-auto max-w-[1500px]">
+            {battle ? <BattleOverview battle={battle} officialBattle={officialBattle} format={format} target={targetDetail} status={status} events={events} modelName={modelName} onDeepDive={() => setViewMode("deep")} /> : <p role="status" className="py-12 text-center text-slate-400">Loading the battle record…</p>}
+          </div>
         </main>
       ) : (
         <>

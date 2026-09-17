@@ -248,6 +248,7 @@ class BattleDraft(Base):
     __table_args__ = (
         Index("ix_battle_drafts_user_id", "user_id"),
         Index("ix_battle_drafts_status", "status"),
+        Index("ix_battle_drafts_user_saved", "user_id", "saved"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True, default=_new_id)
@@ -257,6 +258,7 @@ class BattleDraft(Base):
     spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="drafting")
+    saved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     launched_battle_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("battles.id", ondelete="SET NULL"),
