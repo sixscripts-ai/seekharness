@@ -658,14 +658,20 @@ def internal_verify(
                 "passed": False,
                 "verification_status": "infra_failure",
             }
+        role_passed = ev.breaker_passed if role == "breaker" else ev.builder_passed
+        role_status = (
+            "verified_pass"
+            if role_passed
+            else ("infra_failure" if getattr(ev, "verifier_error", None) else "verified_fail")
+        )
         public = {
             "ok": True,
             "target_id": ev.target_id,
-            "passed": bool(ev.builder_passed),
+            "passed": bool(role_passed),
             "builder_passed": ev.builder_passed,
             "breaker_passed": ev.breaker_passed,
             "attempted": True,
-            "verification_status": ev.verification_status,
+            "verification_status": role_status,
         }
         _persist_trusted_verification(
             body.battle_id,
@@ -675,11 +681,11 @@ def internal_verify(
             role=role,
             model_id=model_id,
             payload={
-                "passed": ev.builder_passed,
+                "passed": role_passed,
                 "builder_passed": ev.builder_passed,
                 "breaker_passed": ev.breaker_passed,
                 "manifest_hash": ev.manifest_hash,
-                "verification_status": public["verification_status"],
+                "verification_status": role_status,
                 "breaker_semantic_evidence": dict(
                     ev.breaker_semantic_evidence or {}
                 ),

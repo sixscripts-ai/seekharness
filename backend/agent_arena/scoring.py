@@ -264,6 +264,12 @@ def deterministic_scores(decision: dict, evidence: dict | None = None) -> dict |
     if not groups:
         return None
     scores: dict[str, float] = {}
+    ranking = decision.get("ranking") or []
+    if len(ranking) == 1:
+        mid = ranking[0]
+        # For a solo fighter, 1.0 indicates a verified solution, 0.0 indicates unverified/failed
+        scores[str(mid)] = 1.0 if decision.get("verified_solution") else 0.0
+        return scores
     for gi, group in enumerate(groups):
         below = sum(len(g) for g in groups[gi + 1:])
         for mid in group:

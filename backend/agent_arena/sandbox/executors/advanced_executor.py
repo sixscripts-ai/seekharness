@@ -3511,13 +3511,19 @@ class AdvancedExecutor(Executor):
                 ev = verify_builder_breaker_submission(
                     bundle, builder_files or {}, breaker_files or {}
                 )
+                role_passed = ev.breaker_passed if role == "breaker" else ev.builder_passed
+                role_status = (
+                    "verified_pass"
+                    if role_passed
+                    else ("infra_failure" if getattr(ev, "verifier_error", None) else "verified_fail")
+                )
                 public = {
                     "target_id": ev.target_id,
-                    "passed": ev.builder_passed,
+                    "passed": role_passed,
                     "builder_passed": ev.builder_passed,
                     "breaker_passed": ev.breaker_passed,
                     "attempted": True,
-                    "verification_status": ev.verification_status,
+                    "verification_status": role_status,
                     "server_crashed": getattr(ev, "server_crashed", False),
                     "availability_degraded": getattr(ev, "availability_degraded", False),
                     "unauthorized_mutation": getattr(ev, "unauthorized_mutation", False),
